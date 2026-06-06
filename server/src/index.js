@@ -13,6 +13,7 @@ import assistantRoutes from './routes/assistant.js'
 import notificationRoutes from './routes/notifications.js'
 import digestRoutes from './routes/digest.js'
 import { startScheduler } from './scheduler.js'
+import { attachLiveTranscribe } from './ws/liveTranscribe.js'
 
 initSchema()
 ensureSeed()
@@ -59,6 +60,9 @@ const server = app.listen(PORT, () => {
   startScheduler()
   console.log('')
 })
+
+// Live meeting transcription stream (browser <-> Sarvam) shares the HTTP server.
+attachLiveTranscribe(server)
 
 // Release the port cleanly on exit / restart so `node --watch` (and Ctrl+C)
 // don't leave an orphaned process squatting on :4000 → no more EADDRINUSE.

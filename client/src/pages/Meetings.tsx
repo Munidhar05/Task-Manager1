@@ -4,6 +4,7 @@ import { api, getToken } from '../api'
 import { useAuth } from '../auth'
 import { LANG_LABEL } from '../ui'
 import ParticipantPicker from '../components/ParticipantPicker'
+import { startPcmStream, PcmStream } from '../lib/pcmStream'
 
 const SAMPLE = `Priya: Good morning team. Let's start the standup.
 Priya: Munidhar, complete the login API by Friday. It's high priority.
@@ -251,6 +252,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const [err, setErr] = useState('')
 
   const recRef = useRef<any>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const pcmRef = useRef<PcmStream | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const recordingRef = useRef(false)
   const speakerRef = useRef(speaker)
@@ -281,6 +284,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   useEffect(() => () => {
     recordingRef.current = false
     try { recRef.current?.stop() } catch {}
+    try { pcmRef.current?.stop() } catch {}
+    try { wsRef.current?.close() } catch {}
     streamRef.current?.getTracks().forEach((t) => t.stop())
   }, [])
 
@@ -321,6 +326,36 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     })()
   }
 
+  // ---- SARVAM STREAMING mode: live captions over a WebSocket ----
+  // Browser streams raw PCM16 @16kHz to our server, which proxies to Sarvam and
+  // streams transcripts back. Captions appear ~1-2s after each spoken phrase.
+  const startSarvamStream = async () => {
+    setErr('')
+    const wsProto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${wsProto}://${location.host}/api/meetings/live?token=${getToken()}&language=unknown`)
+    wsRef.current = ws
+    recordingRef.current = true
+    setRecording(true)
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.transcript) { appendLine(msg.transcript); setInterim('') }
+        else if (msg.error) setErr(msg.error)
+      } catch {}
+    }
+    ws.onerror = () => setErr('Live transcription connection failed.')
+    ws.onclose = () => { setTranscribing(false) }
+
+    ws.onopen = async () => {
+      setTranscribing(true)
+      pcmRef.current = await startPcmStream(
+        (b64) => { if (ws.readyState === WebSocket.OPEN) ws.send(b64) },
+        (msg) => { setErr(msg); stop() },
+      )
+    }
+  }
+
   // ---- BROWSER mode: Web Speech API, one language ----
   const startBrowser = () => {
     setErr('')
@@ -346,12 +381,18 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     try { rec.start() } catch {}
   }
 
-  const start = () => { setSeconds(0); if (mode === 'auto') startAuto(); else startBrowser() }
+  const start = () => {
+    setSeconds(0)
+    if (mode === 'auto') { provider === 'sarvam' ? startSarvamStream() : startAuto() }
+    else startBrowser()
+  }
   const stop = () => {
     recordingRef.current = false
     setRecording(false)
     setInterim('')
     try { recRef.current?.stop() } catch {}
+    try { pcmRef.current?.stop(); pcmRef.current = null } catch {}
+    try { wsRef.current?.close(); wsRef.current = null } catch {}
   }
 
   const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -388,7 +429,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
               <button className={'btn btn-sm' + (mode === 'browser' ? ' btn-primary' : '')} disabled={recording} onClick={() => setMode('browser')}>Browser captions (1 language)</button>
             </div>
             {mode === 'auto'
-              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Auto-detects Telugu / Hindi / English & code-mixing via <strong>{provider}</strong>. Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent). You can also edit the transcript before analyzing.</div>
+              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Auto-detects Telugu / Hindi / English & code-mixing via <strong>{provider}</strong>. {provider === 'sarvam' ? 'Captions stream live — each phrase appears ~1-2s after it’s spoken.' : 'Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent).'} You can also edit the transcript before analyzing.</div>
               : <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Pick one language; press Stop and switch to mix languages — all append to one transcript.</div>}
             {!autoAvailable && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 12.5, marginTop: 6 }}>

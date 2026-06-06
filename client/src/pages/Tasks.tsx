@@ -9,6 +9,20 @@ const activityOf = (t: Task) => t.completed_at || t.submitted_at || t.assigned_a
 const activityLabel = (t: Task) =>
   t.completed_at ? '✅ Completed' : t.submitted_at ? '📩 Submitted' : t.assigned_at ? '📌 Assigned' : '🆕 Created'
 
+// Sortable columns. Ranks make Priority/Status sort by logical order (not alphabetically);
+// tasks with no due date sort last. Each returns an ascending-order comparator value.
+type SortKey = 'priority' | 'status' | 'due' | 'time'
+const PRIORITY_RANK: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 }
+const STATUS_RANK: Record<string, number> = { 'To Do': 0, 'In Progress': 1, 'Blocked': 2, 'In Review': 3, 'Done': 4, 'Reopened': 5 }
+const cmpAsc = (a: Task, b: Task, key: SortKey): number => {
+  switch (key) {
+    case 'priority': return (PRIORITY_RANK[a.priority] ?? 0) - (PRIORITY_RANK[b.priority] ?? 0)
+    case 'status': return (STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99)
+    case 'due': return (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31')
+    case 'time': return activityOf(a).localeCompare(activityOf(b))
+  }
+}
+
 export default function Tasks() {
   const { user } = useAuth()
   const [tasks, setTasks] = useState<Task[]>([])
@@ -16,7 +30,9 @@ export default function Tasks() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [showNew, setShowNew] = useState(false)
   const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: '', status: '', assignee: '' })
-  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'time', dir: 'desc' })
+  // Click a header: toggle direction if it's the active column, else switch to it (default desc).
+  const toggleSort = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
 
   const load = () => {
     const p = new URLSearchParams()
@@ -28,10 +44,10 @@ export default function Tasks() {
 
   const isManager = user?.role !== 'employee'
 
-  // Sort by the Time column (most recent activity). ISO strings compare chronologically.
+  // Sort by the active column; direction flips the ascending comparator.
   const sortedTasks = [...tasks].sort((a, b) => {
-    const cmp = activityOf(a).localeCompare(activityOf(b))
-    return sortDir === 'desc' ? -cmp : cmp
+    const cmp = cmpAsc(a, b, sort.key)
+    return sort.dir === 'desc' ? -cmp : cmp
   })
 
   // Inline assign from the table row (managers only). Sets owner + flips confidence to confirmed.
@@ -39,6 +55,14 @@ export default function Tasks() {
     if (!userId) return
     api.patch(`/tasks/${taskId}`, { assignee_id: userId }).then(load)
   }
+
+  // Clickable, sortable column header. Active column shows the direction arrow; the
+  // others show a faint ↕ to hint they're sortable too.
+  const sortTh = (label: string, key: SortKey) => (
+    <th className="clickable" style={{ userSelect: 'none' }} onClick={() => toggleSort(key)} title={`Sort by ${label.toLowerCase()}`}>
+      {label} {sort.key === key ? (sort.dir === 'desc' ? '↓' : '↑') : <span style={{ opacity: 0.3 }}>↕</span>}
+    </th>
+  )
 
   return (
     <>
@@ -65,10 +89,12 @@ export default function Tasks() {
       <div className="card">
         <table>
           <thead><tr>
-            <th>Task</th><th>Priority</th><th>Status</th><th>Assignee</th><th>Due</th>
-            <th className="clickable" style={{ userSelect: 'none' }} onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))} title="Sort by time">
-              Time {sortDir === 'desc' ? '↓' : '↑'}
-            </th>
+            <th>Task</th>
+            {sortTh('Priority', 'priority')}
+            {sortTh('Status', 'status')}
+            <th>Assignee</th>
+            {sortTh('Due', 'due')}
+            {sortTh('Time', 'time')}
           </tr></thead>
           <tbody>
             {sortedTasks.map((t) => (

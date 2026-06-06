@@ -200,7 +200,11 @@ r.post('/transcribe', requireRole('manager', 'admin'), upload.single('audio'), a
 r.post('/audio', requireRole('manager', 'admin'), upload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'audio file required (field "audio")' })
   try {
-    const { text } = await transcribeAudio(req.file.buffer, req.file.originalname || 'meeting.webm', req.file.mimetype || 'audio/webm')
+    // Long uploaded files go to OpenAI Whisper (no duration cap) when a key is
+    // present — Sarvam's instant endpoint rejects audio over 30s. Live recording
+    // still uses the configured provider (Sarvam streaming).
+    const uploadProvider = process.env.OPENAI_API_KEY ? 'openai' : undefined
+    const { text } = await transcribeAudio(req.file.buffer, req.file.originalname || 'meeting.webm', req.file.mimetype || 'audio/webm', { provider: uploadProvider })
     if (!text.trim()) return res.status(422).json({ error: 'Transcription returned no text.' })
     const meetingDate = (req.body.meeting_date || now()).slice(0, 10)
     const participantIds = (() => {
