@@ -11,13 +11,16 @@ const activityLabel = (t: Task) =>
 
 // Sortable columns. Ranks make Priority/Status sort by logical order (not alphabetically);
 // tasks with no due date sort last. Each returns an ascending-order comparator value.
-type SortKey = 'priority' | 'status' | 'due' | 'time'
+type SortKey = 'task' | 'priority' | 'status' | 'assignee' | 'due' | 'time'
 const PRIORITY_RANK: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 }
 const STATUS_RANK: Record<string, number> = { 'To Do': 0, 'In Progress': 1, 'Blocked': 2, 'In Review': 3, 'Done': 4, 'Reopened': 5 }
 const cmpAsc = (a: Task, b: Task, key: SortKey): number => {
   switch (key) {
+    case 'task': return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
     case 'priority': return (PRIORITY_RANK[a.priority] ?? 0) - (PRIORITY_RANK[b.priority] ?? 0)
     case 'status': return (STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99)
+    // Unassigned tasks sort last (high sentinel) regardless of name comparison.
+    case 'assignee': return (a.assignee?.name || '￿').localeCompare(b.assignee?.name || '￿', undefined, { sensitivity: 'base' })
     case 'due': return (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31')
     case 'time': return activityOf(a).localeCompare(activityOf(b))
   }
@@ -89,10 +92,10 @@ export default function Tasks() {
       <div className="card">
         <table>
           <thead><tr>
-            <th>Task</th>
+            {sortTh('Task', 'task')}
             {sortTh('Priority', 'priority')}
             {sortTh('Status', 'status')}
-            <th>Assignee</th>
+            {sortTh('Assignee', 'assignee')}
             {sortTh('Due', 'due')}
             {sortTh('Time', 'time')}
           </tr></thead>
