@@ -15,6 +15,18 @@ export function signToken(user) {
   )
 }
 
+// Verify a raw JWT (e.g. from a WebSocket query string, where headers can't be
+// set) and return the matching user row, or null if invalid/expired/unknown.
+export function verifyToken(token) {
+  if (!token) return null
+  try {
+    const payload = jwt.verify(token, SECRET)
+    return db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub) || null
+  } catch {
+    return null
+  }
+}
+
 export function authRequired(req, res, next) {
   const header = req.headers.authorization || ''
   const token = header.startsWith('Bearer ') ? header.slice(7) : null

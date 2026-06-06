@@ -10,6 +10,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:4000',
         changeOrigin: true,
+        ws: true, // forward the /api/meetings/live WebSocket upgrade to the backend
       },
     },
   },

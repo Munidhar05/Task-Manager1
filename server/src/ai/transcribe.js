@@ -4,8 +4,11 @@
 
 // opts.prompt = recent transcript text used as context so the model keeps names
 // and spelling consistent across consecutive live segments (auto-correction).
+// opts.provider overrides TRANSCRIPTION_PROVIDER for this one call. Used so long
+// pre-recorded file uploads can go to OpenAI Whisper (no duration limit) even when
+// the live recorder is set to Sarvam (whose instant endpoint caps audio at 30s).
 export async function transcribeAudio(buffer, filename = 'audio.webm', mimetype = 'audio/webm', opts = {}) {
-  const provider = (process.env.TRANSCRIPTION_PROVIDER || 'none').toLowerCase()
+  const provider = (opts.provider || process.env.TRANSCRIPTION_PROVIDER || 'none').toLowerCase()
   if (provider === 'none') {
     const err = new Error('No transcription provider configured. Set TRANSCRIPTION_PROVIDER in server/.env (e.g. "sarvam") and the matching API key.')
     err.code = 'NO_PROVIDER'
