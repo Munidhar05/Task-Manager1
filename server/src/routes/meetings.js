@@ -5,6 +5,7 @@ import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify } from '../util.js'
 import { analyzeMeetingTranscript, resolveUser, resolveUserAmong } from '../ai/extractor.js'
 import { transcribeAudio } from '../ai/transcribe.js'
+import { indexMeeting, indexTask, removeMeetingEmbeddings } from '../ai/ragIndex.js'
 
 const r = Router()
 r.use(authRequired)
@@ -39,6 +40,7 @@ function createTaskFromSuggestion(s, { orgId, actorId, notifyAssignee = true }) 
   if (notifyAssignee && s.suggested_assignee_id) {
     notify(orgId, s.suggested_assignee_id, 'task_assigned', `You were assigned "${s.title}"`, tid)
   }
+  indexTask(tid) // index the newly created task for RAG
   return tid
 }
 
@@ -101,6 +103,7 @@ function persistMeeting({ orgId, userId, title, description, meetingDate, transc
   }
 
   audit(orgId, userId, 'meeting.process', 'meeting', mid, `${suggestionCount} suggestion(s), engine=${analysis.engine}`)
+  indexMeeting(mid) // index the meeting summary + transcript segments for RAG
   return { mid, suggestionCount, assignedCount }
 }
 
@@ -145,6 +148,7 @@ r.patch('/:id', requireRole('manager', 'admin'), (req, res) => {
   args.push(m.id)
   db.prepare(`UPDATE meetings SET ${sets.join(', ')} WHERE id=?`).run(...args)
   audit(req.user.org_id, req.user.id, 'meeting.update', 'meeting', m.id, b)
+  indexMeeting(m.id) // title change → re-index
   res.json({ ok: true })
 })
 
@@ -152,6 +156,7 @@ r.patch('/:id', requireRole('manager', 'admin'), (req, res) => {
 r.delete('/:id', requireRole('manager', 'admin'), (req, res) => {
   const m = db.prepare('SELECT id FROM meetings WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!m) return res.status(404).json({ error: 'Not found' })
+  removeMeetingEmbeddings(m.id) // drop RAG vectors before the source rows vanish
   const wipe = db.transaction(() => {
     db.prepare('DELETE FROM tasks WHERE meeting_id=?').run(m.id)            // cascades subtasks/comments/deps
     db.prepare('DELETE FROM transcript_segments WHERE meeting_id=?').run(m.id)

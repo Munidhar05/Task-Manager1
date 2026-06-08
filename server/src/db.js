@@ -171,6 +171,28 @@ export function initSchema() {
     value TEXT
   );
 
+  -- RAG vector store. One row per indexed chunk of org data (a task, a meeting
+  -- summary, a transcript segment, or a chat message). vector is a raw Float32
+  -- BLOB; similarity is computed in JS (see ai/embeddings.js). content_hash lets
+  -- us skip re-embedding text that hasn't changed. ref_user_id / ref_convo_id
+  -- carry the visibility keys used to enforce RBAC at retrieval time.
+  CREATE TABLE IF NOT EXISTS embeddings (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,                  -- task | meeting | segment | chat
+    source_id TEXT NOT NULL,                     -- id of the row this chunk came from
+    ref_user_id TEXT,                            -- task assignee (employee-scope filter)
+    ref_convo_id TEXT,                           -- chat conversation (membership filter)
+    chunk_text TEXT NOT NULL,                     -- the human-readable text that was embedded
+    content_hash TEXT NOT NULL,                   -- hash of chunk_text; skip re-embed if unchanged
+    dim INTEGER NOT NULL,                         -- vector dimensions
+    vector BLOB NOT NULL,                         -- Float32Array bytes
+    model TEXT,                                   -- embedding model used
+    updated_at TEXT NOT NULL,
+    UNIQUE (source_type, source_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_emb_org ON embeddings(org_id, source_type);
+
   -- Internal team chat messages. Each belongs to a conversation (direct or group).
   -- recipient_id is legacy (used only by old 1:1 rows) — nullable, no FK — because
   -- group messages have many recipients, tracked via chat_participants instead.

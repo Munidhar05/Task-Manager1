@@ -7,6 +7,7 @@ import { db } from '../db.js'
 import { authRequired, verifyToken } from '../auth.js'
 import { id, now, notify } from '../util.js'
 import { pushToUser, getOnlineUsers } from '../ws/chatHub.js'
+import { indexChatMessage, removeEmbedding } from '../ai/ragIndex.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
 // real-time delivery, replies, reactions, stars, edit, single-delete, read receipts.
@@ -346,6 +347,7 @@ r.delete('/conversations/:id', (req, res) => {
       db.prepare('DELETE FROM chat_reactions WHERE message_id=?').run(mm.id)
       db.prepare('DELETE FROM chat_stars WHERE message_id=?').run(mm.id)
       db.prepare('DELETE FROM chat_message_hidden WHERE message_id=?').run(mm.id)
+      removeEmbedding('chat', mm.id) // drop RAG vector for each wiped message
     }
     db.prepare('DELETE FROM chat_messages WHERE conversation_id=?').run(conv.id)
     db.prepare('DELETE FROM chat_participants WHERE conversation_id=?').run(conv.id)
@@ -383,6 +385,7 @@ function deliver(conv, msgRow, sender) {
   for (const uid of [sender.id, ...others]) {
     pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, {}) })
   }
+  indexChatMessage(msgRow.id) // RAG: index every delivered message (text/upload/forward)
 }
 
 // Send a text message.
@@ -433,6 +436,7 @@ r.patch('/message/:id', (req, res) => {
   const ts = now()
   db.prepare('UPDATE chat_messages SET body=?, edited_at=? WHERE id=?').run(body, ts, m.id)
   pushToConversation(m.conversation_id, { type: 'edit', conversationId: m.conversation_id, id: m.id, body, edited_at: ts })
+  indexChatMessage(m.id) // re-index edited body
   res.json({ ok: true, body, edited_at: ts })
 })
 
@@ -474,6 +478,7 @@ r.delete('/message/:id', (req, res) => {
   if (m.sender_id === me.id) {
     db.prepare('UPDATE chat_messages SET deleted_for_all=1, body=?, file_name=NULL, file_stored=NULL, file_type=NULL, file_size=NULL WHERE id=?').run('', m.id)
     db.prepare('DELETE FROM chat_reactions WHERE message_id=?').run(m.id)
+    removeEmbedding('chat', m.id) // unsent message leaves the RAG index
     if (m.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, m.file_stored)) } catch {}
     pushToConversation(m.conversation_id, { type: 'delete', conversationId: m.conversation_id, id: m.id, scope: 'all' })
   } else {
