@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api, Suggestion } from '../api'
-import { PriorityBadge, StatusBadge, ConfidenceScore, Avatar, dueLabel, LANG_LABEL } from '../ui'
+import { PriorityBadge, StatusBadge, ConfidenceScore, Avatar, dueLabel, LANG_LABEL, defaultDueDate } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 
 const SUMMARY_SECTIONS: { key: string; label: string; icon: string }[] = [
@@ -149,7 +149,11 @@ const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
 // Manager Review screen: edit / reject / merge AI suggestions, then assign them.
 function ReviewAssignModal({ meeting, pending, onClose, onDone }: { meeting: any; pending: Suggestion[]; onClose: () => void; onDone: () => void }) {
   type Row = Suggestion & { _decision: 'approve' | 'reject' | 'merge'; _mergeInto: string }
-  const [rows, setRows] = useState<Row[]>(pending.map((p) => ({ ...p, _decision: 'approve', _mergeInto: '' })))
+  // Pre-fill each due date from priority (matching the server default) when the
+  // AI didn't capture a deadline, so the manager sees the date before assigning.
+  const [rows, setRows] = useState<Row[]>(pending.map((p) => ({
+    ...p, due_date: p.due_date || defaultDueDate(p.priority), _decision: 'approve', _mergeInto: '',
+  })))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const participants: any[] = meeting.participants || []
@@ -199,7 +203,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onDone }: { meeting: any
                       {participants.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                   </div>
-                  <div><label>Priority</label><select value={r.priority} onChange={(e) => set(i, { priority: e.target.value })}>{PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select></div>
+                  <div><label>Priority</label><select value={r.priority} onChange={(e) => set(i, { priority: e.target.value, due_date: defaultDueDate(e.target.value) })}>{PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select></div>
                   <div><label>Due date</label><input type="date" value={(r.due_date || '').slice(0, 10)} onChange={(e) => set(i, { due_date: e.target.value })} /></div>
                 </div>
                 {r.assignee_reasoning && <div className="muted" style={{ fontSize: 12 }}>💡 {r.assignee_reasoning}</div>}

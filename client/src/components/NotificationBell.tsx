@@ -48,7 +48,23 @@ export default function NotificationBell() {
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button className="btn btn-ghost" onClick={toggle} title="Notifications" style={{ fontSize: 18, position: 'relative', lineHeight: 1 }}>
-        <span className={vibrating ? 'bell-vibrate' : ''} style={{ display: 'inline-block' }}>🔔</span>
+        <span
+          className={vibrating ? 'bell-vibrate' : ''}
+          style={{ display: 'inline-block', filter: 'drop-shadow(0 0 6px #00eaffcc) drop-shadow(0 0 10px #39ff14aa)' }}
+        >
+          <svg width="44" height="44" viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+              <linearGradient id="bellNeon" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#00eaff" />
+                <stop offset="100%" stopColor="#39ff14" />
+              </linearGradient>
+            </defs>
+            <path
+              fill="url(#bellNeon)"
+              d="M12 2C10.9 2 10 2.9 10 4v.29C7.12 5.14 5 7.82 5 11v5l-2 2v1h18v-1l-2-2v-5c0-3.18-2.12-5.86-5-6.71V4c0-1.1-.9-2-2-2zm0 20c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2z"
+            />
+          </svg>
+        </span>
         {unread > 0 && (
           <span style={{ position: 'absolute', top: -2, right: -2, background: '#ef4444', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'grid', placeItems: 'center', padding: '0 4px' }}>
             {unread > 9 ? '9+' : unread}

@@ -3,6 +3,7 @@
 import { analyzeTranscript } from './rules.js'
 import { analyzeWithClaude } from './claude.js'
 import { analyzeWithOpenAI } from './openai.js'
+import { analyzeWithOpenRouter } from './openrouter.js'
 import { db } from '../db.js'
 
 // Match a spoken/raw name to a user in the org via name, alias, or fuzzy contains.
@@ -36,10 +37,16 @@ export function resolveUserAmong(orgId, rawName, allowedIds) {
 }
 
 export async function analyzeMeetingTranscript(transcript, opts = {}) {
-  // Engine priority: Claude (if configured) → OpenAI/GPT (if configured) → offline rules.
+  // Engine priority: OpenRouter (primary) → Claude → OpenAI/GPT → offline rules.
+  // Each tier is tried only if its key is set, falling through on error.
+  const hasOpenRouter = !!process.env.OPENROUTER_API_KEY
   const hasClaude = !!process.env.ANTHROPIC_API_KEY
   const hasOpenAI = !!process.env.OPENAI_API_KEY
 
+  if (hasOpenRouter) {
+    try { return await analyzeWithOpenRouter(transcript, opts) }
+    catch (err) { console.warn('[ai] OpenRouter failed:', err.message) }
+  }
   if (hasClaude) {
     try { return await analyzeWithClaude(transcript, opts) }
     catch (err) { console.warn('[ai] Claude failed:', err.message) }
