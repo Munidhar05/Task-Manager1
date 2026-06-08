@@ -318,6 +318,12 @@ export function initSchema() {
   ensureColumn('chat_messages', 'conversation_id', 'TEXT') // owning conversation
   ensureColumn('chat_messages', 'reply_to', 'TEXT')        // message id being replied to
   ensureColumn('chat_messages', 'edited_at', 'TEXT')       // set when the body is edited
+  ensureColumn('chat_participants', 'muted', 'INTEGER DEFAULT 0')  // per-user mute
+  ensureColumn('chat_participants', 'pinned', 'INTEGER DEFAULT 0') // per-user pin-to-top
+  ensureColumn('users', 'last_seen', 'TEXT')               // updated when a user's last socket disconnects
+  ensureColumn('users', 'avatar_file', 'TEXT')             // uploaded profile photo (data/avatars)
+  ensureColumn('chat_conversations', 'avatar_file', 'TEXT') // uploaded group photo
+  ensureColumn('chat_messages', 'forwarded', 'INTEGER DEFAULT 0') // message was forwarded
 
   // Rebuild chat_messages on older DBs where recipient_id was NOT NULL with a FK
   // (which blocks group messages). Recreates it nullable / FK-free, preserving rows.

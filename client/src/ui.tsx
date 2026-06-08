@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 
 export const PRIORITY_COLORS: Record<string, string> = {
   Critical: '#ef4444', High: '#f59e0b', Medium: '#3b82f6', Low: '#94a3b8',
@@ -26,8 +26,14 @@ export function StatusBadge({ s }: { s: string }) {
   return <Badge color={STATUS_COLORS[s] || '#64748b'} soft>{s}</Badge>
 }
 
-export function Avatar({ name, color, size = 28 }: { name?: string; color?: string; size?: number }) {
+export function Avatar({ name, color, size = 28, src }: { name?: string; color?: string; size?: number; src?: string | null }) {
+  const [broken, setBroken] = useState(false)
+  useEffect(() => { setBroken(false) }, [src]) // a new image URL should retry, not stay fallen-back
   const initials = (name || '?').split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase()
+  if (src && !broken) {
+    return <img className="avatar" src={src} alt={name || ''} onError={() => setBroken(true)}
+      style={{ width: size, height: size, objectFit: 'cover' }} />
+  }
   return (
     <span className="avatar" style={{ background: color || '#c5560f', width: size, height: size, fontSize: size * 0.4 }}>
       {initials}

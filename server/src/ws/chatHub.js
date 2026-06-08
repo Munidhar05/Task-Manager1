@@ -35,9 +35,14 @@ export function attachChatHub(server) {
     }
 
     ws.userId = user.id
+    const wasOffline = !clients.has(user.id) || clients.get(user.id).size === 0
     if (!clients.has(user.id)) clients.set(user.id, new Set())
     clients.get(user.id).add(ws)
     try { ws.send(JSON.stringify({ type: 'ready' })) } catch {}
+    // Presence: tell everyone this user came online (first socket only), and tell
+    // this socket who is currently online.
+    try { ws.send(JSON.stringify({ type: 'presence-list', online: getOnlineUsers() })) } catch {}
+    if (wasOffline) broadcastAll({ type: 'presence', userId: user.id, online: true })
 
     // Relay ephemeral "typing…" signals to the other participants of a conversation.
     ws.on('message', (raw) => {
@@ -57,7 +62,15 @@ export function attachChatHub(server) {
 
     const detach = () => {
       const set = clients.get(user.id)
-      if (set) { set.delete(ws); if (!set.size) clients.delete(user.id) }
+      if (set) {
+        set.delete(ws)
+        if (!set.size) {
+          clients.delete(user.id)
+          const ts = new Date().toISOString()
+          try { db.prepare('UPDATE users SET last_seen=? WHERE id=?').run(ts, user.id) } catch {}
+          broadcastAll({ type: 'presence', userId: user.id, online: false, last_seen: ts })
+        }
+      }
     }
     ws.on('close', detach)
     ws.on('error', () => { try { ws.close() } catch {} })
@@ -87,4 +100,15 @@ export function pushToUser(userId, payload) {
   for (const ws of set) {
     if (ws.readyState === ws.OPEN) { try { ws.send(data) } catch {} }
   }
+}
+
+// Broadcast to every connected socket (used for presence changes).
+function broadcastAll(payload) {
+  const data = JSON.stringify(payload)
+  for (const set of clients.values()) for (const ws of set) if (ws.readyState === ws.OPEN) { try { ws.send(data) } catch {} }
+}
+
+// Currently-online user ids (those with at least one live socket).
+export function getOnlineUsers() {
+  return [...clients.keys()].filter((uid) => (clients.get(uid)?.size || 0) > 0)
 }

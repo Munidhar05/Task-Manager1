@@ -43,7 +43,12 @@ export const api = {
 
 // ---- shared types -----------------------------------------------------------
 export type Role = 'admin' | 'manager' | 'employee'
-export interface User { id: string; name: string; email: string; role: Role; org_id: string; phone?: string; department_id?: string; avatar_color?: string; aliases?: string; preferred_language?: string }
+export interface User { id: string; name: string; email: string; role: Role; org_id: string; phone?: string; department_id?: string; avatar_color?: string; avatar_file?: string | null; aliases?: string; preferred_language?: string }
+
+// Authenticated avatar image URLs (token in query so <img> can load them).
+// `ver` (the stored filename) busts the browser cache when the photo changes.
+export const userAvatarUrl = (userId: string, ver?: string | null) => `/api/users/${userId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
+export const groupAvatarUrl = (convId: string, ver?: string | null) => `/api/chat/conversations/${convId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
 
 // An AI-suggested task awaiting manager review (the review queue).
 export interface Suggestion {

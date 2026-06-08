@@ -1,14 +1,54 @@
 import { Router } from 'express'
 import multer from 'multer'
 import * as XLSX from 'xlsx'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
-import { authRequired, requireRole, hashPassword } from '../auth.js'
+import { authRequired, requireRole, hashPassword, verifyToken } from '../auth.js'
 import { id, now, audit } from '../util.js'
 import { publicUser } from './auth.js'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const AVATAR_DIR = path.join(__dirname, '..', '..', 'data', 'avatars')
+fs.mkdirSync(AVATAR_DIR, { recursive: true })
+
 const r = Router()
+
+// Serve a user's profile photo (token via header OR ?token= so <img> can load it).
+// Declared before authRequired because <img src> can't send an Authorization header.
+r.get('/:id/avatar', (req, res) => {
+  const u = (req.headers.authorization || '').startsWith('Bearer ')
+    ? verifyToken(req.headers.authorization.slice(7)) : verifyToken(req.query.token)
+  if (!u) return res.status(401).json({ error: 'Authentication required' })
+  const target = db.prepare('SELECT avatar_file FROM users WHERE id=?').get(req.params.id)
+  if (!target?.avatar_file) return res.status(404).json({ error: 'No avatar' })
+  const abs = path.join(AVATAR_DIR, target.avatar_file)
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'Missing' })
+  const ext = path.extname(target.avatar_file); if (ext) res.type(ext)
+  res.setHeader('Cache-Control', 'private, max-age=300')
+  fs.createReadStream(abs).pipe(res)
+})
+
 r.use(authRequired)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })
+
+// Upload / replace my own profile photo (images only).
+const avatarUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, AVATAR_DIR),
+    filename: (req, file, cb) => cb(null, id('av') + path.extname(file.originalname || '.png').slice(0, 8)),
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, (file.mimetype || '').startsWith('image/')),
+})
+r.post('/me/avatar', avatarUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'An image file is required' })
+  const old = db.prepare('SELECT avatar_file FROM users WHERE id=?').get(req.user.id)?.avatar_file
+  db.prepare('UPDATE users SET avatar_file=? WHERE id=?').run(req.file.filename, req.user.id)
+  if (old) try { fs.unlinkSync(path.join(AVATAR_DIR, old)) } catch {}
+  res.json({ ok: true, avatar_file: req.file.filename })
+})
 
 // Validation: only @gmail.com / @befach.com emails, and phone must be 10 digits.
 const EMAIL_RE = /^[^\s@]+@(gmail\.com|befach\.com)$/
@@ -16,7 +56,7 @@ const onlyDigits = (s) => String(s || '').replace(/\D/g, '')
 
 // Everyone can list org users (needed for assignment dropdowns) — minimal fields.
 r.get('/', (req, res) => {
-  const rows = db.prepare('SELECT id, name, email, role, phone, department_id, avatar_color, aliases, preferred_language FROM users WHERE org_id=? ORDER BY name').all(req.user.org_id)
+  const rows = db.prepare('SELECT id, name, email, role, phone, department_id, avatar_color, avatar_file, aliases, preferred_language FROM users WHERE org_id=? ORDER BY name').all(req.user.org_id)
   res.json(rows)
 })
 

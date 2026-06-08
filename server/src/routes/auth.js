@@ -22,7 +22,8 @@ r.get('/me', authRequired, (req, res) => {
 
 function publicUser(u) {
   return { id: u.id, name: u.name, email: u.email, role: u.role, org_id: u.org_id, phone: u.phone,
-    department_id: u.department_id, preferred_language: u.preferred_language, avatar_color: u.avatar_color }
+    department_id: u.department_id, preferred_language: u.preferred_language, avatar_color: u.avatar_color,
+    avatar_file: u.avatar_file || null }
 }
 
 export default r
