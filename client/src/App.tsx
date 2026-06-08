@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './auth'
+import { api } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
 import Login from './pages/Login'
@@ -9,6 +10,7 @@ import Meetings from './pages/Meetings'
 import MeetingDetail from './pages/MeetingDetail'
 import Tasks from './pages/Tasks'
 import Assistant from './pages/Assistant'
+import Chats from './pages/Chats'
 import Admin from './pages/Admin'
 
 // The Manager is the Admin of the org: it owns the Administration hub
@@ -16,6 +18,7 @@ import Admin from './pages/Admin'
 const NAV = [
   { to: '/', label: 'Dashboard', icon: '◧', roles: ['manager'] },
   { to: '/tasks', label: 'Tasks', icon: '✓', roles: ['manager', 'employee'] },
+  { to: '/chats', label: 'Chats', icon: '💬', roles: ['manager', 'employee'] },
   { to: '/meetings', label: 'Meetings', icon: '🎙', roles: ['manager'] },
   { to: '/assistant', label: 'AI Assistant', icon: '✦', roles: ['manager'] },
   { to: '/admin', label: 'Administration', icon: '⚙', roles: ['manager'] },
@@ -24,6 +27,7 @@ const NAV = [
 const TITLES: Record<string, { t: string; s: string }> = {
   '/': { t: 'Dashboard', s: 'Your meeting-to-task command center' },
   '/tasks': { t: 'Tasks', s: 'Track the full task lifecycle' },
+  '/chats': { t: 'Chats', s: 'Message your manager and teammates' },
   '/meetings': { t: 'Meetings', s: 'Upload conversations, get structured work' },
   '/assistant': { t: 'AI Assistant', s: 'Ask anything about your tasks' },
   '/admin': { t: 'Administration', s: 'Users, audit logs & org metrics' },
@@ -34,7 +38,17 @@ function Layout({ children }: { children: React.ReactNode }) {
   const loc = useLocation()
   const [open, setOpen] = useState(false)
   const [engine, setEngine] = useState('')
+  const [chatUnread, setChatUnread] = useState(0)
   React.useEffect(() => { fetch('/api/health').then(r => r.json()).then(d => setEngine(d.ai_engine)).catch(() => {}) }, [])
+  // Poll the unread chat count so the Chats nav item shows a live badge.
+  React.useEffect(() => {
+    const load = () => api.get('/chat/unread').then((d) => setChatUnread(d.unread)).catch(() => {})
+    load()
+    const iv = setInterval(load, 10000)
+    const onPing = () => load()
+    window.addEventListener('chat-unread-changed', onPing)
+    return () => { clearInterval(iv); window.removeEventListener('chat-unread-changed', onPing) }
+  }, [])
   const base = '/' + (loc.pathname.split('/')[1] || '')
   const meta = TITLES[base] || TITLES['/']
   if (!user) return null
@@ -52,6 +66,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           {NAV.filter((n) => n.roles.includes(user.role)).map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
               <span className="nav-icon">{n.icon}</span>{n.label}
+              {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
             </NavLink>
           ))}
         </nav>
@@ -109,6 +124,7 @@ export default function App() {
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/" element={<Protected><Home /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
+      <Route path="/chats" element={<Protected><Chats /></Protected>} />
       <Route path="/meetings" element={<Protected roles={['manager']}><Meetings /></Protected>} />
       <Route path="/meetings/:id" element={<Protected roles={['manager']}><MeetingDetail /></Protected>} />
       <Route path="/assistant" element={<Protected roles={['manager']}><Assistant /></Protected>} />

@@ -12,8 +12,10 @@ import dashboardRoutes from './routes/dashboards.js'
 import assistantRoutes from './routes/assistant.js'
 import notificationRoutes from './routes/notifications.js'
 import digestRoutes from './routes/digest.js'
+import chatRoutes from './routes/chat.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe } from './ws/liveTranscribe.js'
+import { attachChatHub } from './ws/chatHub.js'
 
 initSchema()
 ensureSeed()
@@ -46,6 +48,7 @@ app.use('/api/dashboards', dashboardRoutes)
 app.use('/api/assistant', assistantRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/digest', digestRoutes)
+app.use('/api/chat', chatRoutes)
 
 app.use((err, req, res, next) => {
   console.error('[error]', err)
@@ -63,6 +66,8 @@ const server = app.listen(PORT, () => {
 
 // Live meeting transcription stream (browser <-> Sarvam) shares the HTTP server.
 attachLiveTranscribe(server)
+// Real-time internal chat push shares the same HTTP server (different path).
+attachChatHub(server)
 
 // Release the port cleanly on exit / restart so `node --watch` (and Ctrl+C)
 // don't leave an orphaned process squatting on :4000 → no more EADDRINUSE.

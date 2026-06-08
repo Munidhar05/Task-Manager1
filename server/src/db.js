@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { id } from './util.js'
+import { id, now } from './util.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DB_PATH = path.join(__dirname, '..', 'data', 'smarttask.db')
@@ -171,6 +171,99 @@ export function initSchema() {
     value TEXT
   );
 
+  -- Internal team chat messages. Each belongs to a conversation (direct or group).
+  -- recipient_id is legacy (used only by old 1:1 rows) — nullable, no FK — because
+  -- group messages have many recipients, tracked via chat_participants instead.
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    conversation_id TEXT,
+    sender_id TEXT NOT NULL,
+    recipient_id TEXT,
+    body TEXT,
+    file_name TEXT,
+    file_stored TEXT,
+    file_type TEXT,
+    file_size INTEGER,
+    deleted_for_all INTEGER DEFAULT 0,
+    reply_to TEXT,
+    edited_at TEXT,
+    read INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_convo ON chat_messages(conversation_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_chat_pair ON chat_messages(sender_id, recipient_id, created_at);
+
+  -- "Delete for me": rows here hide a message from a single user's view only.
+  -- (A message deleted for everyone is flagged on chat_messages.deleted_for_all.)
+  CREATE TABLE IF NOT EXISTS chat_message_hidden (
+    message_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (message_id, user_id),
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  -- Conversations: a 1:1 (direct) or multi-person (group) chat. Messages belong
+  -- to a conversation; membership + per-user read position live in participants.
+  CREATE TABLE IF NOT EXISTS chat_conversations (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'direct',     -- direct | group
+    name TEXT,                                -- group name (null for direct)
+    avatar_color TEXT DEFAULT '#6366f1',
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_participants (
+    conversation_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',      -- admin | member
+    last_read_at TEXT,                         -- drives unread counts + read receipts
+    joined_at TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, user_id),
+    FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_part_user ON chat_participants(user_id);
+
+  -- Emoji reactions (one row per user+emoji on a message).
+  CREATE TABLE IF NOT EXISTS chat_reactions (
+    message_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    emoji TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, user_id),
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  );
+
+  -- Starred / bookmarked messages (per user).
+  CREATE TABLE IF NOT EXISTS chat_stars (
+    message_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, user_id),
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  );
+
+  -- AI Assistant chat history. One row per conversation thread; messages is a
+  -- JSON array of {role, text, tasks?}. Scoped to the owning user so threads
+  -- follow the manager across devices/browsers.
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT 'New chat',
+    messages TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_convo_user ON conversations(user_id, updated_at);
+
   -- Meeting attendees. Only these users can be suggested as task owners.
   CREATE TABLE IF NOT EXISTS meeting_participants (
     meeting_id TEXT NOT NULL,
@@ -215,6 +308,66 @@ export function initSchema() {
   ensureColumn('tasks', 'visible_to_manager', 'INTEGER DEFAULT 1')
   ensureColumn('users', 'phone', "TEXT DEFAULT ''")
   ensureColumn('meetings', 'description', "TEXT DEFAULT ''")
+
+  // Chat file attachments + "delete for everyone" flag.
+  ensureColumn('chat_messages', 'file_name', 'TEXT')      // original filename shown to users
+  ensureColumn('chat_messages', 'file_stored', 'TEXT')    // generated name on disk (data/chat_uploads)
+  ensureColumn('chat_messages', 'file_type', 'TEXT')      // mime type
+  ensureColumn('chat_messages', 'file_size', 'INTEGER')   // bytes
+  ensureColumn('chat_messages', 'deleted_for_all', 'INTEGER DEFAULT 0')
+  ensureColumn('chat_messages', 'conversation_id', 'TEXT') // owning conversation
+  ensureColumn('chat_messages', 'reply_to', 'TEXT')        // message id being replied to
+  ensureColumn('chat_messages', 'edited_at', 'TEXT')       // set when the body is edited
+
+  // Rebuild chat_messages on older DBs where recipient_id was NOT NULL with a FK
+  // (which blocks group messages). Recreates it nullable / FK-free, preserving rows.
+  runOnce('chat_messages_rebuild_v2', () => {
+    const cols = db.prepare('PRAGMA table_info(chat_messages)').all()
+    const recip = cols.find((c) => c.name === 'recipient_id')
+    if (!recip || recip.notnull === 0) return // already nullable — nothing to do
+    db.pragma('foreign_keys = OFF')
+    const rebuild = db.transaction(() => {
+      db.exec(`CREATE TABLE chat_messages_new (
+        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, conversation_id TEXT, sender_id TEXT NOT NULL,
+        recipient_id TEXT, body TEXT, file_name TEXT, file_stored TEXT, file_type TEXT, file_size INTEGER,
+        deleted_for_all INTEGER DEFAULT 0, reply_to TEXT, edited_at TEXT, read INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE );`)
+      db.exec(`INSERT INTO chat_messages_new (id,org_id,conversation_id,sender_id,recipient_id,body,file_name,file_stored,file_type,file_size,deleted_for_all,reply_to,edited_at,read,created_at)
+        SELECT id,org_id,conversation_id,sender_id,recipient_id,body,file_name,file_stored,file_type,file_size,deleted_for_all,reply_to,edited_at,read,created_at FROM chat_messages;`)
+      db.exec('DROP TABLE chat_messages;')
+      db.exec('ALTER TABLE chat_messages_new RENAME TO chat_messages;')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_chat_convo ON chat_messages(conversation_id, created_at);')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_chat_pair ON chat_messages(sender_id, recipient_id, created_at);')
+    })
+    rebuild()
+    db.pragma('foreign_keys = ON')
+    console.log('[migrate] rebuilt chat_messages (recipient_id now nullable for group support)')
+  })
+
+  // Backfill: turn legacy 1:1 messages (sender_id/recipient_id) into conversations.
+  runOnce('chat_conversations_v1', () => {
+    const legacy = db.prepare("SELECT id, sender_id, recipient_id, created_at FROM chat_messages WHERE conversation_id IS NULL AND recipient_id IS NOT NULL AND recipient_id != ''").all()
+    const pairKey = (a, b) => [a, b].sort().join('|')
+    const convoForPair = new Map()
+    for (const m of legacy) {
+      const key = pairKey(m.sender_id, m.recipient_id)
+      let cid = convoForPair.get(key)
+      if (!cid) {
+        const u = db.prepare('SELECT org_id FROM users WHERE id=?').get(m.sender_id)
+        if (!u) continue
+        cid = id('cv')
+        db.prepare('INSERT INTO chat_conversations (id, org_id, type, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?)')
+          .run(cid, u.org_id, 'direct', m.sender_id, m.created_at || now(), now())
+        for (const uid of [m.sender_id, m.recipient_id]) {
+          db.prepare('INSERT OR IGNORE INTO chat_participants (conversation_id, user_id, role, last_read_at, joined_at) VALUES (?,?,?,?,?)')
+            .run(cid, uid, 'member', now(), now())
+        }
+        convoForPair.set(key, cid)
+      }
+      db.prepare('UPDATE chat_messages SET conversation_id=? WHERE id=?').run(cid, m.id)
+    }
+    if (convoForPair.size) console.log(`[migrate] created ${convoForPair.size} direct conversation(s) from legacy chat messages`)
+  })
 
   // One-time: the Manager is now the org admin. Remove any legacy standalone
   // admin account so it no longer exists in already-seeded databases.

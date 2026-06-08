@@ -15,7 +15,16 @@ import { verifyToken } from '../auth.js'
 const SARVAM_WS = 'wss://api.sarvam.ai/speech-to-text/ws'
 
 export function attachLiveTranscribe(server) {
-  const wss = new WebSocketServer({ server, path: '/api/meetings/live' })
+  // `noServer` + manual upgrade routing so multiple WS endpoints can share one
+  // HTTP server. (Binding with `{ server, path }` makes ws abort every mismatched
+  // upgrade with a 400, which would kill the other endpoints' handshakes.)
+  const wss = new WebSocketServer({ noServer: true })
+  server.on('upgrade', (req, socket, head) => {
+    let pathname
+    try { pathname = new URL(req.url, 'http://localhost').pathname } catch { return }
+    if (pathname !== '/api/meetings/live') return // not ours — let another handler take it
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+  })
 
   wss.on('connection', (client, req) => {
     const url = new URL(req.url, 'http://localhost')
