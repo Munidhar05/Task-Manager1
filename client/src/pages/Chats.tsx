@@ -180,6 +180,9 @@ export default function Chats() {
         } else if (d.type === 'conversation') {
           if (d.action === 'removed' && d.conversationId === activeIdRef.current) { setActiveId(''); setMessages([]) }
           loadConvos()
+        } else if (d.type === 'cleared') {
+          if (d.conversationId === activeIdRef.current) setMessages([])
+          loadConvos()
         } else if (d.type === 'presence') {
           setOnline((s) => { const n = new Set(s); d.online ? n.add(d.userId) : n.delete(d.userId); return n })
           if (!d.online && d.last_seen) setLastSeen((s) => ({ ...s, [d.userId]: d.last_seen }))
@@ -305,6 +308,13 @@ export default function Chats() {
     try { await api.post(`/chat/conversations/${c.id}/prefs`, { [pref]: next }); loadConvos() } catch { loadConvos() }
   }
 
+  const clearChat = async (c: Conversation) => {
+    setConvoMenu(null)
+    if (!window.confirm('Clear all messages in this chat? This only clears them for you.')) return
+    try { await api.post(`/chat/conversations/${c.id}/clear`); if (c.id === activeId) setMessages([]); loadConvos() }
+    catch (e: any) { alert('Could not clear: ' + e.message) }
+  }
+
   const senderName = (uid: string) => (active?.members.find((mm) => mm.id === uid)?.name) || (uid === user?.id ? 'You' : 'Unknown')
   const senderColor = (uid: string) => active?.members.find((mm) => mm.id === uid)?.avatar_color
 
@@ -366,6 +376,7 @@ export default function Chats() {
                     <div className="msg-menu mine" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => setPref(c, 'pinned')}>{c.pinned ? 'Unpin' : 'Pin to top'}</button>
                       <button onClick={() => setPref(c, 'muted')}>{c.muted ? 'Unmute' : 'Mute'}</button>
+                      <button className="danger" onClick={() => clearChat(c)}>Clear chat</button>
                     </div>
                   )}
                 </div>

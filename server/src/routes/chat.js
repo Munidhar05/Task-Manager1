@@ -279,6 +279,19 @@ r.post('/conversations/:id/prefs', (req, res) => {
   res.json({ ok: true })
 })
 
+// Clear chat: hide every current message in this conversation for me only
+// (the other participants keep their copies). New messages still arrive.
+r.post('/conversations/:id/clear', (req, res) => {
+  const me = req.user
+  if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Not found' })
+  const ids = db.prepare('SELECT id FROM chat_messages WHERE conversation_id=?').all(req.params.id)
+  const ins = db.prepare('INSERT OR IGNORE INTO chat_message_hidden (message_id, user_id) VALUES (?,?)')
+  db.transaction(() => { for (const m of ids) ins.run(m.id, me.id) })()
+  db.prepare('UPDATE chat_participants SET last_read_at=? WHERE conversation_id=? AND user_id=?').run(now(), req.params.id, me.id)
+  pushToUser(me.id, { type: 'cleared', conversationId: req.params.id }) // sync my other tabs
+  res.json({ ok: true, cleared: ids.length })
+})
+
 // Set a group photo (admin only, images only).
 r.post('/conversations/:id/avatar', upload.single('file'), (req, res) => {
   const cleanup = () => { if (req.file) try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)) } catch {} }
