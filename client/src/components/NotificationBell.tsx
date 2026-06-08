@@ -4,7 +4,7 @@ import { api } from '../api'
 interface Notif { id: string; type: string; message: string; task_id?: string; read: number; created_at: string }
 
 const ICON: Record<string, string> = {
-  task_submitted: '📩', task_approved: '✅', task_reopened: '↩', task_assigned: '📌', task_comment: '💬',
+  task_submitted: '📩', task_approved: '✅', task_reopened: '↩', task_assigned: '📌', task_comment: '💬', chat_message: '💬',
 }
 
 export default function NotificationBell() {
