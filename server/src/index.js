@@ -38,7 +38,9 @@ app.get('/api/health', (req, res) => {
   const ragOn = hasEmbeddings()
   res.json({
     ok: true,
-    ai_engine: process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'rule-based (offline)'),
+    ai_engine: process.env.OPENROUTER_API_KEY
+      ? `openrouter (${process.env.OPENROUTER_MODEL || 'google/gemini-2.5-pro'})`
+      : (process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'rule-based (offline)')),
     transcription: process.env.TRANSCRIPTION_PROVIDER || 'none',
     rag: {
       enabled: ragOn,
@@ -66,7 +68,9 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 4000
 const server = app.listen(PORT, () => {
   console.log(`\n  SmartTask AI server → http://localhost:${PORT}`)
-  console.log(`  AI engine: ${process.env.ANTHROPIC_API_KEY ? 'Claude (online)' : 'rule-based (offline fallback)'}`)
+  console.log(`  AI engine: ${process.env.OPENROUTER_API_KEY
+    ? `OpenRouter (${process.env.OPENROUTER_MODEL || 'google/gemini-2.5-pro'})`
+    : (process.env.ANTHROPIC_API_KEY ? 'Claude (online)' : 'rule-based (offline fallback)')}`)
   const ragCount = db.prepare('SELECT COUNT(*) c FROM embeddings').get().c
   console.log(`  RAG: ${hasEmbeddings() ? `ON (${embedModel()}, ${ragCount} items indexed)` : 'OFF (no embedding key set)'}`)
   console.log(`  Users in DB: ${db.prepare('SELECT COUNT(*) c FROM users').get().c}`)

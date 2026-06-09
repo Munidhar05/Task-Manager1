@@ -86,6 +86,17 @@ export function fmtDateTime(iso?: string | null) {
   return d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
+// Default lead time (days from today) per priority — mirrors the server's
+// dueDateForPriority so the UI can pre-fill the same date the backend would.
+const DUE_DAYS_BY_PRIORITY: Record<string, number> = { Critical: 0, High: 1, Medium: 3, Low: 5 }
+export function defaultDueDate(priority: string): string {
+  const days = DUE_DAYS_BY_PRIORITY[priority] ?? 3
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  const y = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, '0'), da = String(d.getDate()).padStart(2, '0')
+  return `${y}-${mo}-${da}`
+}
+
 export function dueLabel(t: { due_date?: string | null; due_date_raw?: string | null }) {
   if (t.due_date) {
     const today = new Date().toISOString().slice(0, 10)

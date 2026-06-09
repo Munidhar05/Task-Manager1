@@ -2,7 +2,7 @@ import { Router } from 'express'
 import multer from 'multer'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
-import { id, now, audit, notify } from '../util.js'
+import { id, now, audit, notify, dueDateForPriority } from '../util.js'
 import { analyzeMeetingTranscript, resolveUser, resolveUserAmong } from '../ai/extractor.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 import { indexMeeting, indexTask, removeMeetingEmbeddings } from '../ai/ragIndex.js'
@@ -10,6 +10,32 @@ import { indexMeeting, indexTask, removeMeetingEmbeddings } from '../ai/ragIndex
 const r = Router()
 r.use(authRequired)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } })
+
+// The app is scoped to these three languages. Any other detected code (the AI
+// sometimes over-guesses related Indian languages like mr/pa/gu/bn/ml) is dropped
+// so the meeting's language tags stay clean. Order is preserved; defaults to en.
+const ALLOWED_LANGUAGES = ['en', 'hi', 'te']
+function filterLanguages(langs) {
+  const out = [...new Set((langs || []).map((l) => String(l).toLowerCase()))].filter((l) => ALLOWED_LANGUAGES.includes(l))
+  return out.length ? out : ['en']
+}
+
+// Derive display segments from raw transcript text when the AI engine doesn't
+// emit its own (the OpenRouter engine skips per-line segments to save output
+// tokens on long meetings). Splits on line breaks, else into sentence groups,
+// so the Transcript tab stays readable. Capped to keep very long meetings sane.
+function deriveSegments(transcript) {
+  const text = String(transcript || '').trim()
+  if (!text) return []
+  let parts = text.split(/\r?\n+/).map((s) => s.trim()).filter(Boolean)
+  if (parts.length <= 1) {
+    // One big block — split into sentences, then group ~3 per segment.
+    const sentences = text.match(/[^.!?।]+[.!?।]+|\S[^.!?।]*$/g) || [text]
+    parts = []
+    for (let i = 0; i < sentences.length; i += 3) parts.push(sentences.slice(i, i + 3).join(' ').trim())
+  }
+  return parts.slice(0, 2000).map((t, seq) => ({ seq, speaker: null, text: t, language: null }))
+}
 
 // Attendees (with role + department) the AI may assign work to. When no
 // participants were selected, fall back to everyone in the org.
@@ -27,14 +53,17 @@ function attendeesFor(orgId, participantIds) {
 // the assignee. Marks the suggestion approved and links the created task.
 function createTaskFromSuggestion(s, { orgId, actorId, notifyAssignee = true }) {
   const tid = id('task')
+  const priority = s.priority || 'Medium'
+  // Auto-fill the due date from priority when the AI didn't capture a deadline.
+  const dueDate = s.due_date || dueDateForPriority(priority)
   db.prepare(`INSERT INTO tasks
     (id, org_id, title, description, assignee_id, assignee_name_raw, assigned_by_id, assigned_by_name_raw,
      due_date, due_date_raw, priority, status, meeting_id, ownership_confidence, progress, approval_status, source_quote,
      assigned_at, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     tid, orgId, s.title, s.description || s.title, s.suggested_assignee_id || null, s.suggested_assignee_raw || null,
-    actorId, null, s.due_date || null, s.due_date_raw || null,
-    s.priority || 'Medium', 'To Do', s.meeting_id, s.suggested_assignee_id ? 'high' : 'needs_confirmation', 0, 'none',
+    actorId, null, dueDate, s.due_date_raw || null,
+    priority, 'To Do', s.meeting_id, s.suggested_assignee_id ? 'high' : 'needs_confirmation', 0, 'none',
     s.source_quote || null, s.suggested_assignee_id ? now() : null, now(), now())
   db.prepare("UPDATE suggested_tasks SET status='approved', created_task_id=?, updated_at=? WHERE id=?").run(tid, now(), s.id)
   if (notifyAssignee && s.suggested_assignee_id) {
@@ -54,7 +83,7 @@ function persistMeeting({ orgId, userId, title, description, meetingDate, transc
     (id, org_id, title, description, meeting_date, uploaded_by, source_type, audio_filename, raw_transcript, detected_languages, status, summary_json, engine, created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     mid, orgId, title, description || '', meetingDate, userId, sourceType || 'transcript', audioFilename || null,
-    transcript, JSON.stringify(analysis.detected_languages || []), 'processed',
+    transcript, JSON.stringify(filterLanguages(analysis.detected_languages)), 'processed',
     JSON.stringify(analysis.summary || {}), analysis.engine || 'rule-based', now())
 
   // Attendees — only these users can be suggested as task owners.
@@ -67,7 +96,8 @@ function persistMeeting({ orgId, userId, title, description, meetingDate, transc
     db.prepare('INSERT OR IGNORE INTO meeting_participants (meeting_id, user_id) VALUES (?,?)').run(mid, uid)
   }
 
-  ;(analysis.segments || []).forEach((s) => {
+  const segments = (analysis.segments && analysis.segments.length) ? analysis.segments : deriveSegments(transcript)
+  segments.forEach((s) => {
     db.prepare('INSERT INTO transcript_segments (id, meeting_id, seq, speaker, text, language) VALUES (?,?,?,?,?,?)')
       .run(id('seg'), mid, s.seq, s.speaker || null, s.text, s.language || null)
   })
