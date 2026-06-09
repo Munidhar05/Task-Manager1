@@ -149,6 +149,34 @@ export async function backfillAll() {
   return indexItems(items)
 }
 
+// Self-healing cleanup: delete embeddings whose source row no longer qualifies for
+// indexing (row deleted, chat message unsent/soft-deleted, segment emptied). The
+// per-route removeEmbedding hooks are best-effort and can silently miss; this makes
+// the index converge to exactly what the collectors above would produce. The NOT IN
+// predicates MIRROR each collector's WHERE clause so we never prune a live vector.
+// Returns the number of orphan rows removed.
+export function pruneOrphans() {
+  const del = db.prepare(`
+    DELETE FROM embeddings WHERE
+         (source_type='task'    AND source_id NOT IN (SELECT id FROM tasks WHERE parent_task_id IS NULL))
+      OR (source_type='meeting' AND source_id NOT IN (SELECT id FROM meetings))
+      OR (source_type='segment' AND source_id NOT IN (SELECT id FROM transcript_segments WHERE length(text) > 0))
+      OR (source_type='chat'    AND source_id NOT IN (
+            SELECT id FROM chat_messages
+            WHERE deleted_for_all = 0 AND body IS NOT NULL AND length(trim(body)) > 0))
+  `)
+  try { return del.run().changes } catch (e) { console.warn('[rag] prune failed:', e.message); return 0 }
+}
+
+// One call that makes the index fully current: embed new/changed rows AND remove
+// orphans. This is what the server runs on boot and on a timer so RAG stays live
+// with no manual command. Cheap on repeat — ~0 API calls when nothing changed.
+export async function syncAll() {
+  const { embedded, skipped } = await backfillAll()
+  const pruned = pruneOrphans()
+  return { embedded, skipped, pruned }
+}
+
 // Incremental hooks (call after the row is created/updated). Best-effort.
 async function safeIndex(items) {
   try { if (hasEmbeddings()) await indexItems(items) } catch (e) { console.warn('[rag] index failed:', e.message) }

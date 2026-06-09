@@ -17,7 +17,7 @@ import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
 import { hasEmbeddings, embedModel } from './ai/embeddings.js'
-import { backfillAll } from './ai/ragIndex.js'
+import { syncAll } from './ai/ragIndex.js'
 
 initSchema()
 ensureSeed()
@@ -82,11 +82,29 @@ const server = app.listen(PORT, () => {
 // server was down. Runs in the background (never blocks startup) and is cheap on
 // repeat — unchanged items are skipped, so it makes ~0 API calls when nothing's new.
 if (hasEmbeddings()) {
-  backfillAll()
-    .then(({ embedded, skipped }) => {
-      if (embedded) console.log(`  [rag] startup catch-up: embedded ${embedded} new item(s), ${skipped} already indexed`)
+  syncAll()
+    .then(({ embedded, skipped, pruned }) => {
+      if (embedded || pruned) console.log(`  [rag] startup sync: embedded ${embedded} new, pruned ${pruned} orphan(s), ${skipped} already indexed`)
     })
-    .catch((e) => console.warn('  [rag] startup catch-up skipped:', e.message))
+    .catch((e) => console.warn('  [rag] startup sync skipped:', e.message))
+
+  // Live RAG: periodic sync so the index stays current with NO manual command and
+  // NO server restart. The per-route incremental hooks (indexTask/Meeting/Chat and
+  // removeEmbedding) are best-effort and silently no-op if OpenAI is slow / rate-
+  // limits mid-meeting or a delete races; this timer re-runs the same hash-based
+  // sync to embed anything they missed AND prune orphaned vectors. Idempotent and
+  // cheap on repeat — unchanged items are skipped, so it makes ~0 API calls when
+  // nothing's new. Override the cadence with RAG_SYNC_MINUTES (default 5).
+  const syncMinutes = Number(process.env.RAG_SYNC_MINUTES) || 5
+  const timer = setInterval(() => {
+    syncAll()
+      .then(({ embedded, pruned }) => {
+        if (embedded || pruned) console.log(`  [rag] periodic sync: embedded ${embedded} new, pruned ${pruned} orphan(s)`)
+      })
+      .catch((e) => console.warn('  [rag] periodic sync skipped:', e.message))
+  }, syncMinutes * 60 * 1000)
+  timer.unref?.() // don't keep the process alive solely for this timer
+  console.log(`  [rag] live sync on: embed + prune every ${syncMinutes} min`)
 }
 
 // Live meeting transcription stream (browser <-> Sarvam) shares the HTTP server.

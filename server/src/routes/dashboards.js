@@ -27,20 +27,35 @@ r.get('/employee', (req, res) => {
   })
 })
 
-// MANAGER dashboard: team view
+// MANAGER dashboard: team view.
+// Optional ?from=&to= (YYYY-MM-DD) scopes every figure to tasks CREATED in that
+// window, so the manager's Today / Week / Month / Custom buttons re-filter the
+// live dashboard. With no range the whole org is shown.
 r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
   const org = req.user.org_id
-  const tasks = db.prepare(`SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
+  let { from, to } = req.query
+  const valid = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+  const scoped = valid(from) && valid(to)
+  if (scoped && from > to) [from, to] = [to, from]
+  const inRange = (iso) => { if (!scoped) return true; if (!iso) return false; const day = String(iso).slice(0, 10); return day >= from && day <= to }
+  const OPEN_STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Reopened']
+
+  const allTasks = db.prepare(`SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
     WHERE t.org_id=? AND t.parent_task_id IS NULL AND t.visible_to_manager=1`).all(org)
+  const tasks = allTasks.filter((t) => inRange(t.created_at))
   const overdue = tasks.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done')
-  const workload = db.prepare(`
-    SELECT u.id, u.name, u.avatar_color,
-      SUM(CASE WHEN t.status IN ${OPEN} THEN 1 ELSE 0 END) AS open_count,
-      SUM(CASE WHEN t.status='Done' THEN 1 ELSE 0 END) AS done_count,
-      SUM(CASE WHEN t.due_date < ? AND t.status!='Done' AND t.due_date IS NOT NULL THEN 1 ELSE 0 END) AS overdue_count
-    FROM users u LEFT JOIN tasks t ON t.assignee_id=u.id AND t.parent_task_id IS NULL AND t.visible_to_manager=1
-    WHERE u.org_id=? AND u.role='employee' GROUP BY u.id ORDER BY open_count DESC
-  `).all(today(), org)
+
+  // Workload is derived from the scoped set in JS so it honours the date range.
+  const members = db.prepare("SELECT id, name, avatar_color FROM users WHERE org_id=? AND role='employee'").all(org)
+  const workload = members.map((u) => {
+    const mine = tasks.filter((t) => t.assignee_id === u.id)
+    return {
+      id: u.id, name: u.name, avatar_color: u.avatar_color,
+      open_count: mine.filter((t) => OPEN_STATUSES.includes(t.status)).length,
+      done_count: mine.filter((t) => t.status === 'Done').length,
+      overdue_count: mine.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done').length,
+    }
+  }).sort((a, b) => b.open_count - a.open_count)
   const projects = db.prepare(`
     SELECT p.id, p.name,
       COUNT(t.id) AS total,
@@ -59,9 +74,53 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
       meetings,
     },
     by_priority: ['Critical', 'High', 'Medium', 'Low'].map((p) => ({ priority: p, count: tasks.filter((t) => t.priority === p && t.status !== 'Done').length })),
+    by_status: ['To Do', 'In Progress', 'In Review', 'Blocked', 'Reopened', 'Done'].map((s) => ({ status: s, count: tasks.filter((t) => t.status === s).length })),
     workload,
     projects: projects.map((p) => ({ ...p, progress: p.total ? Math.round((p.done / p.total) * 100) : 0 })),
     overdue: overdue.slice(0, 8),
+  })
+})
+
+// MANAGER report: activity scoped to a date range [from, to] (inclusive, YYYY-MM-DD).
+// Powers the Daily / Weekly / Monthly / custom-range downloadable reports.
+r.get('/report', requireRole('manager', 'admin'), (req, res) => {
+  const org = req.user.org_id
+  let { from, to } = req.query
+  const valid = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+  if (!valid(from) || !valid(to)) return res.status(400).json({ error: 'from and to dates (YYYY-MM-DD) are required' })
+  if (from > to) [from, to] = [to, from]
+  const inRange = (iso) => { if (!iso) return false; const day = String(iso).slice(0, 10); return day >= from && day <= to }
+
+  const tasks = db.prepare(`SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
+    WHERE t.org_id=? AND t.parent_task_id IS NULL AND t.visible_to_manager=1`).all(org)
+  const created = tasks.filter((t) => inRange(t.created_at))
+  const completed = tasks.filter((t) => t.status === 'Done' && inRange(t.completed_at))
+  const dueInRange = tasks.filter((t) => t.due_date && t.due_date >= from && t.due_date <= to)
+  const overdue = tasks.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done')
+
+  const users = db.prepare("SELECT id, name, avatar_color FROM users WHERE org_id=? AND role='employee'").all(org)
+  const workload = users.map((u) => ({
+    id: u.id, name: u.name, avatar_color: u.avatar_color,
+    created_count: created.filter((t) => t.assignee_id === u.id).length,
+    completed_count: completed.filter((t) => t.assignee_id === u.id).length,
+    overdue_count: overdue.filter((t) => t.assignee_id === u.id).length,
+  })).filter((w) => w.created_count || w.completed_count || w.overdue_count)
+    .sort((a, b) => b.completed_count - a.completed_count)
+
+  res.json({
+    range: { from, to },
+    counts: {
+      created: created.length,
+      completed: completed.length,
+      due: dueInRange.length,
+      open: created.filter((t) => t.status !== 'Done').length,
+      overdue: overdue.length,
+    },
+    by_priority: ['Critical', 'High', 'Medium', 'Low'].map((p) => ({ priority: p, count: created.filter((t) => t.priority === p).length })),
+    by_status: ['To Do', 'In Progress', 'In Review', 'Blocked', 'Reopened', 'Done'].map((s) => ({ status: s, count: created.filter((t) => t.status === s).length })),
+    workload,
+    completed_tasks: completed.slice(0, 60).map((t) => ({ id: t.id, title: t.title, assignee_name: t.assignee_name, completed_at: t.completed_at })),
+    overdue_tasks: overdue.slice(0, 60).map((t) => ({ id: t.id, title: t.title, assignee_name: t.assignee_name, due_date: t.due_date })),
   })
 })
 
