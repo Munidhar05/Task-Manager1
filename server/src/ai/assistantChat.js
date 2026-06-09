@@ -2,7 +2,15 @@
 // Uses Claude (ANTHROPIC_API_KEY) first, then OpenAI (OPENAI_API_KEY).
 // When no key is configured (or the call fails) the caller falls back to the
 // rule-based answerQuery in ./assistant.js so the chat always works offline.
+//
+// RAG: when an embedding index exists, we additionally retrieve the most
+// question-relevant chunks across meetings, transcripts, chat, AND tasks beyond
+// the snapshot cap, and append them as a "RELEVANT CONTEXT" block. This is what
+// lets TaskBot answer from meeting/chat content the plain snapshot never carries,
+// and scale past the MAX_TASKS_IN_CONTEXT cap. Retrieval is RBAC-filtered, so it
+// can only surface what the user could already see.
 import { db } from '../db.js'
+import { retrieve } from './ragRetrieve.js'
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
@@ -92,23 +100,37 @@ function buildContext(user) {
   return { context, tasks }
 }
 
+// Render RAG hits into a labelled block the model can quote from. Task hits keep
+// their id so the model can cite them in task_ids for clickable cards.
+const RAG_LABELS = { task: 'task', meeting: 'meeting', segment: 'meeting transcript', chat: 'chat message' }
+function ragBlock(hits) {
+  if (!hits.length) return ''
+  const lines = hits.map((h) => {
+    const tag = h.source_type === 'task' ? `task id=${h.source_id}` : (RAG_LABELS[h.source_type] || h.source_type)
+    return `- [${tag}] ${h.text}`
+  })
+  return `\n\nRELEVANT CONTEXT (semantic search over meetings, transcripts, chat, and tasks — use this to answer the question):\n${lines.join('\n')}`
+}
+
 function systemPrompt(user) {
   const scopeNote = user.role === 'employee'
     ? 'This user is an employee — the snapshot contains ONLY their own tasks. Never imply you can see other people\'s tasks.'
     : `This user is a ${user.role} — the snapshot covers the whole organization, including team workload.`
   return `You are "TaskBot", the built-in AI assistant inside SmartTask, a team task-management platform. You help managers and team members quickly understand and act on their tasks, deadlines, workload, meetings, and team status.
 
-STRICT SCOPE — you ONLY discuss this Task Manager and the data snapshot provided in the user message:
+STRICT SCOPE — you ONLY discuss this Task Manager and the data provided in the user message (both the DATA SNAPSHOT and the RELEVANT CONTEXT block, when present):
 - tasks (status, priority, owner, due dates, overdue items, progress, projects, departments)
 - people's workload and assignments inside this organization
-- meetings and the action items / status they produced
+- meetings, their transcripts, and the action items / decisions / status they produced
+- internal team chat messages surfaced in the relevant context
 - summaries, status reports, prioritization, and productivity insights derived from this data
 
 If the user asks ANYTHING outside this scope (general knowledge, coding help, world facts, math puzzles, personal advice, weather, news, writing unrelated content, etc.), do NOT answer it even if you know the answer. Politely decline in one short sentence and steer them back to their tasks. Example: "I can only help with your tasks, deadlines, and team workload here — try asking about overdue work or your team's status."
 
 GROUNDING RULES:
-- Answer ONLY from the DATA SNAPSHOT. Never invent tasks, people, dates, numbers, or statuses.
-- If the snapshot doesn't contain the answer, say so plainly (e.g. "I don't see any task matching that.").
+- Answer ONLY from the DATA SNAPSHOT and the RELEVANT CONTEXT block. Never invent tasks, people, dates, numbers, or statuses.
+- The RELEVANT CONTEXT block (when present) holds the most semantically relevant meeting, transcript, chat, and task excerpts for this question — prefer it for questions about what was said or decided.
+- If neither section contains the answer, say so plainly (e.g. "I don't see anything matching that.").
 - ${scopeNote}
 - Today's date is ${today()}. The user is ${user.name}.
 - Be concise and conversational — short sentences or compact bullet points suited to a chat bubble. No markdown headers or tables.
@@ -192,10 +214,21 @@ export async function chatAnswer(query, user, history = []) {
   if (!hasClaude && !hasOpenAI) throw new Error('No LLM configured')
 
   const { context, tasks } = buildContext(user)
+
+  // RAG augmentation — append the most relevant meeting/chat/task excerpts.
+  // No-ops cleanly (empty block) when nothing is indexed or no embedding key set.
+  let ragText = ''
+  try {
+    const { hits } = await retrieve(query, user)
+    ragText = ragBlock(hits)
+  } catch (err) {
+    console.warn('[assistant] RAG retrieve failed, continuing without it:', err.message)
+  }
+
   const system = systemPrompt(user)
   const messages = [
     ...normalizeHistory(history),
-    { role: 'user', content: `DATA SNAPSHOT:\n${context}\n\nQUESTION: ${query}` },
+    { role: 'user', content: `DATA SNAPSHOT:\n${context}${ragText}\n\nQUESTION: ${query}` },
   ]
 
   // Provider chain mirrors the meeting extractor: Claude first, then OpenAI.

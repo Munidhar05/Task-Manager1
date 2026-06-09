@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
 import { authRequired, verifyToken } from '../auth.js'
 import { id, now, notify } from '../util.js'
-import { pushToUser } from '../ws/chatHub.js'
+import { pushToUser, getOnlineUsers } from '../ws/chatHub.js'
+import { indexChatMessage, removeEmbedding } from '../ai/ragIndex.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
 // real-time delivery, replies, reactions, stars, edit, single-delete, read receipts.
@@ -74,6 +75,7 @@ function shapeMessage(row, viewerId, ctx = {}) {
     ...base,
     body: row.body,
     edited_at: row.edited_at || null,
+    forwarded: !!row.forwarded,
     reply_to: row.reply_to || null,
     reply: replyPreview,
     file: row.file_stored ? { name: row.file_name, type: row.file_type, size: row.file_size } : null,
@@ -103,9 +105,9 @@ function findOrCreateDirect(orgId, a, b) {
 // Build the client-facing summary of one conversation for the list view.
 function summarizeConvo(conv, viewerId) {
   const parts = db.prepare(`
-    SELECT u.id, u.name, u.avatar_color, u.role, p.role AS member_role
+    SELECT u.id, u.name, u.avatar_color, u.avatar_file, u.role, u.last_seen, p.role AS member_role
     FROM chat_participants p JOIN users u ON u.id=p.user_id WHERE p.conversation_id=?`).all(conv.id)
-  const me = db.prepare('SELECT last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, viewerId)
+  const me = db.prepare('SELECT last_read_at, muted, pinned FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, viewerId)
   const last = db.prepare(`
     SELECT * FROM chat_messages WHERE conversation_id=?
       AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
@@ -124,10 +126,14 @@ function summarizeConvo(conv, viewerId) {
     type: conv.type,
     name: isGroup ? (conv.name || 'Group') : (others[0]?.name || 'Unknown'),
     avatar_color: isGroup ? conv.avatar_color : (others[0]?.avatar_color || '#6366f1'),
+    avatar_file: isGroup ? (conv.avatar_file || null) : (others[0]?.avatar_file || null),
     other_user_id: isGroup ? null : (others[0]?.id || null),
+    other_last_seen: isGroup ? null : (others[0]?.last_seen || null),
     member_count: parts.length,
-    members: parts.map((p) => ({ id: p.id, name: p.name, avatar_color: p.avatar_color, role: p.member_role })),
+    members: parts.map((p) => ({ id: p.id, name: p.name, avatar_color: p.avatar_color, avatar_file: p.avatar_file || null, role: p.member_role })),
     role: me ? (parts.find((p) => p.id === viewerId)?.member_role) : 'member',
+    muted: !!me?.muted,
+    pinned: !!me?.pinned,
     last_message: last ? snippet(last) : null,
     last_sender_name: lastSender ? lastSender.name : null,
     last_from_me: last ? last.sender_id === viewerId : false,
@@ -153,13 +159,31 @@ r.get('/file/:messageId', (req, res) => {
   fs.createReadStream(abs).pipe(res)
 })
 
+// Group photo (token via header or ?token= for <img>).
+r.get('/conversations/:id/avatar', (req, res) => {
+  const user = (req.headers.authorization || '').startsWith('Bearer ')
+    ? verifyToken(req.headers.authorization.slice(7)) : verifyToken(req.query.token)
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
+  const conv = db.prepare('SELECT avatar_file FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (!conv?.avatar_file) return res.status(404).json({ error: 'No avatar' })
+  if (!member(req.params.id, user.id)) return res.status(403).json({ error: 'Forbidden' })
+  const abs = path.join(UPLOAD_DIR, conv.avatar_file)
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'Missing' })
+  const ext = path.extname(conv.avatar_file); if (ext) res.type(ext)
+  res.setHeader('Cache-Control', 'private, max-age=300')
+  fs.createReadStream(abs).pipe(res)
+})
+
 r.use(authRequired)
 
 // ---------- users available to chat / add to groups ----------
 r.get('/users', (req, res) => {
-  const rows = db.prepare('SELECT id, name, email, role, avatar_color FROM users WHERE org_id=? AND id!=? ORDER BY name').all(req.user.org_id, req.user.id)
+  const rows = db.prepare('SELECT id, name, email, role, avatar_color, avatar_file FROM users WHERE org_id=? AND id!=? ORDER BY name').all(req.user.org_id, req.user.id)
   res.json({ users: rows })
 })
+
+// Who is currently online (has a live WebSocket connection).
+r.get('/presence', (req, res) => res.json({ online: getOnlineUsers() }))
 
 // ---------- conversations ----------
 r.get('/conversations', (req, res) => {
@@ -169,7 +193,7 @@ r.get('/conversations', (req, res) => {
     JOIN chat_participants p ON p.conversation_id=c.id
     WHERE p.user_id=? AND c.org_id=?`).all(me.id, me.org_id)
   const list = convs.map((c) => summarizeConvo(c, me.id))
-  list.sort((a, b) => (b.last_at || '').localeCompare(a.last_at || ''))
+  list.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.last_at || '').localeCompare(a.last_at || ''))
   res.json({ conversations: list })
 })
 
@@ -222,6 +246,7 @@ r.get('/conversations/:id', (req, res) => {
   const me = req.user
   if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Conversation not found' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  const prevRead = db.prepare('SELECT last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, me.id)?.last_read_at || null
   const rows = db.prepare(`
     SELECT * FROM chat_messages WHERE conversation_id=?
       AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
@@ -239,7 +264,48 @@ r.get('/conversations/:id', (req, res) => {
   // mark read
   db.prepare('UPDATE chat_participants SET last_read_at=? WHERE conversation_id=? AND user_id=?').run(now(), conv.id, me.id)
   pushToConversation(conv.id, { type: 'read', conversationId: conv.id, userId: me.id, last_read_at: now() }, me.id)
-  res.json({ conversation: summarizeConvo(conv, me.id), messages })
+  res.json({ conversation: summarizeConvo(conv, me.id), messages, last_read_at: prevRead })
+})
+
+// Mute / pin a conversation (per-user preferences).
+r.post('/conversations/:id/prefs', (req, res) => {
+  if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Not found' })
+  const sets = [], args = []
+  if ('muted' in (req.body || {})) { sets.push('muted=?'); args.push(req.body.muted ? 1 : 0) }
+  if ('pinned' in (req.body || {})) { sets.push('pinned=?'); args.push(req.body.pinned ? 1 : 0) }
+  if (!sets.length) return res.json({ ok: true })
+  args.push(req.params.id, req.user.id)
+  db.prepare(`UPDATE chat_participants SET ${sets.join(', ')} WHERE conversation_id=? AND user_id=?`).run(...args)
+  res.json({ ok: true })
+})
+
+// Clear chat: hide every current message in this conversation for me only
+// (the other participants keep their copies). New messages still arrive.
+r.post('/conversations/:id/clear', (req, res) => {
+  const me = req.user
+  if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Not found' })
+  const ids = db.prepare('SELECT id FROM chat_messages WHERE conversation_id=?').all(req.params.id)
+  const ins = db.prepare('INSERT OR IGNORE INTO chat_message_hidden (message_id, user_id) VALUES (?,?)')
+  db.transaction(() => { for (const m of ids) ins.run(m.id, me.id) })()
+  db.prepare('UPDATE chat_participants SET last_read_at=? WHERE conversation_id=? AND user_id=?').run(now(), req.params.id, me.id)
+  pushToUser(me.id, { type: 'cleared', conversationId: req.params.id }) // sync my other tabs
+  res.json({ ok: true, cleared: ids.length })
+})
+
+// Set a group photo (admin only, images only).
+r.post('/conversations/:id/avatar', upload.single('file'), (req, res) => {
+  const cleanup = () => { if (req.file) try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)) } catch {} }
+  const m = member(req.params.id, req.user.id)
+  if (!m) { cleanup(); return res.status(404).json({ error: 'Not found' }) }
+  if (m.role !== 'admin') { cleanup(); return res.status(403).json({ error: 'Only the group admin can change the photo' }) }
+  if (!req.file || !(req.file.mimetype || '').startsWith('image/')) { cleanup(); return res.status(400).json({ error: 'An image file is required' }) }
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (conv.type !== 'group') { cleanup(); return res.status(400).json({ error: 'Only groups have a photo' }) }
+  const old = conv.avatar_file
+  db.prepare('UPDATE chat_conversations SET avatar_file=? WHERE id=?').run(req.file.filename, conv.id)
+  if (old) try { fs.unlinkSync(path.join(UPLOAD_DIR, old)) } catch {}
+  pushToConversation(conv.id, { type: 'conversation', action: 'updated', conversationId: conv.id })
+  res.json({ ok: true })
 })
 
 // Mark a conversation read (lightweight; used on live inbound while open).
@@ -275,6 +341,36 @@ r.post('/conversations/:id/members', (req, res) => {
   res.json({ ok: true })
 })
 
+// Delete an entire group (admin only). Removes it for every member in real time.
+r.delete('/conversations/:id', (req, res) => {
+  const me = req.user
+  const m = member(req.params.id, me.id)
+  if (!m) return res.status(404).json({ error: 'Not found' })
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (!conv || conv.type !== 'group') return res.status(400).json({ error: 'Only groups can be deleted' })
+  if (m.role !== 'admin') return res.status(403).json({ error: 'Only the group admin can delete the group' })
+  const members = participantsOf(conv.id)
+  // Remove any stored files from disk.
+  for (const f of db.prepare('SELECT file_stored FROM chat_messages WHERE conversation_id=? AND file_stored IS NOT NULL').all(conv.id)) {
+    if (f.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, f.file_stored)) } catch {}
+  }
+  const wipe = db.transaction(() => {
+    const ids = db.prepare('SELECT id FROM chat_messages WHERE conversation_id=?').all(conv.id)
+    for (const mm of ids) {
+      db.prepare('DELETE FROM chat_reactions WHERE message_id=?').run(mm.id)
+      db.prepare('DELETE FROM chat_stars WHERE message_id=?').run(mm.id)
+      db.prepare('DELETE FROM chat_message_hidden WHERE message_id=?').run(mm.id)
+      removeEmbedding('chat', mm.id) // drop RAG vector for each wiped message
+    }
+    db.prepare('DELETE FROM chat_messages WHERE conversation_id=?').run(conv.id)
+    db.prepare('DELETE FROM chat_participants WHERE conversation_id=?').run(conv.id)
+    db.prepare('DELETE FROM chat_conversations WHERE id=?').run(conv.id)
+  })
+  wipe()
+  for (const uid of members) pushToUser(uid, { type: 'conversation', action: 'removed', conversationId: conv.id })
+  res.json({ ok: true })
+})
+
 // Leave a group (self) or remove a member (admin).
 r.delete('/conversations/:id/members/:userId', (req, res) => {
   const m = member(req.params.id, req.user.id)
@@ -293,11 +389,16 @@ function deliver(conv, msgRow, sender) {
   const others = participantsOf(conv.id).filter((u) => u !== sender.id)
   const label = conv.type === 'group' ? `${sender.name} in ${conv.name || 'Group'}` : sender.name
   const preview = msgRow.file_name ? `📎 ${msgRow.file_name}` : (msgRow.body || '')
-  for (const uid of others) notify(conv.org_id, uid, 'chat_message', `${label}: ${preview.length > 70 ? preview.slice(0, 70) + '…' : preview}`, null)
+  for (const uid of others) {
+    const p = db.prepare('SELECT muted FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, uid)
+    if (p?.muted) continue // muted: deliver the message live, but no notification
+    notify(conv.org_id, uid, 'chat_message', `${label}: ${preview.length > 70 ? preview.slice(0, 70) + '…' : preview}`, null)
+  }
   // push the shaped message to everyone (each viewer computes their own ctx as null → fine for live append)
   for (const uid of [sender.id, ...others]) {
     pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, {}) })
   }
+  indexChatMessage(msgRow.id) // RAG: index every delivered message (text/upload/forward)
 }
 
 // Send a text message.
@@ -348,7 +449,37 @@ r.patch('/message/:id', (req, res) => {
   const ts = now()
   db.prepare('UPDATE chat_messages SET body=?, edited_at=? WHERE id=?').run(body, ts, m.id)
   pushToConversation(m.conversation_id, { type: 'edit', conversationId: m.conversation_id, id: m.id, body, edited_at: ts })
+  indexChatMessage(m.id) // re-index edited body
   res.json({ ok: true, body, edited_at: ts })
+})
+
+// Forward a message to one or more conversations I'm a member of.
+r.post('/message/:id/forward', (req, res) => {
+  const me = req.user
+  const src = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
+  if (!src || src.deleted_for_all || !member(src.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
+  const targets = Array.isArray(req.body?.conversationIds) ? req.body.conversationIds : []
+  const sent = []
+  for (const cid of targets) {
+    if (!member(cid, me.id)) continue
+    const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(cid)
+    if (!conv) continue
+    let storedName = null
+    if (src.file_stored) {
+      // copy the file so deleting one message doesn't affect the other
+      storedName = id('cf') + path.extname(src.file_stored)
+      try { fs.copyFileSync(path.join(UPLOAD_DIR, src.file_stored), path.join(UPLOAD_DIR, storedName)) } catch { storedName = null }
+    }
+    const mid = id('msg')
+    const ts = now()
+    db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, forwarded, read, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,1,0,?)`)
+      .run(mid, conv.org_id, cid, me.id, '', src.body, storedName ? src.file_name : null, storedName, storedName ? src.file_type : null, storedName ? src.file_size : null, ts)
+    const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
+    deliver(conv, row, me)
+    sent.push(cid)
+  }
+  res.json({ ok: true, forwarded_to: sent })
 })
 
 // Single Delete: your own message → unsend for everyone (tombstone + file removed);
@@ -360,6 +491,7 @@ r.delete('/message/:id', (req, res) => {
   if (m.sender_id === me.id) {
     db.prepare('UPDATE chat_messages SET deleted_for_all=1, body=?, file_name=NULL, file_stored=NULL, file_type=NULL, file_size=NULL WHERE id=?').run('', m.id)
     db.prepare('DELETE FROM chat_reactions WHERE message_id=?').run(m.id)
+    removeEmbedding('chat', m.id) // unsent message leaves the RAG index
     if (m.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, m.file_stored)) } catch {}
     pushToConversation(m.conversation_id, { type: 'delete', conversationId: m.conversation_id, id: m.id, scope: 'all' })
   } else {

@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './auth'
-import { api } from './api'
+import { api, userAvatarUrl, getToken } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
 import Login from './pages/Login'
@@ -34,7 +34,21 @@ const TITLES: Record<string, { t: string; s: string }> = {
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth()
+  const { user, logout, refresh } = useAuth()
+  const avatarInput = useRef<HTMLInputElement>(null)
+  const uploadAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; e.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) { alert('Please choose an image'); return }
+    if (file.size > 5 * 1024 * 1024) { alert('Image too large (max 5 MB)'); return }
+    try {
+      const form = new FormData(); form.append('file', file)
+      const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
+      const res = await fetch('/api/users/me/avatar', { method: 'POST', headers, body: form })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
+      await refresh()
+    } catch (err: any) { alert('Could not set photo: ' + err.message) }
+  }
   const loc = useLocation()
   const [open, setOpen] = useState(false)
   const [engine, setEngine] = useState('')
@@ -71,7 +85,11 @@ function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="sidebar-user">
-          <Avatar name={user.name} color={user.avatar_color} size={36} />
+          <input ref={avatarInput} type="file" accept="image/*" style={{ display: 'none' }} onChange={uploadAvatar} />
+          <button className="avatar-edit-btn" title="Change profile photo" onClick={() => avatarInput.current?.click()}>
+            <Avatar name={user.name} color={user.avatar_color} size={36} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
+            <span className="avatar-edit-icon">✎</span>
+          </button>
           <div className="meta">
             <div className="n">{user.name}</div>
             <div className="r">{user.role}</div>

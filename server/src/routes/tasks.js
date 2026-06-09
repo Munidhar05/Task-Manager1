@@ -3,6 +3,7 @@ import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../util.js'
 import { resolveUser } from '../ai/extractor.js'
+import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
 
 const r = Router()
 r.use(authRequired)
@@ -80,6 +81,7 @@ r.post('/', (req, res) => {
     confidence, b.parent_task_id || null,
     0, 'none', b.source_quote || null, assignee ? now() : null, visible, now(), now())
   audit(req.user.org_id, req.user.id, 'task.create', 'task', tid, b.title)
+  indexTask(tid) // fire-and-forget RAG indexing
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(tid)))
 })
 
@@ -118,6 +120,7 @@ r.patch('/:id', (req, res) => {
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id=?`).run(...args)
   audit(req.user.org_id, req.user.id, 'task.update', 'task', t.id, b)
   if (newlyAssigned) notify(t.org_id, newlyAssigned, 'task_assigned', `${req.user.name} assigned you "${t.title}"`, t.id)
+  indexTask(t.id) // re-index on edit (title/desc/assignee/status may have changed)
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
 
@@ -142,6 +145,7 @@ r.post('/:id/status', (req, res) => {
   if (status === 'In Review') {
     notifyManagers(t.org_id, 'task_submitted', `${req.user.name} submitted "${t.title}" for approval`, t.id, req.user.id)
   }
+  indexTask(t.id) // status change updates the embedded metadata
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
 
@@ -207,6 +211,7 @@ r.delete('/:id', (req, res) => {
   }
   db.prepare('DELETE FROM tasks WHERE id=?').run(t.id)
   audit(req.user.org_id, req.user.id, 'task.delete', 'task', t.id)
+  removeEmbedding('task', t.id)
   res.json({ ok: true })
 })
 

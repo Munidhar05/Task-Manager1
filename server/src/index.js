@@ -16,6 +16,8 @@ import chatRoutes from './routes/chat.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
+import { hasEmbeddings, embedModel } from './ai/embeddings.js'
+import { backfillAll } from './ai/ragIndex.js'
 
 initSchema()
 ensureSeed()
@@ -33,12 +35,18 @@ app.use('/api', (req, res, next) => {
 })
 
 app.get('/api/health', (req, res) => {
+  const ragOn = hasEmbeddings()
   res.json({
     ok: true,
     ai_engine: process.env.OPENROUTER_API_KEY
       ? `openrouter (${process.env.OPENROUTER_MODEL || 'google/gemini-2.5-pro'})`
       : (process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'rule-based (offline)')),
     transcription: process.env.TRANSCRIPTION_PROVIDER || 'none',
+    rag: {
+      enabled: ragOn,
+      model: ragOn ? embedModel() : null,
+      indexed: db.prepare('SELECT COUNT(*) c FROM embeddings').get().c,
+    },
   })
 })
 
@@ -63,10 +71,23 @@ const server = app.listen(PORT, () => {
   console.log(`  AI engine: ${process.env.OPENROUTER_API_KEY
     ? `OpenRouter (${process.env.OPENROUTER_MODEL || 'google/gemini-2.5-pro'})`
     : (process.env.ANTHROPIC_API_KEY ? 'Claude (online)' : 'rule-based (offline fallback)')}`)
+  const ragCount = db.prepare('SELECT COUNT(*) c FROM embeddings').get().c
+  console.log(`  RAG: ${hasEmbeddings() ? `ON (${embedModel()}, ${ragCount} items indexed)` : 'OFF (no embedding key set)'}`)
   console.log(`  Users in DB: ${db.prepare('SELECT COUNT(*) c FROM users').get().c}`)
   startScheduler()
   console.log('')
 })
+
+// RAG catch-up: on boot, index anything created while embeddings were off or the
+// server was down. Runs in the background (never blocks startup) and is cheap on
+// repeat — unchanged items are skipped, so it makes ~0 API calls when nothing's new.
+if (hasEmbeddings()) {
+  backfillAll()
+    .then(({ embedded, skipped }) => {
+      if (embedded) console.log(`  [rag] startup catch-up: embedded ${embedded} new item(s), ${skipped} already indexed`)
+    })
+    .catch((e) => console.warn('  [rag] startup catch-up skipped:', e.message))
+}
 
 // Live meeting transcription stream (browser <-> Sarvam) shares the HTTP server.
 attachLiveTranscribe(server)
