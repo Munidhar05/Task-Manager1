@@ -8,9 +8,25 @@ import { presetRange, todayYmd, ReportRange, downloadManagerReport } from '../re
 export default function Dashboard() {
   const { user } = useAuth()
   if (!user) return null
-  if (user.role === 'employee') return <EmployeeDash />
-  if (user.role === 'manager') return <ManagerDash />
-  return <ManagerDash admin />
+  return (
+    <>
+      <Greeting name={user.name} />
+      {user.role === 'employee' ? <EmployeeDash /> : <ManagerDash admin={user.role !== 'manager'} />}
+    </>
+  )
+}
+
+// Friendly time-of-day greeting shown at the top-left of the dashboard.
+function Greeting({ name }: { name: string }) {
+  const h = new Date().getHours()
+  const part = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
+  const first = (name || '').trim().split(' ')[0] || name
+  return (
+    <div className="section" style={{ marginBottom: 18 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{part}, {first} 👋</h2>
+      <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>Here's your overview for today.</div>
+    </div>
+  )
 }
 
 function useDrawer() {
