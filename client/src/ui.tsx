@@ -78,6 +78,37 @@ export function Bar({ value, max, color }: { value: number; max: number; color: 
   )
 }
 
+// Power BI–style donut: SVG ring split into colored segments with the total in the center.
+export function Donut({ data, size = 150, thickness = 24 }:
+  { data: { label: string; value: number; color: string }[]; size?: number; thickness?: number }) {
+  const total = data.reduce((s, d) => s + d.value, 0)
+  const r = (size - thickness) / 2
+  const circ = 2 * Math.PI * r
+  const cx = size / 2
+  let offset = 0
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <g transform={`rotate(-90 ${cx} ${cx})`}>
+        <circle cx={cx} cy={cx} r={r} fill="none" stroke="#eef2f7" strokeWidth={thickness} />
+        {total > 0 && data.map((d, i) => {
+          const len = (d.value / total) * circ
+          const seg = (
+            <circle key={i} cx={cx} cy={cx} r={r} fill="none" stroke={d.color} strokeWidth={thickness}
+              strokeDasharray={`${len} ${circ - len}`} strokeDashoffset={-offset}
+              style={{ transition: 'stroke-dasharray .5s' }} />
+          )
+          offset += len
+          return seg
+        })}
+      </g>
+      <text x={cx} y={cx} textAnchor="middle" dominantBaseline="central"
+        fontSize={size * 0.26} fontWeight={800} fill="#1f1a16">{total}</text>
+      <text x={cx} y={cx + size * 0.18} textAnchor="middle" dominantBaseline="central"
+        fontSize={size * 0.09} fill="#7a6f63" letterSpacing=".05em">OPEN</text>
+    </svg>
+  )
+}
+
 // Friendly absolute timestamp, e.g. "4 Jun 2026, 3:42 PM". Returns '—' when missing.
 export function fmtDateTime(iso?: string | null) {
   if (!iso) return '—'

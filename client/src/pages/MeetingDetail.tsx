@@ -139,100 +139,162 @@ export default function MeetingDetail() {
         </div>
       )}
       {openId && <TaskDrawer taskId={openId} onClose={() => setOpenId(null)} onChange={load} />}
-      {review && <ReviewAssignModal meeting={m} pending={pending} onClose={() => setReview(false)} onDone={() => { setReview(false); load() }} />}
+      {review && <ReviewAssignModal meeting={m} pending={pending} onChanged={load} onClose={() => { setReview(false); load() }} />}
     </>
   )
 }
 
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
 
-// Manager Review screen: edit / reject / merge AI suggestions, then assign them.
-function ReviewAssignModal({ meeting, pending, onClose, onDone }: { meeting: any; pending: Suggestion[]; onClose: () => void; onDone: () => void }) {
-  type Row = Suggestion & { _decision: 'approve' | 'reject' | 'merge'; _mergeInto: string }
+// Manager Review screen: edit each AI suggestion (priority, assignee, due, title)
+// and approve them ONE BY ONE — every approval assigns that task & notifies the
+// owner immediately, with no need to wait and assign the whole batch at the end.
+type RowStatus = 'pending' | 'busy' | 'assigned' | 'rejected' | 'merged'
+function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: any; pending: Suggestion[]; onClose: () => void; onChanged: () => void }) {
+  type Row = Suggestion & { _status: RowStatus; _error: string; _showMerge: boolean; _mergeInto: string }
   // Pre-fill each due date from priority (matching the server default) when the
   // AI didn't capture a deadline, so the manager sees the date before assigning.
   const [rows, setRows] = useState<Row[]>(pending.map((p) => ({
-    ...p, due_date: p.due_date || defaultDueDate(p.priority), _decision: 'approve', _mergeInto: '',
+    ...p, due_date: p.due_date || defaultDueDate(p.priority), _status: 'pending', _error: '', _showMerge: false, _mergeInto: '',
   })))
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkErr, setBulkErr] = useState('')
   const participants: any[] = meeting.participants || []
 
   const set = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
 
-  const willAssign = rows.filter((r) => r._decision === 'approve' && r.suggested_assignee_id)
-  const noOwner = rows.filter((r) => r._decision === 'approve' && !r.suggested_assignee_id)
-
-  const apply = async () => {
-    setErr(''); setBusy(true)
+  // Approve ONE suggestion: save the manager's edits, then assign it right away.
+  const approveAssign = async (i: number) => {
+    const r = rows[i]
+    if (!r.suggested_assignee_id) { set(i, { _error: 'Pick an assignee before approving.' }); return }
+    set(i, { _status: 'busy', _error: '' })
     try {
-      for (const r of rows) {
-        if (r._decision === 'reject') {
-          await api.post(`/meetings/suggestions/${r.id}/reject`)
-        } else if (r._decision === 'merge' && r._mergeInto) {
-          await api.post(`/meetings/suggestions/${r.id}/merge`, { into: r._mergeInto })
-        } else {
-          await api.patch(`/meetings/suggestions/${r.id}`, {
-            title: r.title, suggested_assignee_id: r.suggested_assignee_id || null,
-            priority: r.priority, due_date: r.due_date || null,
-          })
-        }
-      }
-      await api.post(`/meetings/${meeting.id}/assign`, { ids: willAssign.map((r) => r.id) })
-      onDone()
-    } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
+      await api.patch(`/meetings/suggestions/${r.id}`, {
+        title: r.title, suggested_assignee_id: r.suggested_assignee_id,
+        priority: r.priority, due_date: r.due_date || null,
+      })
+      const res = await api.post(`/meetings/${meeting.id}/assign`, { ids: [r.id] })
+      if (!res.assigned) { set(i, { _status: 'pending', _error: 'Could not assign — check the owner.' }); return }
+      set(i, { _status: 'assigned' })
+      onChanged() // refresh the meeting's "Assigned Tasks" list in the background
+    } catch (e: any) { set(i, { _status: 'pending', _error: e.message }) }
   }
+
+  const reject = async (i: number) => {
+    const r = rows[i]
+    set(i, { _status: 'busy', _error: '' })
+    try { await api.post(`/meetings/suggestions/${r.id}/reject`); set(i, { _status: 'rejected' }); onChanged() }
+    catch (e: any) { set(i, { _status: 'pending', _error: e.message }) }
+  }
+
+  const doMerge = async (i: number) => {
+    const r = rows[i]
+    if (!r._mergeInto) return
+    set(i, { _status: 'busy', _error: '' })
+    try { await api.post(`/meetings/suggestions/${r.id}/merge`, { into: r._mergeInto }); set(i, { _status: 'merged' }); onChanged() }
+    catch (e: any) { set(i, { _status: 'pending', _error: e.message }) }
+  }
+
+  // Batch shortcut: save edits for every still-pending row that has an owner and
+  // assign them all at once — so the manager isn't forced to click 20 rows.
+  const assignAllRemaining = async () => {
+    const targets = rows.filter((r) => r._status === 'pending' && r.suggested_assignee_id)
+    if (!targets.length) return
+    setBulkErr(''); setBulkBusy(true)
+    const ids = new Set(targets.map((t) => t.id))
+    setRows((rs) => rs.map((r) => (ids.has(r.id) ? { ...r, _status: 'busy', _error: '' } : r)))
+    try {
+      for (const r of targets) {
+        await api.patch(`/meetings/suggestions/${r.id}`, {
+          title: r.title, suggested_assignee_id: r.suggested_assignee_id,
+          priority: r.priority, due_date: r.due_date || null,
+        })
+      }
+      await api.post(`/meetings/${meeting.id}/assign`, { ids: targets.map((t) => t.id) })
+      setRows((rs) => rs.map((r) => (ids.has(r.id) ? { ...r, _status: 'assigned' } : r)))
+      onChanged()
+    } catch (e: any) {
+      setBulkErr(e.message)
+      setRows((rs) => rs.map((r) => (ids.has(r.id) ? { ...r, _status: 'pending' } : r)))
+    } finally { setBulkBusy(false) }
+  }
+
+  const done = rows.filter((r) => r._status === 'assigned' || r._status === 'rejected' || r._status === 'merged').length
+  const assignedCount = rows.filter((r) => r._status === 'assigned').length
+  const remaining = rows.length - done
+  const pendingWithOwner = rows.filter((r) => r._status === 'pending' && r.suggested_assignee_id).length
+  const noOwnerCount = rows.filter((r) => r._status === 'pending' && !r.suggested_assignee_id).length
 
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 920, width: '94%' }}>
         <div className="card-head spread"><h3>Review &amp; Assign Tasks</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
         <div className="card-pad grid" style={{ gap: 12, maxHeight: '70vh', overflow: 'auto' }}>
-          {rows.map((r, i) => (
-            <div key={r.id} style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: 12, opacity: r._decision === 'approve' ? 1 : 0.6 }}>
-              <div className="grid" style={{ gap: 8 }}>
-                <div className="spread" style={{ gap: 8 }}>
-                  <input value={r.title} onChange={(e) => set(i, { title: e.target.value })} style={{ fontWeight: 600 }} />
-                  <ConfidenceScore score={r.confidence} />
+          {rows.map((r, i) => {
+            // Once a row is acted on, collapse it into a compact confirmation strip.
+            if (r._status === 'assigned' || r._status === 'rejected' || r._status === 'merged') {
+              const label = r._status === 'assigned' ? '✓ Assigned & notified' : r._status === 'rejected' ? '✕ Rejected' : '⇉ Merged'
+              const color = r._status === 'assigned' ? '#10b981' : r._status === 'rejected' ? '#ef4444' : '#7a6f63'
+              return (
+                <div key={r.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
+                  <span style={{ fontWeight: 600, textDecoration: r._status === 'assigned' ? 'none' : 'line-through', color: r._status === 'assigned' ? 'inherit' : '#9c9082' }}>{r.title}</span>
+                  <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
                 </div>
-                <div className="grid grid-3" style={{ gap: 8 }}>
-                  <div>
-                    <label>Assignee</label>
-                    <select value={r.suggested_assignee_id || ''} onChange={(e) => set(i, { suggested_assignee_id: e.target.value || null })}>
-                      <option value="">— Unassigned —</option>
-                      {participants.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+              )
+            }
+            const busy = r._status === 'busy'
+            return (
+              <div key={r.id} style={{ border: '1px solid ' + (r._error ? '#ef444466' : '#e7ddd1'), borderRadius: 10, padding: 12 }}>
+                <div className="grid" style={{ gap: 8 }}>
+                  <div className="spread" style={{ gap: 8 }}>
+                    <input value={r.title} onChange={(e) => set(i, { title: e.target.value })} style={{ fontWeight: 600 }} />
+                    <ConfidenceScore score={r.confidence} />
                   </div>
-                  <div><label>Priority</label><select value={r.priority} onChange={(e) => set(i, { priority: e.target.value, due_date: defaultDueDate(e.target.value) })}>{PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select></div>
-                  <div><label>Due date</label><input type="date" value={(r.due_date || '').slice(0, 10)} onChange={(e) => set(i, { due_date: e.target.value })} /></div>
-                </div>
-                {r.assignee_reasoning && <div className="muted" style={{ fontSize: 12 }}>💡 {r.assignee_reasoning}</div>}
-                {r.source_quote && <div className="muted" style={{ fontSize: 11.5, fontStyle: 'italic' }}>“{r.source_quote}”</div>}
-                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <button className={'btn btn-sm' + (r._decision === 'approve' ? ' btn-primary' : '')} onClick={() => set(i, { _decision: 'approve' })}>✓ Approve</button>
-                  <button className={'btn btn-sm' + (r._decision === 'reject' ? ' btn-danger' : '')} onClick={() => set(i, { _decision: 'reject' })}>✕ Reject</button>
-                  <div className="row" style={{ gap: 4 }}>
-                    <button className={'btn btn-sm' + (r._decision === 'merge' ? ' btn-primary' : '')} onClick={() => set(i, { _decision: 'merge' })}>⇉ Merge into</button>
-                    {r._decision === 'merge' && (
-                      <select value={r._mergeInto} onChange={(e) => set(i, { _mergeInto: e.target.value })}>
-                        <option value="">choose task…</option>
-                        {rows.filter((o) => o.id !== r.id).map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
+                  <div className="grid grid-3" style={{ gap: 8 }}>
+                    <div>
+                      <label>Assignee</label>
+                      <select value={r.suggested_assignee_id || ''} onChange={(e) => set(i, { suggested_assignee_id: e.target.value || null })}>
+                        <option value="">— Unassigned —</option>
+                        {participants.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                       </select>
-                    )}
+                    </div>
+                    <div><label>Priority</label><select value={r.priority} onChange={(e) => set(i, { priority: e.target.value, due_date: defaultDueDate(e.target.value) })}>{PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select></div>
+                    <div><label>Due date</label><input type="date" value={(r.due_date || '').slice(0, 10)} onChange={(e) => set(i, { due_date: e.target.value })} /></div>
+                  </div>
+                  {r.assignee_reasoning && <div className="muted" style={{ fontSize: 12 }}>💡 {r.assignee_reasoning}</div>}
+                  {r.source_quote && <div className="muted" style={{ fontSize: 11.5, fontStyle: 'italic' }}>“{r.source_quote}”</div>}
+                  {r._error && <div style={{ color: '#ef4444', fontSize: 12.5 }}>{r._error}</div>}
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => approveAssign(i)}>{busy ? <span className="spinner" /> : '✓ Approve & Assign'}</button>
+                    <button className="btn btn-sm" disabled={busy} onClick={() => reject(i)}>✕ Reject</button>
+                    {!r._showMerge
+                      ? <button className="btn btn-sm" disabled={busy} onClick={() => set(i, { _showMerge: true })}>⇉ Merge into…</button>
+                      : (
+                        <span className="row" style={{ gap: 4 }}>
+                          <select value={r._mergeInto} onChange={(e) => set(i, { _mergeInto: e.target.value })}>
+                            <option value="">choose task…</option>
+                            {rows.filter((o) => o.id !== r.id && o._status === 'pending').map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
+                          </select>
+                          <button className="btn btn-sm" disabled={busy || !r._mergeInto} onClick={() => doMerge(i)}>Merge</button>
+                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => set(i, { _showMerge: false, _mergeInto: '' })}>↩</button>
+                        </span>
+                      )}
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-          {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
+            )
+          })}
         </div>
         <div className="card-pad spread" style={{ borderTop: '1px solid #eee' }}>
           <div className="muted" style={{ fontSize: 12.5 }}>
-            {willAssign.length} task(s) will be assigned & notified{noOwner.length ? ` · ${noOwner.length} approved without an owner will be skipped` : ''}
+            {assignedCount} assigned · {remaining} left{noOwnerCount ? ` · ${noOwnerCount} need an owner` : ''}
+            {bulkErr && <span style={{ color: '#ef4444', marginLeft: 8 }}>{bulkErr}</span>}
           </div>
           <div className="row">
-            <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" onClick={apply} disabled={busy || !willAssign.length}>{busy ? <span className="spinner" /> : `Assign ${willAssign.length} task(s)`}</button>
+            <button className="btn" onClick={onClose}>{remaining === 0 ? 'Close' : 'Done'}</button>
+            <button className="btn btn-primary" disabled={bulkBusy || !pendingWithOwner} onClick={assignAllRemaining}>
+              {bulkBusy ? <span className="spinner" /> : `Assign all remaining (${pendingWithOwner})`}
+            </button>
           </div>
         </div>
       </div>

@@ -13,15 +13,28 @@ import Assistant from './pages/Assistant'
 import Chats from './pages/Chats'
 import Admin from './pages/Admin'
 
+// Clean line-style sidebar icons (inherit currentColor, so they turn white when active).
+const Icon = ({ children }: { children: React.ReactNode }) => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+)
+const ICONS = {
+  dashboard: <Icon><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></Icon>,
+  tasks: <Icon><rect x="3" y="3" width="18" height="18" rx="3" /><path d="m8.5 12 2.5 2.5L16 9" /></Icon>,
+  chats: <Icon><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z" /></Icon>,
+  meetings: <Icon><rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1" /><line x1="12" y1="19" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" /></Icon>,
+  assistant: <Icon><path d="M12 2.5 14 8l5.5 2-5.5 2-2 5.5L10 12 4.5 10 10 8z" /><path d="M19 14.5 19.8 17l2.5.8-2.5.8L19 21l-.8-2.4-2.5-.8 2.5-.8z" /></Icon>,
+  admin: <Icon><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></Icon>,
+} as const
+
 // The Manager is the Admin of the org: it owns the Administration hub
 // (org metrics, full user management & audit log).
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: '◧', roles: ['manager'] },
-  { to: '/tasks', label: 'Tasks', icon: '✓', roles: ['manager', 'employee'] },
-  { to: '/chats', label: 'Chats', icon: '💬', roles: ['manager', 'employee'] },
-  { to: '/meetings', label: 'Meetings', icon: '🎙', roles: ['manager'] },
-  { to: '/assistant', label: 'AI Assistant', icon: '✦', roles: ['manager'] },
-  { to: '/admin', label: 'Administration', icon: '⚙', roles: ['manager'] },
+  { to: '/', label: 'Dashboard', icon: ICONS.dashboard, roles: ['manager'] },
+  { to: '/tasks', label: 'Tasks', icon: ICONS.tasks, roles: ['manager', 'employee'] },
+  { to: '/chats', label: 'Chats', icon: ICONS.chats, roles: ['manager', 'employee'] },
+  { to: '/meetings', label: 'Meetings', icon: ICONS.meetings, roles: ['manager'] },
+  { to: '/assistant', label: 'AI Assistant', icon: ICONS.assistant, roles: ['manager'] },
+  { to: '/admin', label: 'Administration', icon: ICONS.admin, roles: ['manager'] },
 ]
 
 const TITLES: Record<string, { t: string; s: string }> = {
@@ -51,9 +64,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   }
   const loc = useLocation()
   const [open, setOpen] = useState(false)
-  const [engine, setEngine] = useState('')
   const [chatUnread, setChatUnread] = useState(0)
-  React.useEffect(() => { fetch('/api/health').then(r => r.json()).then(d => setEngine(d.ai_engine)).catch(() => {}) }, [])
   // Poll the unread chat count so the Chats nav item shows a live badge.
   React.useEffect(() => {
     const load = () => api.get('/chat/unread').then((d) => setChatUnread(d.unread)).catch(() => {})
@@ -110,7 +121,6 @@ function Layout({ children }: { children: React.ReactNode }) {
             <div className="sub">{meta.s}</div>
           </div>
           <div className="row" style={{ marginLeft: 'auto', gap: 12 }}>
-            {engine && <span className="engine-pill">● AI: {engine}</span>}
             <NotificationBell key={user.id} />
           </div>
         </header>
