@@ -115,6 +115,21 @@ tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: #f8fafc; }
 .clickable { cursor: pointer; }
 
+/* On phones, a wide table reflows into a stack of cards (label : value rows).
+   Opt-in via .table-cards on the <table>; .table-card-wrap on its container. */
+@media (max-width: 640px) {
+  .table-card-wrap { border: none; background: transparent; box-shadow: none; }
+  .table-cards thead { display: none; }
+  .table-cards, .table-cards tbody, .table-cards tr, .table-cards td { display: block; width: 100%; }
+  .table-cards tr { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 12px; padding: 4px 2px; }
+  .table-cards tr:hover { background: var(--surface); }
+  .table-cards td { border: none; padding: 9px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; text-align: right; }
+  .table-cards td::before { content: attr(data-label); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); flex-shrink: 0; text-align: left; }
+  .table-cards td.cell-title { display: block; text-align: left; border-bottom: 1px solid var(--border); padding: 12px 14px; }
+  .table-cards td.cell-title::before { display: none; }
+  .table-cards td .row { justify-content: flex-end; }
+}
+
 /* ---- bars ---- */
 .bar-track { background: #eef2f7; border-radius: 20px; height: 7px; overflow: hidden; width: 100%; }
 .bar-fill { height: 100%; border-radius: 20px; transition: width .4s; }
@@ -499,6 +514,10 @@ tbody tr:hover { background: #f8fafc; }
   /* comfortable touch targets */
   .btn { padding: 10px 16px; }
   .nav a { padding: 12px 12px; }
+
+  /* chat: roomier bubbles + full-width contact list on small screens */
+  .bubble { max-width: 85%; }
+  .msg-line { max-width: 92%; }
 }
 
 /* ---- small phones ---- */
