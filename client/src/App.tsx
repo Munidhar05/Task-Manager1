@@ -113,9 +113,14 @@ function Layout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
+      {open && <div className="sidebar-backdrop" onClick={() => setOpen(false)} />}
       <div className="main">
         <header className="topbar">
-          <button className="btn btn-ghost" style={{ display: 'none' }} onClick={() => setOpen((o) => !o)}>☰</button>
+          <button className="nav-toggle" onClick={() => setOpen((o) => !o)} aria-label="Open menu">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
           <div>
             <h1>{meta.t}</h1>
             <div className="sub">{meta.s}</div>
