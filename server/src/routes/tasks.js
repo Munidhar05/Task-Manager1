@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
-import { id, now, audit, notify, notifyManagers } from '../util.js'
+import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../util.js'
 import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
 
@@ -66,6 +66,9 @@ r.post('/', (req, res) => {
     : (b.assignee_id ? db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(b.assignee_id, req.user.org_id) : null)
   const visible = isEmployee ? 0 : 1
   const confidence = isEmployee ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
+  const priority = b.priority || 'Medium'
+  // Auto-fill the due date from priority when the caller didn't supply one.
+  const dueDate = b.due_date || dueDateForPriority(priority)
   const tid = id('task')
   db.prepare(`INSERT INTO tasks
     (id, org_id, title, description, assignee_id, assigned_by_id, due_date, due_date_raw, priority, status,
@@ -73,7 +76,7 @@ r.post('/', (req, res) => {
      assigned_at, visible_to_manager, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     tid, req.user.org_id, b.title, b.description || '', assignee?.id || null, req.user.id,
-    b.due_date || null, b.due_date_raw || null, b.priority || 'Medium', b.status || 'To Do',
+    dueDate, b.due_date_raw || null, priority, b.status || 'To Do',
     b.project_id || null, b.department_id || req.user.department_id || null, b.meeting_id || null,
     confidence, b.parent_task_id || null,
     0, 'none', b.source_quote || null, assignee ? now() : null, visible, now(), now())
@@ -104,6 +107,12 @@ r.patch('/:id', (req, res) => {
     sets.push('status=?'); args.push(b.status)
     if (b.status === 'Done') { sets.push('progress=?'); args.push(100); sets.push('completed_at=?'); args.push(now()) }
     if (b.status === 'In Review') { sets.push('submitted_at=?'); args.push(now()) }
+  }
+  // Auto-fill a due date from priority when assigning or (re)prioritizing a task
+  // that has none — unless the caller explicitly set due_date in this request.
+  if (!('due_date' in b) && !t.due_date && (newlyAssigned || 'priority' in b)) {
+    const effectivePriority = ('priority' in b && b.priority) ? b.priority : t.priority
+    sets.push('due_date=?'); args.push(dueDateForPriority(effectivePriority))
   }
   if (!sets.length) return res.json(hydrate(t))
   sets.push('updated_at=?'); args.push(now())

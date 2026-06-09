@@ -6,6 +6,34 @@ import { LANG_LABEL } from '../ui'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
 
+// Preset meeting titles for the dropdown; "Other" lets the user type a custom one.
+const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Both Tech and Marketing']
+
+// Meeting-title field: a dropdown of presets plus an "Other" option that reveals
+// a free-text input. An existing custom title (not in the presets) opens as "Other".
+function MeetingTitleSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const isPreset = MEETING_TITLES.includes(value)
+  const [isOther, setIsOther] = useState(value !== '' && !isPreset)
+  const selectValue = isOther ? '__other__' : (isPreset ? value : '')
+  const pick = (v: string) => {
+    if (v === '__other__') { setIsOther(true); onChange('') }
+    else { setIsOther(false); onChange(v) }
+  }
+  return (
+    <>
+      <label>Meeting title</label>
+      <select value={selectValue} onChange={(e) => pick(e.target.value)}>
+        <option value="">Select meeting type…</option>
+        {MEETING_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}
+        <option value="__other__">Other (enter manually)</option>
+      </select>
+      {isOther && (
+        <input style={{ marginTop: 8 }} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Enter meeting title" autoFocus />
+      )}
+    </>
+  )
+}
+
 const SAMPLE = `Priya: Good morning team. Let's start the standup.
 Priya: Munidhar, complete the login API by Friday. It's high priority.
 Munidhar: Sure Priya, I'll finish it by Friday.
@@ -93,7 +121,7 @@ function EditMeetingModal({ meeting, onClose, onSaved }: { meeting: any; onClose
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread"><h3>Edit meeting</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
         <div className="card-pad grid" style={{ gap: 12 }}>
-          <div><label>Meeting title</label><input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus /></div>
+          <div><MeetingTitleSelect value={title} onChange={setTitle} /></div>
           <div><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
@@ -167,7 +195,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
           </div>
 
           <div className="grid grid-3" style={{ gap: 10 }}>
-            <div style={{ gridColumn: 'span 2' }}><label>Meeting title</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Daily Standup" /></div>
+            <div style={{ gridColumn: 'span 2' }}><MeetingTitleSelect value={title} onChange={setTitle} /></div>
             <div><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
           </div>
           <div><label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this meeting about?" /></div>
@@ -416,7 +444,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
         </div>
         <div className="card-pad grid" style={{ gap: 12 }}>
           <div className="grid grid-3" style={{ gap: 10 }}>
-            <div style={{ gridColumn: 'span 2' }}><label>Meeting title</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Daily Standup" /></div>
+            <div style={{ gridColumn: 'span 2' }}><MeetingTitleSelect value={title} onChange={setTitle} /></div>
             <div><label>Speaker label</label><input value={speaker} onChange={(e) => setSpeaker(e.target.value)} /></div>
           </div>
           <div><label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this meeting about?" /></div>
