@@ -114,6 +114,8 @@ td { padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13.5
 tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: #f8fafc; }
 .clickable { cursor: pointer; }
+/* audit "Detail" column: truncate on desktop, wrap inside the mobile card */
+.audit-detail { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* On phones, a wide table reflows into a stack of cards (label : value rows).
    Opt-in via .table-cards on the <table>; .table-card-wrap on its container. */
@@ -128,6 +130,8 @@ tbody tr:hover { background: #f8fafc; }
   .table-cards td.cell-title { display: block; text-align: left; border-bottom: 1px solid var(--border); padding: 12px 14px; }
   .table-cards td.cell-title::before { display: none; }
   .table-cards td .row { justify-content: flex-end; }
+  /* let the audit detail wrap fully inside the card instead of truncating */
+  .table-cards .audit-detail { max-width: none; overflow: visible; white-space: normal; text-align: right; }
 }
 
 /* ---- bars ---- */

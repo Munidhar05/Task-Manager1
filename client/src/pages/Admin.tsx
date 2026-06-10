@@ -58,18 +58,18 @@ function Audit() {
   const [logs, setLogs] = useState<any[]>([])
   useEffect(() => { api.get('/dashboards/admin').then((d) => setLogs(d.recent_audit)) }, [])
   return (
-    <div className="card">
+    <div className="card table-card-wrap">
       <div className="card-head"><h3>Recent activity (audit trail)</h3></div>
-      <table>
+      <table className="table-cards">
         <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>Detail</th></tr></thead>
         <tbody>
           {logs.map((l) => (
             <tr key={l.id}>
-              <td className="muted" style={{ whiteSpace: 'nowrap' }}>{new Date(l.created_at).toLocaleString()}</td>
-              <td>{l.actor_name || '—'}</td>
-              <td><Badge color="#c5560f" soft>{l.action}</Badge></td>
-              <td className="muted">{l.entity_type}</td>
-              <td className="muted" style={{ fontSize: 12, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.detail}</td>
+              <td className="cell-title muted" style={{ whiteSpace: 'nowrap' }}>{new Date(l.created_at).toLocaleString()}</td>
+              <td data-label="Actor">{l.actor_name || '—'}</td>
+              <td data-label="Action"><Badge color="#c5560f" soft>{l.action}</Badge></td>
+              <td className="muted" data-label="Entity">{l.entity_type}</td>
+              <td className="muted audit-detail" data-label="Detail" style={{ fontSize: 12 }}>{l.detail}</td>
             </tr>
           ))}
           {logs.length === 0 && <tr><td colSpan={5} className="empty">No activity yet.</td></tr>}
