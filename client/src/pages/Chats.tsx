@@ -388,13 +388,19 @@ export default function Chats() {
       {/* ---- conversation pane ---- */}
       <div className="card chat-pane" style={{ padding: 18 }}>
         <div className="chat">
-          <div className="chat-mobile-bar">
-            <button className="btn btn-ghost btn-sm" onClick={() => setNavOpen((o) => !o)}>☰ Chats</button>
-            <span className="convo-current">{active?.name}</span>
-          </div>
+          {/* No chat open: a single button to reveal the conversation list (mobile). */}
+          {!active && (
+            <div className="chat-mobile-bar">
+              <button className="btn btn-ghost btn-sm" onClick={() => setNavOpen(true)}>☰ Chats</button>
+            </div>
+          )}
 
           {active && (() => { const otherOnline = active.type === 'direct' && !!active.other_user_id && online.has(active.other_user_id); return (
             <div className="chat-peer-head">
+              {/* Mobile-only: back to the conversation list (replaces the old extra hamburger). */}
+              <button className="chat-list-btn" onClick={() => setNavOpen(true)} title="Back to chats" aria-label="Back to chats">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+              </button>
               {active.type === 'group'
                 ? <GroupAvatar conv={active} size={36} />
                 : <PresenceAvatar name={active.name} color={active.avatar_color} size={36} online={otherOnline} src={active.avatar_file && active.other_user_id ? userAvatarUrl(active.other_user_id, active.avatar_file) : undefined} />}

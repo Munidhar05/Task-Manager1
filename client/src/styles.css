@@ -307,6 +307,9 @@ tbody tr:hover { background: #f8fafc; }
 .chat-mobile-bar { display: none; align-items: center; gap: 10px; margin-bottom: 10px; }
 .convo-current { font-weight: 600; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-open-btn { display: none; }
+/* mobile-only back arrow in the chat header (shown < 860px, see below) */
+.chat-list-btn { display: none; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text); cursor: pointer; padding: 6px; margin: -4px 0 -4px -6px; border-radius: 9px; flex-shrink: 0; }
+.chat-list-btn:hover { background: var(--bg); }
 
 /* desktop: let the manager collapse / reopen the history sidebar */
 @media (min-width: 861px) {
@@ -321,6 +324,7 @@ tbody tr:hover { background: #f8fafc; }
   .chat-history { position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; width: 280px; height: 100vh; border-radius: 0; transform: translateX(-100%); transition: transform .2s; box-shadow: var(--shadow-lg); }
   .assistant-layout.nav-open .chat-history { transform: translateX(0); }
   .chat-mobile-bar { display: flex; }
+  .chat-list-btn { display: inline-flex; }
 }
 
 .chat { display: flex; flex-direction: column; height: calc(100vh - 160px); }
@@ -525,6 +529,13 @@ tbody tr:hover { background: #f8fafc; }
   /* chat: roomier bubbles + full-width contact list on small screens */
   .bubble { max-width: 85%; }
   .msg-line { max-width: 92%; }
+
+  /* composer: round attach tucked beside the input, input grows, tidy Send */
+  .chat-input { gap: 7px; align-items: center; }
+  .chat-input > input { flex: 1; min-width: 0; }
+  .attach-btn { width: 42px; height: 42px; padding: 0; border-radius: 50%; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 22px; }
+  .attach-btn:hover:not(:disabled) { background: var(--bg); }
+  .chat-input .btn-primary { flex-shrink: 0; padding: 0 18px; height: 42px; }
 
   /* modals: full-width, and button groups wrap instead of overflowing sideways */
   .modal { width: 100%; max-width: 100%; }
