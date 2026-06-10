@@ -518,6 +518,25 @@ tbody tr:hover { background: #f8fafc; }
   /* chat: roomier bubbles + full-width contact list on small screens */
   .bubble { max-width: 85%; }
   .msg-line { max-width: 92%; }
+
+  /* modals: full-width, and button groups wrap instead of overflowing sideways */
+  .modal { width: 100%; max-width: 100%; }
+  .modal .row { flex-wrap: wrap; }
+  /* recognition-mode + action buttons go full width when they wrap */
+  .modal .row > .btn { flex: 1 1 auto; justify-content: center; }
+  /* keep the grid-3 rows inside modals single-column on phones */
+  .modal .grid-3 { grid-template-columns: 1fr; }
+  .modal .grid-3 > [style*="span 2"] { grid-column: auto; }
+
+  /* dashboard: let the overdue table scroll inside its card rather than the page */
+  .pbi-overdue .pbi-scroll { overflow-x: auto; }
+  .pbi-overdue table { min-width: 420px; }
+}
+
+/* belt-and-suspenders: never let any page scroll sideways in the app shell */
+@media (max-width: 720px) {
+  html, body { overflow-x: hidden; }
+  .content { overflow-x: hidden; }
 }
 
 /* ---- small phones ---- */
