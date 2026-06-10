@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, getToken } from '../api'
+import { api, getToken, API_BASE } from '../api'
 import { useAuth } from '../auth'
 import { LANG_LABEL } from '../ui'
 import ParticipantPicker from '../components/ParticipantPicker'
@@ -147,7 +147,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
 
   // Is server-side speech-to-text available? (drives the audio option)
   useEffect(() => {
-    fetch('/api/health').then((r) => r.json()).then((d) => setProvider(d.transcription || 'none')).catch(() => {})
+    fetch(`${API_BASE}/api/health`).then((r) => r.json()).then((d) => setProvider(d.transcription || 'none')).catch(() => {})
   }, [])
   const audioAvailable = provider !== 'none'
 
@@ -159,7 +159,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
     form.append('description', description)
     form.append('meeting_date', date)
     form.append('participant_ids', JSON.stringify(participants))
-    const res = await fetch('/api/meetings/audio', { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
+    const res = await fetch(`${API_BASE}/api/meetings/audio`, { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || 'Audio processing failed')
     return data.id
@@ -295,7 +295,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
 
   // Detect whether a server transcription provider is configured; prefer it if so.
   useEffect(() => {
-    fetch('/api/health').then((r) => r.json()).then((d) => {
+    fetch(`${API_BASE}/api/health`).then((r) => r.json()).then((d) => {
       const p = d.transcription || 'none'
       setProvider(p)
       setMode(p !== 'none' ? 'auto' : 'browser')
@@ -327,7 +327,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     const form = new FormData()
     form.append('audio', blob, 'chunk.webm')
     if (prompt) form.append('prompt', prompt) // prior text → consistent names/spelling
-    const res = await fetch('/api/meetings/transcribe', { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
+    const res = await fetch(`${API_BASE}/api/meetings/transcribe`, { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || 'Transcription failed')
     return data.text || ''

@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react'
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './auth'
-import { api, userAvatarUrl, getToken } from './api'
+import { api, userAvatarUrl, getToken, API_BASE } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
 import Login from './pages/Login'
@@ -57,7 +57,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     try {
       const form = new FormData(); form.append('file', file)
       const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch('/api/users/me/avatar', { method: 'POST', headers, body: form })
+      const res = await fetch(`${API_BASE}/api/users/me/avatar`, { method: 'POST', headers, body: form })
       if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
       await refresh()
     } catch (err: any) { alert('Could not set photo: ' + err.message) }
