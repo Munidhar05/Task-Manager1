@@ -359,7 +359,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // streams transcripts back. Captions appear ~1-2s after each spoken phrase.
   const startSarvamStream = async () => {
     setErr('')
-    const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=unknown`))
+    const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=${encodeURIComponent(lang)}`))
     wsRef.current = ws
     recordingRef.current = true
     setRecording(true)
@@ -452,11 +452,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           <div>
             <label>Recognition mode</label>
             <div className="row" style={{ gap: 8 }}>
-              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}>✦ Auto — any language</button>
+              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}>✦ Auto (Telugu / Hindi / English)</button>
               <button className={'btn btn-sm' + (mode === 'browser' ? ' btn-primary' : '')} disabled={recording} onClick={() => setMode('browser')}>Browser captions (1 language)</button>
             </div>
             {mode === 'auto'
-              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Auto-detects Telugu / Hindi / English & code-mixing via <strong>{provider}</strong>. {provider === 'sarvam' ? 'Captions stream live — each phrase appears ~1-2s after it’s spoken.' : 'Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent).'} You can also edit the transcript before analyzing.</div>
+              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Transcribes the selected language (with English mixed in) via <strong>{provider}</strong> — limited to Telugu, Hindi and English so other languages never appear. {provider === 'sarvam' ? 'Captions stream live — each phrase appears ~1-2s after it’s spoken.' : 'Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent).'} You can also edit the transcript before analyzing.</div>
               : <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Pick one language; press Stop and switch to mix languages — all append to one transcript.</div>}
             {!autoAvailable && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 12.5, marginTop: 6 }}>
@@ -466,14 +466,12 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           </div>
 
           <div className="grid grid-3" style={{ gap: 10 }}>
-            {mode === 'browser' && (
-              <div>
-                <label>Speaking language</label>
-                <select value={lang} onChange={(e) => setLang(e.target.value)} disabled={recording}>
-                  {REC_LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
-              </div>
-            )}
+            <div>
+              <label>Speaking language</label>
+              <select value={lang} onChange={(e) => setLang(e.target.value)} disabled={recording}>
+                {REC_LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+              </select>
+            </div>
             <div className="muted" style={{ alignSelf: 'end', fontSize: 12 }}>Summary &amp; tasks: <b>English</b></div>
             <div style={{ alignSelf: 'end' }} className="muted">
               {recording ? <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span> : 'Ready'}

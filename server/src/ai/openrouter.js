@@ -16,6 +16,14 @@
 //     de-duplicates the tasks and synthesizes one cohesive summary.
 import { detectLanguages } from './rules.js'
 
+// Only these languages are ever reported — Telugu, Hindi, English. Anything else
+// the model emits (ml, ta, kn, …) is dropped so other languages never leak through.
+const ALLOWED_LANGS = new Set(['en', 'hi', 'te'])
+const keepAllowedLangs = (val) =>
+  (Array.isArray(val) ? val : String(val || '').split('+'))
+    .map((s) => s.trim().toLowerCase())
+    .filter((l) => ALLOWED_LANGS.has(l))
+
 const API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 // ~4 chars/token. Below SINGLE_SHOT_CHARS we send the whole transcript at once;
@@ -174,7 +182,7 @@ function normalizeTask(t) {
     priority: ['Critical', 'High', 'Medium', 'Low'].includes(t.priority) ? t.priority : 'Medium',
     ownership_confidence: t.ownership_confidence || (t.assignee_name ? 'high' : 'needs_confirmation'),
     source_quote: t.source_quote || t.description || t.title,
-    language: t.language || detectLanguages(t.source_quote || t.title || '').join('+'),
+    language: keepAllowedLangs(t.language).join('+') || detectLanguages(t.source_quote || t.title || '').join('+'),
   }
 }
 
@@ -277,8 +285,8 @@ ${JSON.stringify(allTasks, null, 1)}`
 
   parsed.tasks = (parsed.tasks || []).map(normalizeTask)
   parsed.engine = 'openrouter'
-  if (!parsed.detected_languages || !parsed.detected_languages.length) {
-    parsed.detected_languages = detectLanguages(text)
-  }
+  // Whitelist to en/hi/te; fall back to script detection (also en/hi/te only).
+  parsed.detected_languages = keepAllowedLangs(parsed.detected_languages)
+  if (!parsed.detected_languages.length) parsed.detected_languages = detectLanguages(text)
   return parsed
 }

@@ -2,6 +2,13 @@
 // Used when ANTHROPIC_API_KEY is set; otherwise the orchestrator falls back to rules.js.
 import { detectLanguages } from './rules.js'
 
+// Only Telugu, Hindi and English are ever reported; drop anything else the model emits.
+const ALLOWED_LANGS = new Set(['en', 'hi', 'te'])
+const keepAllowedLangs = (val) =>
+  (Array.isArray(val) ? val : String(val || '').split('+'))
+    .map((s) => s.trim().toLowerCase())
+    .filter((l) => ALLOWED_LANGS.has(l))
+
 const API_URL = 'https://api.anthropic.com/v1/messages'
 
 // Coerce a model-provided confidence into a 0-100 integer, with a fallback.
@@ -113,9 +120,10 @@ ${transcript}`
     priority: ['Critical', 'High', 'Medium', 'Low'].includes(t.priority) ? t.priority : 'Medium',
     ownership_confidence: t.ownership_confidence || (t.assignee_name ? 'high' : 'needs_confirmation'),
     source_quote: t.source_quote || t.description || t.title,
-    language: t.language || detectLanguages(t.source_quote || t.title).join('+'),
+    language: keepAllowedLangs(t.language).join('+') || detectLanguages(t.source_quote || t.title).join('+'),
   }))
   parsed.engine = 'claude'
-  if (!parsed.detected_languages) parsed.detected_languages = detectLanguages(transcript)
+  parsed.detected_languages = keepAllowedLangs(parsed.detected_languages)
+  if (!parsed.detected_languages.length) parsed.detected_languages = detectLanguages(transcript)
   return parsed
 }

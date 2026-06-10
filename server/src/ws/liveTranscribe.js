@@ -29,7 +29,13 @@ export function attachLiveTranscribe(server) {
   wss.on('connection', (client, req) => {
     const url = new URL(req.url, 'http://localhost')
     const token = url.searchParams.get('token')
-    const language = url.searchParams.get('language') || 'unknown'
+    // Lock to a single language so live audio is never mis-transcribed into other
+    // Indian languages. Client may request one of en/hi/te; otherwise (or "unknown")
+    // fall back to SARVAM_LANGUAGE (default English).
+    const requested = url.searchParams.get('language')
+    const language = (requested && requested !== 'unknown')
+      ? requested
+      : (process.env.SARVAM_LANGUAGE || 'en-IN')
 
     // --- Auth: only managers/admins may stream a meeting ---
     const user = verifyToken(token)
