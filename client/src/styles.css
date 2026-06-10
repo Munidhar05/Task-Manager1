@@ -481,6 +481,7 @@ tbody tr:hover { background: #f8fafc; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
 .toolbar select, .toolbar input { width: auto; }
+.meetings-actions { margin-left: auto; } /* right-aligned on desktop; centered on phones (see below) */
 .comment { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
 .comment .body { background: #f8fafc; border-radius: 10px; padding: 8px 12px; flex: 1; }
 
@@ -510,6 +511,10 @@ tbody tr:hover { background: #f8fafc; }
   .sidebar-backdrop { display: block; position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 39; animation: fadeIn .2s ease; }
   .nav-toggle { display: inline-flex; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* Meetings toolbar: center the count + action buttons instead of right-aligning */
+  .toolbar { justify-content: center; text-align: center; }
+  .meetings-actions { margin-left: 0; justify-content: center; }
 
   .topbar { padding: 12px 16px; gap: 12px; }
   .topbar h1 { font-size: 16px; }

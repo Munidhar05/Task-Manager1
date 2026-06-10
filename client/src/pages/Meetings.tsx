@@ -63,7 +63,7 @@ export default function Meetings() {
       <div className="toolbar">
         <div className="muted">{meetings.length} meeting(s) processed</div>
         {isManager && (
-          <div className="row" style={{ marginLeft: 'auto', gap: 8 }}>
+          <div className="row meetings-actions" style={{ gap: 8 }}>
             <button className="btn btn-primary" onClick={() => setShowLive(true)}>● Start meeting</button>
             <button className="btn" onClick={() => setShowUpload(true)}>+ Upload meeting</button>
           </div>
