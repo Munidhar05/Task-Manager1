@@ -145,9 +145,13 @@ export default function Assistant() {
       <div className="card chat-pane" style={{ padding: 18 }}>
         <div className="chat">
           <button className="btn btn-ghost btn-sm history-open-btn" title="Show history" onClick={() => setSidebar(false)}>☰ History</button>
+          {/* Mobile header: history icon (opens past chats) · current title · quick New */}
           <div className="chat-mobile-bar">
-            <button className="btn btn-ghost btn-sm" onClick={() => setNavOpen((o) => !o)}>☰ History</button>
-            <span className="convo-current">{active?.title}</span>
+            <button className="chat-list-btn" onClick={() => setNavOpen(true)} title="Chat history" aria-label="Chat history">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" /><path d="M12 7v5l3 3" /></svg>
+            </button>
+            <span className="convo-current">{active?.title || 'New chat'}</span>
+            <button className="btn btn-ghost btn-sm assistant-newchat" onClick={startNew} title="New chat">+ New</button>
           </div>
           <div className="chat-log" ref={logRef}>
             {msgs.map((m, i) => (

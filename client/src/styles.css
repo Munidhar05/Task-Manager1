@@ -304,8 +304,9 @@ tbody tr:hover { background: #f8fafc; }
 .chat-history-head { display: flex; align-items: center; justify-content: space-between; }
 .ch-title { font-weight: 700; font-size: 13px; color: var(--muted); }
 .collapse-btn { font-size: 17px; line-height: 1; padding: 2px 8px; }
-.chat-mobile-bar { display: none; align-items: center; gap: 10px; margin-bottom: 10px; }
-.convo-current { font-weight: 600; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-mobile-bar { display: none; align-items: center; gap: 10px; margin-bottom: 12px; padding-bottom: 11px; border-bottom: 1px solid var(--border); }
+.convo-current { flex: 1; min-width: 0; font-weight: 700; font-size: 15px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assistant-newchat { flex-shrink: 0; }
 .history-open-btn { display: none; }
 /* mobile-only back arrow in the chat header (shown < 860px, see below) */
 .chat-list-btn { display: none; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text); cursor: pointer; padding: 6px; margin: -4px 0 -4px -6px; border-radius: 9px; flex-shrink: 0; }
