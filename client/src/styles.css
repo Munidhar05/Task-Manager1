@@ -123,7 +123,7 @@ tbody tr:hover { background: #f8fafc; }
   .table-cards, .table-cards tbody, .table-cards tr, .table-cards td { display: block; width: 100%; }
   .table-cards tr { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 12px; padding: 4px 2px; }
   .table-cards tr:hover { background: var(--surface); }
-  .table-cards td { border: none; padding: 9px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; text-align: right; }
+  .table-cards td { border: none; padding: 9px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; text-align: right; overflow-wrap: anywhere; }
   .table-cards td::before { content: attr(data-label); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); flex-shrink: 0; text-align: left; }
   .table-cards td.cell-title { display: block; text-align: left; border-bottom: 1px solid var(--border); padding: 12px 14px; }
   .table-cards td.cell-title::before { display: none; }
@@ -516,6 +516,10 @@ tbody tr:hover { background: #f8fafc; }
   /* Meetings toolbar: center the count + action buttons instead of right-aligning */
   .toolbar { justify-content: center; text-align: center; }
   .meetings-actions { margin-left: 0; justify-content: center; }
+
+  /* User Management toolbar: stack the count above the action buttons, which wrap */
+  .um-toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .um-toolbar .row { flex-wrap: wrap; }
 
   .topbar { padding: 12px 16px; gap: 12px; }
   .topbar h1 { font-size: 16px; }

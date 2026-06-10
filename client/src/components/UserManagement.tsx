@@ -65,9 +65,9 @@ export default function UserManagement() {
 
   return (
     <>
-      <div className="spread" style={{ marginBottom: 14 }}>
+      <div className="spread um-toolbar" style={{ marginBottom: 14 }}>
         <div className="muted">{users.length} users {digest && <span>· daily Cliq digest {digest.hour}:00 ({digest.mode})</span>}</div>
-        <div className="row" style={{ gap: 8 }}>
+        <div className="row wrap" style={{ gap: 8 }}>
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={onImport} />
           <button className="btn btn-sm" onClick={downloadTemplate}>⬇ Template</button>
           <button className="btn btn-sm" onClick={() => fileRef.current?.click()}>⬆ Import Excel/CSV</button>
@@ -76,18 +76,18 @@ export default function UserManagement() {
         </div>
       </div>
       {importMsg && <div className="muted" style={{ marginBottom: 10, fontSize: 13 }}>{importMsg}</div>}
-      <div className="card">
-        <table>
+      <div className="card table-card-wrap">
+        <table className="table-cards">
           <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Department</th><th></th></tr></thead>
           <tbody>
             {users.map((u) => (
               <tr key={u.id}>
-                <td><span className="row"><Avatar name={u.name} color={u.avatar_color} size={26} /> {u.name}</span></td>
-                <td className="muted">{u.email}</td>
-                <td className="muted">{u.phone || '—'}</td>
-                <td><Badge color="#c5560f" soft>{u.role}</Badge></td>
-                <td>{deptName(u.department_id)}</td>
-                <td>
+                <td className="cell-title"><span className="row"><Avatar name={u.name} color={u.avatar_color} size={26} /> {u.name}</span></td>
+                <td className="muted" data-label="Email">{u.email}</td>
+                <td className="muted" data-label="Phone">{u.phone || '—'}</td>
+                <td data-label="Role"><Badge color="#c5560f" soft>{u.role}</Badge></td>
+                <td data-label="Department">{deptName(u.department_id)}</td>
+                <td data-label="">
                   {canEdit(u) && (
                     <div className="row" style={{ gap: 6 }}>
                       <button className="btn btn-sm" onClick={() => setEditing(u)}>✎ Edit</button>
