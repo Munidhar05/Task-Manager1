@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, getToken } from '../api'
+import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { LANG_LABEL } from '../ui'
 import ParticipantPicker from '../components/ParticipantPicker'
@@ -63,7 +63,7 @@ export default function Meetings() {
       <div className="toolbar">
         <div className="muted">{meetings.length} meeting(s) processed</div>
         {isManager && (
-          <div className="row" style={{ marginLeft: 'auto', gap: 8 }}>
+          <div className="row meetings-actions" style={{ gap: 8 }}>
             <button className="btn btn-primary" onClick={() => setShowLive(true)}>● Start meeting</button>
             <button className="btn" onClick={() => setShowUpload(true)}>+ Upload meeting</button>
           </div>
@@ -147,7 +147,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
 
   // Is server-side speech-to-text available? (drives the audio option)
   useEffect(() => {
-    fetch('/api/health').then((r) => r.json()).then((d) => setProvider(d.transcription || 'none')).catch(() => {})
+    fetch(`${API_BASE}/api/health`).then((r) => r.json()).then((d) => setProvider(d.transcription || 'none')).catch(() => {})
   }, [])
   const audioAvailable = provider !== 'none'
 
@@ -159,7 +159,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
     form.append('description', description)
     form.append('meeting_date', date)
     form.append('participant_ids', JSON.stringify(participants))
-    const res = await fetch('/api/meetings/audio', { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
+    const res = await fetch(`${API_BASE}/api/meetings/audio`, { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || 'Audio processing failed')
     return data.id
@@ -295,7 +295,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
 
   // Detect whether a server transcription provider is configured; prefer it if so.
   useEffect(() => {
-    fetch('/api/health').then((r) => r.json()).then((d) => {
+    fetch(`${API_BASE}/api/health`).then((r) => r.json()).then((d) => {
       const p = d.transcription || 'none'
       setProvider(p)
       setMode(p !== 'none' ? 'auto' : 'browser')
@@ -327,7 +327,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     const form = new FormData()
     form.append('audio', blob, 'chunk.webm')
     if (prompt) form.append('prompt', prompt) // prior text → consistent names/spelling
-    const res = await fetch('/api/meetings/transcribe', { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
+    const res = await fetch(`${API_BASE}/api/meetings/transcribe`, { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || 'Transcription failed')
     return data.text || ''
@@ -359,8 +359,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // streams transcripts back. Captions appear ~1-2s after each spoken phrase.
   const startSarvamStream = async () => {
     setErr('')
-    const wsProto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${wsProto}://${location.host}/api/meetings/live?token=${getToken()}&language=unknown`)
+    const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=${encodeURIComponent(lang)}`))
     wsRef.current = ws
     recordingRef.current = true
     setRecording(true)
@@ -453,11 +452,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           <div>
             <label>Recognition mode</label>
             <div className="row" style={{ gap: 8 }}>
-              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}>✦ Auto — any language</button>
+              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}>✦ Auto (Telugu / Hindi / English)</button>
               <button className={'btn btn-sm' + (mode === 'browser' ? ' btn-primary' : '')} disabled={recording} onClick={() => setMode('browser')}>Browser captions (1 language)</button>
             </div>
             {mode === 'auto'
-              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Auto-detects Telugu / Hindi / English & code-mixing via <strong>{provider}</strong>. {provider === 'sarvam' ? 'Captions stream live — each phrase appears ~1-2s after it’s spoken.' : 'Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent).'} You can also edit the transcript before analyzing.</div>
+              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Transcribes the selected language (with English mixed in) via <strong>{provider}</strong> — limited to Telugu, Hindi and English so other languages never appear. {provider === 'sarvam' ? 'Captions stream live — each phrase appears ~1-2s after it’s spoken.' : 'Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent).'} You can also edit the transcript before analyzing.</div>
               : <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Pick one language; press Stop and switch to mix languages — all append to one transcript.</div>}
             {!autoAvailable && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 12.5, marginTop: 6 }}>
@@ -467,14 +466,12 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           </div>
 
           <div className="grid grid-3" style={{ gap: 10 }}>
-            {mode === 'browser' && (
-              <div>
-                <label>Speaking language</label>
-                <select value={lang} onChange={(e) => setLang(e.target.value)} disabled={recording}>
-                  {REC_LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
-              </div>
-            )}
+            <div>
+              <label>Speaking language</label>
+              <select value={lang} onChange={(e) => setLang(e.target.value)} disabled={recording}>
+                {REC_LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+              </select>
+            </div>
             <div className="muted" style={{ alignSelf: 'end', fontSize: 12 }}>Summary &amp; tasks: <b>English</b></div>
             <div style={{ alignSelf: 'end' }} className="muted">
               {recording ? <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span> : 'Ready'}

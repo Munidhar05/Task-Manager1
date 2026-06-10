@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { api, getToken, userAvatarUrl, groupAvatarUrl } from '../api'
+import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar } from '../ui'
 
@@ -146,8 +146,7 @@ export default function Chats() {
     let retry: ReturnType<typeof setTimeout> | null = null
     let closed = false
     const connect = () => {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${proto}://${location.host}/api/chat/ws?token=${getToken()}`)
+      const ws = new WebSocket(wsUrl(`/api/chat/ws?token=${getToken()}`))
       wsRef.current = ws
       ws.onmessage = (ev) => {
         let d: any
@@ -241,7 +240,7 @@ export default function Chats() {
       if (caption) form.append('body', caption)
       if (rep) form.append('replyTo', rep.id)
       const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`/api/chat/conversations/${active.id}/upload`, { method: 'POST', headers, body: form })
+      const res = await fetch(`${API_BASE}/api/chat/conversations/${active.id}/upload`, { method: 'POST', headers, body: form })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Upload failed')
       setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x))); loadConvos()
@@ -389,13 +388,19 @@ export default function Chats() {
       {/* ---- conversation pane ---- */}
       <div className="card chat-pane" style={{ padding: 18 }}>
         <div className="chat">
-          <div className="chat-mobile-bar">
-            <button className="btn btn-ghost btn-sm" onClick={() => setNavOpen((o) => !o)}>☰ Chats</button>
-            <span className="convo-current">{active?.name}</span>
-          </div>
+          {/* No chat open: a single button to reveal the conversation list (mobile). */}
+          {!active && (
+            <div className="chat-mobile-bar">
+              <button className="btn btn-ghost btn-sm" onClick={() => setNavOpen(true)}>☰ Chats</button>
+            </div>
+          )}
 
           {active && (() => { const otherOnline = active.type === 'direct' && !!active.other_user_id && online.has(active.other_user_id); return (
             <div className="chat-peer-head">
+              {/* Mobile-only: back to the conversation list (replaces the old extra hamburger). */}
+              <button className="chat-list-btn" onClick={() => setNavOpen(true)} title="Back to chats" aria-label="Back to chats">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+              </button>
               {active.type === 'group'
                 ? <GroupAvatar conv={active} size={36} />
                 : <PresenceAvatar name={active.name} color={active.avatar_color} size={36} online={otherOnline} src={active.avatar_file && active.other_user_id ? userAvatarUrl(active.other_user_id, active.avatar_file) : undefined} />}
@@ -679,7 +684,7 @@ function GroupInfo({ conv, user, onClose, onChanged, onLeft }: { conv: Conversat
     try {
       const form = new FormData(); form.append('file', file)
       const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`/api/chat/conversations/${conv.id}/avatar`, { method: 'POST', headers, body: form })
+      const res = await fetch(`${API_BASE}/api/chat/conversations/${conv.id}/avatar`, { method: 'POST', headers, body: form })
       if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
       onChanged()
     } catch (err: any) { alert('Could not set photo: ' + err.message) }

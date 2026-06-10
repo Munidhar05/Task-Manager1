@@ -8,9 +8,26 @@ import { presetRange, todayYmd, ReportRange, downloadManagerReport } from '../re
 export default function Dashboard() {
   const { user } = useAuth()
   if (!user) return null
-  if (user.role === 'employee') return <EmployeeDash />
-  if (user.role === 'manager') return <ManagerDash />
-  return <ManagerDash admin />
+  if (user.role === 'employee') return (
+    <>
+      <Greeting name={user.name} style={{ marginBottom: 18 }} />
+      <EmployeeDash />
+    </>
+  )
+  return <ManagerDash admin={user.role !== 'manager'} name={user.name} />
+}
+
+// Friendly time-of-day greeting shown at the top-left of the dashboard.
+function Greeting({ name, style }: { name: string; style?: React.CSSProperties }) {
+  const h = new Date().getHours()
+  const part = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
+  const first = (name || '').trim().split(' ')[0] || name
+  return (
+    <div style={style}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{part}, {first} 👋</h2>
+      <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>Here's your overview for today.</div>
+    </div>
+  )
 }
 
 function useDrawer() {
@@ -98,7 +115,7 @@ const RANGE_TABS: { key: RangeKey; label: string }[] = [
   { key: 'custom', label: 'Custom' },
 ]
 
-function ManagerDash({ admin }: { admin?: boolean }) {
+function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   const [data, setData] = useState<any>(null)
   const [active, setActive] = useState<RangeKey>('monthly')
   const [from, setFrom] = useState(todayYmd())
@@ -128,6 +145,7 @@ function ManagerDash({ admin }: { admin?: boolean }) {
 
   const toolbar = (
     <div className="pbi-filter">
+      <Greeting name={name} style={{ marginRight: 'auto' }} />
       <div className="pbi-seg-wrap">
         <div className="pbi-seg">
           {RANGE_TABS.map((t) => (

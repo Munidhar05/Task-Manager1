@@ -89,8 +89,8 @@ export default function Tasks() {
         </div>
       </div>
 
-      <div className="card">
-        <table>
+      <div className="card table-card-wrap">
+        <table className="table-cards">
           <thead><tr>
             {sortTh('Task', 'task')}
             {sortTh('Priority', 'priority')}
@@ -102,10 +102,10 @@ export default function Tasks() {
           <tbody>
             {sortedTasks.map((t) => (
               <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
-                <td><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
-                <td><PriorityBadge p={t.priority} /></td>
-                <td><StatusBadge s={t.status} /></td>
-                <td>
+                <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
+                <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
+                <td data-label="Status"><StatusBadge s={t.status} /></td>
+                <td data-label="Assignee">
                   {t.assignee ? (
                     <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
                   ) : isManager ? (
@@ -123,8 +123,8 @@ export default function Tasks() {
                     <span className="muted">Unassigned</span>
                   )}
                 </td>
-                <td>{dueLabel(t)}</td>
-                <td>
+                <td data-label="Due">{dueLabel(t)}</td>
+                <td data-label="Time">
                   <div style={{ fontSize: 12.5 }}>{fmtDateTime(activityOf(t))}</div>
                   <div className="muted" style={{ fontSize: 11 }}>{activityLabel(t)}</div>
                 </td>

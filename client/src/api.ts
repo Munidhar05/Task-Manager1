@@ -1,6 +1,20 @@
 // Tiny fetch wrapper that injects the JWT and unwraps JSON / errors.
 const TOKEN_KEY = 'smarttask_token'
 
+// Base URL of the backend. Empty in dev (Vite proxies /api → :4000); set to the
+// hosted backend (e.g. https://smarttask-api.onrender.com) for the Android build
+// via VITE_API_BASE in client/.env.production.
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
+
+// Build a WebSocket URL against the backend. In a packaged app `location.host`
+// is the app itself (localhost), so we must derive the WS origin from API_BASE
+// (http→ws, https→wss). In dev, API_BASE is empty and Vite proxies the upgrade,
+// so we fall back to the current page origin.
+export const wsUrl = (path: string) => {
+  const base = API_BASE || `${location.protocol}//${location.host}`
+  return `${base.replace(/^http/, 'ws')}${path}`
+}
+
 export const getToken = () => localStorage.getItem(TOKEN_KEY)
 export const setToken = (t: string | null) => {
   if (t) localStorage.setItem(TOKEN_KEY, t)
@@ -12,7 +26,7 @@ async function request(path: string, opts: RequestInit = {}) {
   const token = getToken()
   if (token) headers.authorization = `Bearer ${token}`
   // never serve a cached response — user-specific data must not bleed across accounts
-  const res = await fetch(`/api${path}`, { ...opts, headers, cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/api${path}`, { ...opts, headers, cache: 'no-store' })
   const text = await res.text()
   const data = text ? JSON.parse(text) : null
   if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`)
@@ -25,7 +39,7 @@ async function uploadFile(path: string, file: File, field = 'file') {
   const headers: Record<string, string> = {}
   const token = getToken()
   if (token) headers.authorization = `Bearer ${token}`
-  const res = await fetch(`/api${path}`, { method: 'POST', headers, body: form, cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/api${path}`, { method: 'POST', headers, body: form, cache: 'no-store' })
   const text = await res.text()
   const data = text ? JSON.parse(text) : null
   if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`)
@@ -47,8 +61,8 @@ export interface User { id: string; name: string; email: string; role: Role; org
 
 // Authenticated avatar image URLs (token in query so <img> can load them).
 // `ver` (the stored filename) busts the browser cache when the photo changes.
-export const userAvatarUrl = (userId: string, ver?: string | null) => `/api/users/${userId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
-export const groupAvatarUrl = (convId: string, ver?: string | null) => `/api/chat/conversations/${convId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
+export const userAvatarUrl = (userId: string, ver?: string | null) => `${API_BASE}/api/users/${userId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
+export const groupAvatarUrl = (convId: string, ver?: string | null) => `${API_BASE}/api/chat/conversations/${convId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
 
 // An AI-suggested task awaiting manager review (the review queue).
 export interface Suggestion {

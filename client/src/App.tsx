@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react'
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './auth'
-import { api, userAvatarUrl, getToken } from './api'
+import { api, userAvatarUrl, getToken, API_BASE } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
 import Login from './pages/Login'
@@ -57,7 +57,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     try {
       const form = new FormData(); form.append('file', file)
       const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch('/api/users/me/avatar', { method: 'POST', headers, body: form })
+      const res = await fetch(`${API_BASE}/api/users/me/avatar`, { method: 'POST', headers, body: form })
       if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
       await refresh()
     } catch (err: any) { alert('Could not set photo: ' + err.message) }
@@ -113,9 +113,14 @@ function Layout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
+      {open && <div className="sidebar-backdrop" onClick={() => setOpen(false)} />}
       <div className="main">
         <header className="topbar">
-          <button className="btn btn-ghost" style={{ display: 'none' }} onClick={() => setOpen((o) => !o)}>☰</button>
+          <button className="nav-toggle" onClick={() => setOpen((o) => !o)} aria-label="Open menu">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
           <div>
             <h1>{meta.t}</h1>
             <div className="sub">{meta.s}</div>
