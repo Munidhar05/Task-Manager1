@@ -6,6 +6,15 @@ const TOKEN_KEY = 'smarttask_token'
 // via VITE_API_BASE in client/.env.production.
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
 
+// Build a WebSocket URL against the backend. In a packaged app `location.host`
+// is the app itself (localhost), so we must derive the WS origin from API_BASE
+// (http→ws, https→wss). In dev, API_BASE is empty and Vite proxies the upgrade,
+// so we fall back to the current page origin.
+export const wsUrl = (path: string) => {
+  const base = API_BASE || `${location.protocol}//${location.host}`
+  return `${base.replace(/^http/, 'ws')}${path}`
+}
+
 export const getToken = () => localStorage.getItem(TOKEN_KEY)
 export const setToken = (t: string | null) => {
   if (t) localStorage.setItem(TOKEN_KEY, t)

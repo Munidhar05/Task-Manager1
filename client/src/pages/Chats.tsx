@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE } from '../api'
+import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar } from '../ui'
 
@@ -146,8 +146,7 @@ export default function Chats() {
     let retry: ReturnType<typeof setTimeout> | null = null
     let closed = false
     const connect = () => {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${proto}://${location.host}/api/chat/ws?token=${getToken()}`)
+      const ws = new WebSocket(wsUrl(`/api/chat/ws?token=${getToken()}`))
       wsRef.current = ws
       ws.onmessage = (ev) => {
         let d: any

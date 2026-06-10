@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, getToken, API_BASE } from '../api'
+import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { LANG_LABEL } from '../ui'
 import ParticipantPicker from '../components/ParticipantPicker'
@@ -359,8 +359,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // streams transcripts back. Captions appear ~1-2s after each spoken phrase.
   const startSarvamStream = async () => {
     setErr('')
-    const wsProto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${wsProto}://${location.host}/api/meetings/live?token=${getToken()}&language=unknown`)
+    const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=unknown`))
     wsRef.current = ws
     recordingRef.current = true
     setRecording(true)
