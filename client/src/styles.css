@@ -489,8 +489,14 @@ tbody tr:hover { background: #f8fafc; }
 @media (max-width: 760px) {
   .pbi-kpis { grid-template-columns: repeat(2, 1fr); }
   .pbi-filter { justify-content: flex-start; }
-  /* greeting takes the full first row; range tabs + download wrap below it */
+  /* greeting takes the full first row; range tabs + download stack below it */
   .pbi-filter > div:first-of-type { flex-basis: 100%; }
+  /* range tabs fill the row, evenly split */
+  .pbi-seg-wrap { width: 100%; }
+  .pbi-seg { width: 100%; }
+  .pbi-tab { flex: 1 1 0; padding: 8px 0; text-align: center; }
+  /* download becomes a clear full-width action under the tabs */
+  .pbi-download { width: 100%; justify-content: center; margin-left: 0; }
 }
 
 /* ---- phones ---- */
@@ -508,8 +514,9 @@ tbody tr:hover { background: #f8fafc; }
 
   .board { grid-template-columns: 1fr; }
   .pbi { height: auto; }
-  .pbi-tab { padding: 7px 14px; }
-  .pbi-download { margin-left: auto; }        /* push download to the right of the tabs row */
+  .pbi-tab { padding: 8px 0; }
+  /* full-width download (see the 760px block) — keep it block-level here too */
+  .pbi-download { width: 100%; justify-content: center; margin-left: 0; }
 
   /* comfortable touch targets */
   .btn { padding: 10px 16px; }
