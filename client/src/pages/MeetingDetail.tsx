@@ -223,6 +223,15 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
     catch (e: any) { set(i, { _status: 'pending', _error: e.message }) }
   }
 
+  // Undo a reject/merge from within the review screen — the row becomes editable
+  // and assignable again.
+  const restoreRow = async (i: number) => {
+    const r = rows[i]
+    set(i, { _error: '' })
+    try { await api.post(`/meetings/suggestions/${r.id}/restore`); set(i, { _status: 'pending' }); onChanged() }
+    catch (e: any) { set(i, { _error: e.message }) }
+  }
+
   const doMerge = async (i: number) => {
     const r = rows[i]
     if (!r._mergeInto) return
@@ -274,7 +283,12 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
               return (
                 <div key={r.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
                   <span style={{ fontWeight: 600, textDecoration: r._status === 'assigned' ? 'none' : 'line-through', color: r._status === 'assigned' ? 'inherit' : '#9c9082' }}>{r.title}</span>
-                  <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
+                  <span className="row" style={{ gap: 10 }}>
+                    <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
+                    {(r._status === 'rejected' || r._status === 'merged') && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => restoreRow(i)}>↩ Restore</button>
+                    )}
+                  </span>
                 </div>
               )
             }
