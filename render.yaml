@@ -1,0 +1,65 @@
+# Render Blueprint — backend (Express + SQLite + WebSockets) for SmartTask AI.
+# Render reads this file automatically when you create a "Blueprint" from the repo.
+# The persistent disk keeps the SQLite database + uploaded files across restarts
+# and redeploys (this is why a paid `starter` plan is required — free has no disk).
+services:
+  - type: web
+    name: smarttask-api
+    runtime: node
+    rootDir: server            # build + start run inside server/
+    plan: starter              # ~$7/mo — required for the persistent disk below
+    region: singapore          # closest Render region to India
+    buildCommand: npm install  # compiles better-sqlite3 native module
+    startCommand: npm start    # node src/index.js
+    healthCheckPath: /api/health
+    autoDeploy: true           # redeploy on every push to the connected branch
+    disk:
+      name: data
+      # Absolute path to server/data inside Render's checkout. The app writes the
+      # DB (smarttask.db), chat_uploads/ and avatars/ here — all on this disk.
+      mountPath: /opt/render/project/src/server/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      # JWT signing key — Render generates a strong value once and keeps it stable.
+      - key: JWT_SECRET
+        generateValue: true
+      # --- Secrets you paste in the Render dashboard (sync:false = not in repo) ---
+      # Only fill the ones you actually use; the app falls back gracefully.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: TRANSCRIPTION_PROVIDER
+        sync: false
+      - key: OPENAI_TRANSCRIBE_MODEL
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: SARVAM_LANGUAGE
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CLIQ_WEBHOOK_URL
+        sync: false
+      - key: DIGEST_HOUR
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
