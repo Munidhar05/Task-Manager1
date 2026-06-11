@@ -300,6 +300,15 @@ r.post('/suggestions/:sid/reject', requireRole('manager', 'admin'), (req, res) =
   res.json({ ok: true })
 })
 
+// RESTORE a previously rejected (or merged) suggestion back to the pending queue,
+// so a manager can edit it and assign it after all. Returns the refreshed row.
+r.post('/suggestions/:sid/restore', requireRole('manager', 'admin'), (req, res) => {
+  const s = getSuggestion(req.params.sid, req.user.org_id)
+  if (!s) return res.status(404).json({ error: 'Not found' })
+  db.prepare("UPDATE suggested_tasks SET status='pending', merged_into=NULL, updated_at=? WHERE id=?").run(now(), s.id)
+  res.json(db.prepare('SELECT * FROM suggested_tasks WHERE id=?').get(s.id))
+})
+
 // MERGE a duplicate suggestion into another (the duplicate is dropped).
 r.post('/suggestions/:sid/merge', requireRole('manager', 'admin'), (req, res) => {
   const s = getSuggestion(req.params.sid, req.user.org_id)

@@ -18,11 +18,24 @@ export default function MeetingDetail() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [tab, setTab] = useState<'summary' | 'transcript'>('summary')
   const [review, setReview] = useState(false)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+  const [restoreErr, setRestoreErr] = useState('')
   const load = () => api.get('/meetings/' + id).then(setM)
   useEffect(() => { load() }, [id])
+
+  // Bring a rejected suggestion back into the pending queue, then open the review
+  // screen so the manager can edit / reassign it right away.
+  const restore = async (sid: string) => {
+    setRestoringId(sid); setRestoreErr('')
+    try { await api.post(`/meetings/suggestions/${sid}/restore`); await load(); setReview(true) }
+    catch (e: any) { setRestoreErr(e.message) }
+    finally { setRestoringId(null) }
+  }
+
   if (!m) return <span className="spinner" />
   const s = m.summary || {}
   const pending: Suggestion[] = (m.suggestions || []).filter((x: Suggestion) => x.status === 'pending')
+  const rejected: Suggestion[] = (m.suggestions || []).filter((x: Suggestion) => x.status === 'rejected')
 
   return (
     <>
@@ -86,6 +99,29 @@ export default function MeetingDetail() {
                       </div>
                       {sg.assignee_reasoning && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>💡 {sg.assignee_reasoning}</div>}
                       {sg.source_quote && <div className="muted" style={{ fontSize: 11.5, marginTop: 4, fontStyle: 'italic' }}>“{sg.source_quote}”</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Rejected suggestions — retrievable for editing / reassigning */}
+            {rejected.length > 0 && (
+              <div className="card section">
+                <div className="card-head"><h3>✕ Rejected Suggestions ({rejected.length})</h3></div>
+                <div className="card-pad grid" style={{ gap: 8 }}>
+                  {restoreErr && <div style={{ color: '#ef4444', fontSize: 12.5 }}>{restoreErr}</div>}
+                  {rejected.map((sg) => (
+                    <div key={sg.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
+                      <div>
+                        <div style={{ fontWeight: 600, textDecoration: 'line-through', color: '#9c9082' }}>{sg.title}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          {sg.suggested_assignee_name || sg.suggested_assignee_raw || 'No owner'} · {dueLabel(sg)}
+                        </div>
+                      </div>
+                      <button className="btn btn-sm" disabled={restoringId === sg.id} onClick={() => restore(sg.id)}>
+                        {restoringId === sg.id ? <span className="spinner" /> : '↩ Restore & edit'}
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -187,6 +223,15 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
     catch (e: any) { set(i, { _status: 'pending', _error: e.message }) }
   }
 
+  // Undo a reject/merge from within the review screen — the row becomes editable
+  // and assignable again.
+  const restoreRow = async (i: number) => {
+    const r = rows[i]
+    set(i, { _error: '' })
+    try { await api.post(`/meetings/suggestions/${r.id}/restore`); set(i, { _status: 'pending' }); onChanged() }
+    catch (e: any) { set(i, { _error: e.message }) }
+  }
+
   const doMerge = async (i: number) => {
     const r = rows[i]
     if (!r._mergeInto) return
@@ -238,7 +283,12 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
               return (
                 <div key={r.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
                   <span style={{ fontWeight: 600, textDecoration: r._status === 'assigned' ? 'none' : 'line-through', color: r._status === 'assigned' ? 'inherit' : '#9c9082' }}>{r.title}</span>
-                  <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
+                  <span className="row" style={{ gap: 10 }}>
+                    <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
+                    {(r._status === 'rejected' || r._status === 'merged') && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => restoreRow(i)}>↩ Restore</button>
+                    )}
+                  </span>
                 </div>
               )
             }

@@ -7,7 +7,7 @@ import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
 
 // Preset meeting titles for the dropdown; "Other" lets the user type a custom one.
-const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Both Tech and Marketing']
+const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Tech and Marketing Meeting']
 
 // Meeting-title field: a dropdown of presets plus an "Other" option that reveals
 // a free-text input. An existing custom title (not in the presets) opens as "Other".
@@ -25,7 +25,7 @@ function MeetingTitleSelect({ value, onChange }: { value: string; onChange: (v: 
       <select value={selectValue} onChange={(e) => pick(e.target.value)}>
         <option value="">Select meeting type…</option>
         {MEETING_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}
-        <option value="__other__">Other (enter manually)</option>
+        <option value="__other__">Other (Enter Title)</option>
       </select>
       {isOther && (
         <input style={{ marginTop: 8 }} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Enter meeting title" autoFocus />

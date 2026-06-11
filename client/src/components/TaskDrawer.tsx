@@ -12,11 +12,15 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [pendingAssignee, setPendingAssignee] = useState('')
+  // A status the user has picked but not yet confirmed — applied only on "Accept".
+  const [pendingStatus, setPendingStatus] = useState('')
 
   const load = () => api.get(`/tasks/${taskId}`).then(setTask)
   useEffect(() => { load(); api.get('/users').then(setUsers) }, [taskId])
   // Keep the member picker in sync whenever the task's current owner changes.
   useEffect(() => { setPendingAssignee(task?.assignee?.id || '') }, [task?.assignee?.id])
+  // Reset the pending status whenever the saved status changes (incl. after Accept).
+  useEffect(() => { setPendingStatus(task?.status || '') }, [task?.status])
 
   const mutate = async (fn: () => Promise<any>) => {
     setBusy(true)
@@ -126,11 +130,21 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
           <div style={{ margin: '16px 0' }}>
             <label>Status</label>
             {isManager ? (
-              <div className="row wrap">
-                {STATUSES.map((s) => (
-                  <button key={s} className={'btn btn-sm' + (task.status === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setStatus(s)}>{s}</button>
-                ))}
-              </div>
+              <>
+                <div className="row wrap">
+                  {STATUSES.map((s) => (
+                    <button key={s} className={'btn btn-sm' + (pendingStatus === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setPendingStatus(s)}>{s}</button>
+                  ))}
+                </div>
+                {pendingStatus !== task.status && (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setStatus(pendingStatus)}>
+                      {busy ? <span className="spinner" /> : `✓ Accept change → ${pendingStatus}`}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingStatus(task.status)}>Cancel</button>
+                  </div>
+                )}
+              </>
             ) : task.status === 'Done' ? (
               <div className="card-pad" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, color: '#047857' }}>
                 ✓ Completed — approved by your manager.
@@ -145,9 +159,17 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               <>
                 <div className="row wrap">
                   {['To Do', 'In Progress', 'Blocked'].map((s) => (
-                    <button key={s} className={'btn btn-sm' + (task.status === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setStatus(s)}>{s}</button>
+                    <button key={s} className={'btn btn-sm' + (pendingStatus === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setPendingStatus(s)}>{s}</button>
                   ))}
                 </div>
+                {pendingStatus !== task.status && ['To Do', 'In Progress', 'Blocked'].includes(pendingStatus) && (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setStatus(pendingStatus)}>
+                      {busy ? <span className="spinner" /> : `✓ Accept change → ${pendingStatus}`}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingStatus(task.status)}>Cancel</button>
+                  </div>
+                )}
                 <button className="btn btn-primary" style={{ marginTop: 10, width: '100%' }} disabled={busy} onClick={() => setStatus('In Review')}>
                   {busy ? <span className="spinner" /> : '✓ Submit as complete'}
                 </button>

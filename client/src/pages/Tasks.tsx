@@ -47,11 +47,35 @@ export default function Tasks() {
 
   const isManager = user?.role !== 'employee'
 
-  // Sort by the active column; direction flips the ascending comparator.
-  const sortedTasks = [...tasks].sort((a, b) => {
-    const cmp = cmpAsc(a, b, sort.key)
-    return sort.dir === 'desc' ? -cmp : cmp
-  })
+  // Group tasks by their activity day, sort WITHIN each day by the active column,
+  // and keep the day groups newest-first — so changing the sort only reorders rows
+  // inside a date, never the dates themselves.
+  const groupedByDay = (() => {
+    const groups: Record<string, Task[]> = {}
+    for (const t of tasks) {
+      const day = (activityOf(t) || '').slice(0, 10) || 'No date'
+      ;(groups[day] ||= []).push(t)
+    }
+    for (const day in groups) {
+      groups[day].sort((a, b) => {
+        const cmp = cmpAsc(a, b, sort.key)
+        return sort.dir === 'desc' ? -cmp : cmp
+      })
+    }
+    const keys = Object.keys(groups).sort((a, b) => (a === 'No date' ? 1 : b === 'No date' ? -1 : b.localeCompare(a)))
+    return keys.map((day) => ({ day, items: groups[day] }))
+  })()
+
+  // Friendly heading for a day group, e.g. "Today · Wednesday, 11 June 2026".
+  const dayHeading = (day: string) => {
+    if (day === 'No date') return 'No date'
+    const d = new Date(day + 'T00:00:00')
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const diff = Math.round((today.getTime() - d.getTime()) / 86400000)
+    const rel = diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : null
+    const full = d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    return rel ? `${rel} · ${full}` : full
+  }
 
   // Inline assign from the table row (managers only). Sets owner + flips confidence to confirmed.
   const assign = (taskId: string, userId: string) => {
@@ -65,6 +89,37 @@ export default function Tasks() {
     <th className="clickable" style={{ userSelect: 'none' }} onClick={() => toggleSort(key)} title={`Sort by ${label.toLowerCase()}`}>
       {label} {sort.key === key ? (sort.dir === 'desc' ? '↓' : '↑') : <span style={{ opacity: 0.3 }}>↕</span>}
     </th>
+  )
+
+  const renderRow = (t: Task) => (
+    <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
+      <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
+      <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
+      <td data-label="Status"><StatusBadge s={t.status} /></td>
+      <td data-label="Assignee">
+        {t.assignee ? (
+          <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
+        ) : isManager ? (
+          <select
+            className="btn btn-sm"
+            style={{ maxWidth: 150 }}
+            value=""
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => { e.stopPropagation(); assign(t.id, e.target.value) }}
+          >
+            <option value="">＋ Assign…</option>
+            {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        ) : (
+          <span className="muted">Unassigned</span>
+        )}
+      </td>
+      <td data-label="Due">{dueLabel(t)}</td>
+      <td data-label="Time">
+        <div style={{ fontSize: 12.5 }}>{fmtDateTime(activityOf(t))}</div>
+        <div className="muted" style={{ fontSize: 11 }}>{activityLabel(t)}</div>
+      </td>
+    </tr>
   )
 
   return (
@@ -100,35 +155,13 @@ export default function Tasks() {
             {sortTh('Time', 'time')}
           </tr></thead>
           <tbody>
-            {sortedTasks.map((t) => (
-              <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
-                <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
-                <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
-                <td data-label="Status"><StatusBadge s={t.status} /></td>
-                <td data-label="Assignee">
-                  {t.assignee ? (
-                    <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
-                  ) : isManager ? (
-                    <select
-                      className="btn btn-sm"
-                      style={{ maxWidth: 150 }}
-                      value=""
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => { e.stopPropagation(); assign(t.id, e.target.value) }}
-                    >
-                      <option value="">＋ Assign…</option>
-                      {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-                    </select>
-                  ) : (
-                    <span className="muted">Unassigned</span>
-                  )}
-                </td>
-                <td data-label="Due">{dueLabel(t)}</td>
-                <td data-label="Time">
-                  <div style={{ fontSize: 12.5 }}>{fmtDateTime(activityOf(t))}</div>
-                  <div className="muted" style={{ fontSize: 11 }}>{activityLabel(t)}</div>
-                </td>
-              </tr>
+            {groupedByDay.map((g) => (
+              <React.Fragment key={g.day}>
+                <tr className="day-group-row">
+                  <td colSpan={6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
+                </tr>
+                {g.items.map(renderRow)}
+              </React.Fragment>
             ))}
             {tasks.length === 0 && <tr><td colSpan={6} className="empty">No tasks match your filters.</td></tr>}
           </tbody>

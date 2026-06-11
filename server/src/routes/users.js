@@ -123,6 +123,7 @@ r.delete('/:id', requireRole('manager', 'admin'), (req, res) => {
   if (req.user.role === 'manager' && u.role === 'admin') return res.status(403).json({ error: 'Managers cannot remove admin accounts' })
   const remove = db.transaction(() => {
     db.prepare('UPDATE tasks SET assignee_id=NULL WHERE assignee_id=?').run(u.id)   // unassign their tasks
+    db.prepare('UPDATE suggested_tasks SET suggested_assignee_id=NULL WHERE suggested_assignee_id=?').run(u.id) // detach from AI review queue
     db.prepare('DELETE FROM task_comments WHERE user_id=?').run(u.id)               // their comments
     db.prepare('DELETE FROM users WHERE id=?').run(u.id)                            // notifications cascade
   })
