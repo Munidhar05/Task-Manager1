@@ -4,6 +4,7 @@ import cors from 'cors'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import './restore.js' // MUST come before db.js — restores real data before the DB is opened
 import { initSchema, db } from './db.js'
 import { ensureSeed } from './seed.js'
 
