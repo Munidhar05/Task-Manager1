@@ -1,6 +1,9 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import path from 'node:path'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { initSchema, db } from './db.js'
 import { ensureSeed } from './seed.js'
 
@@ -59,6 +62,24 @@ app.use('/api/assistant', assistantRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/digest', digestRoutes)
 app.use('/api/chat', chatRoutes)
+
+// --- Serve the built web client (client/dist) from this SAME service ----------
+// So one URL hosts BOTH the website (for people without the Android app) AND the
+// API. On Render the client build sits at ../../client/dist relative to this file
+// (server/src). Built by render.yaml's buildCommand. Skipped gracefully when the
+// build isn't present (e.g. API-only local dev with the Vite dev server).
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const clientDist = path.resolve(__dirname, '../../client/dist')
+if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+  app.use(express.static(clientDist))
+  // SPA fallback: any non-/api GET returns index.html so client-side routes
+  // (BrowserRouter) survive a refresh or deep link. Unknown /api/* paths are
+  // excluded so they still get a proper JSON 404 instead of the HTML shell.
+  app.get(/^(?!\/api\/).*/, (req, res) => res.sendFile(path.join(clientDist, 'index.html')))
+  console.log(`  Web client: serving ${clientDist}`)
+} else {
+  console.log('  Web client: not built (API-only). Build client/ to serve the website here.')
+}
 
 app.use((err, req, res, next) => {
   console.error('[error]', err)

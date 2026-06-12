@@ -9,8 +9,11 @@ services:
     rootDir: server            # build + start run inside server/
     plan: starter              # ~$7/mo — required for the persistent disk below
     region: singapore          # closest Render region to India
-    buildCommand: npm install  # compiles better-sqlite3 native module
-    startCommand: npm start    # node src/index.js
+    # Build the API (compiles better-sqlite3 native module) AND the web client,
+    # so this one service serves both the website and the API. --include=dev is
+    # required because the client build needs vite/tsc (devDependencies).
+    buildCommand: npm install && cd ../client && npm install --include=dev && npm run build
+    startCommand: npm start    # node src/index.js (also serves ../client/dist)
     healthCheckPath: /api/health
     autoDeploy: true           # redeploy on every push to the connected branch
     disk:
