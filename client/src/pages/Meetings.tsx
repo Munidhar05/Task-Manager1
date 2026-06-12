@@ -322,6 +322,45 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     setTranscript((prev) => (prev ? prev.replace(/\s*$/, '') + '\n' : '') + `${speakerRef.current || 'Speaker'}: ${text.trim()}`)
   }
 
+  // Browser (Web Speech) finals only. Android doesn't honour `continuous` and
+  // re-fires the SAME utterance as growing-prefix finals across auto-restarts
+  // ("I" → "I want" → "I want to assign a task"), plus slightly different
+  // re-recognitions ("task 2" vs "task to"). Appending each one stacks dozens of
+  // near-duplicate lines and makes the AI extract the same task many times.
+  // Fix: if a new final extends, is contained by, or shares most of a common
+  // prefix with the previous SAME-speaker line, replace that line (keep the
+  // longer text) instead of adding a new one. Genuinely new sentences still
+  // append. Server (auto/sarvam) modes keep using appendLine — their chunks are
+  // distinct, not growing prefixes.
+  const commitBrowserFinal = (text: string) => {
+    const clean = text.trim()
+    if (!clean) return
+    const speaker = speakerRef.current || 'Speaker'
+    const prefix = `${speaker}: `
+    setTranscript((prev) => {
+      const lines = prev ? prev.split('\n') : []
+      const last = lines[lines.length - 1]
+      if (last && last.startsWith(prefix)) {
+        const lastText = last.slice(prefix.length).trim()
+        const shorter = Math.min(lastText.length, clean.length)
+        let common = 0
+        while (common < shorter && lastText[common] === clean[common]) common++
+        const sameUtterance =
+          clean === lastText ||
+          clean.startsWith(lastText) ||
+          lastText.startsWith(clean) ||
+          (shorter > 0 && common / shorter >= 0.7)
+        if (sameUtterance) {
+          // keep whichever capture is longer (most complete)
+          lines[lines.length - 1] = clean.length >= lastText.length ? prefix + clean : last
+          return lines.join('\n')
+        }
+      }
+      lines.push(prefix + clean)
+      return lines.join('\n')
+    })
+  }
+
   // ---- AUTO mode: server STT, any language ----
   const uploadChunk = async (blob: Blob, prompt: string): Promise<string> => {
     const form = new FormData()
@@ -392,12 +431,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     rec.interimResults = true
     rec.lang = lang
     rec.onresult = (e: any) => {
-      let fin = '', intr = ''
+      let intr = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
-        if (r.isFinal) fin += r[0].transcript; else intr += r[0].transcript
+        if (r.isFinal) commitBrowserFinal(r[0].transcript); else intr += r[0].transcript
       }
-      if (fin.trim()) appendLine(fin)
       setInterim(intr)
     }
     rec.onerror = (e: any) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { setErr('Microphone permission denied.'); stop() } }
