@@ -24,7 +24,10 @@ services:
       sizeGB: 1
     envVars:
       - key: NODE_VERSION
-        value: 20.18.0
+        # Must satisfy Vite 8's engine requirement (^20.19.0 || >=22.12.0) or the
+        # client `vite build` crashes and the whole deploy fails. Same Node 20 ABI
+        # as before, so better-sqlite3's prebuilt binary still applies.
+        value: 20.19.0
       # JWT signing key — Render generates a strong value once and keeps it stable.
       - key: JWT_SECRET
         generateValue: true
