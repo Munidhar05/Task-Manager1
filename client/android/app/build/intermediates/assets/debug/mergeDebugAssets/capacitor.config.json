@@ -1,0 +1,12 @@
+{
+	"appId": "io.smarttask.app",
+	"appName": "SmartTask",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "http",
+		"cleartext": true
+	},
+	"android": {
+		"allowMixedContent": true
+	}
+}
