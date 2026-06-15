@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { api, setToken, getToken, User } from './api'
+import { registerPush, unregisterPush } from './push'
 
 interface AuthCtx {
   user: User | null
@@ -18,7 +19,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!getToken()) { setLoading(false); return }
     api.get('/auth/me')
-      .then((d) => setUser(d.user))
+      .then((d) => { setUser(d.user); registerPush() })
       .catch(() => setToken(null))
       .finally(() => setLoading(false))
   }, [])
@@ -27,8 +28,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const d = await api.post('/auth/login', { email, password })
     setToken(d.token)
     setUser(d.user)
+    registerPush() // ask for notification permission + register this device (native only)
   }
-  const logout = () => { setToken(null); setUser(null) }
+  const logout = () => { unregisterPush(); setToken(null); setUser(null) }
   const refresh = async () => { try { const d = await api.get('/auth/me'); setUser(d.user) } catch {} }
 
   return <Ctx.Provider value={{ user, loading, login, logout, refresh }}>{children}</Ctx.Provider>

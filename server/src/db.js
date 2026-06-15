@@ -166,6 +166,17 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read);
 
+  -- FCM device tokens for native push (one row per device; pushes target a user's rows).
+  CREATE TABLE IF NOT EXISTS device_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL DEFAULT 'android',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_devtok_user ON device_tokens(user_id);
+
   CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT
