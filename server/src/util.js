@@ -21,6 +21,7 @@ export function dueDateForPriority(priority, from = new Date()) {
 }
 
 import { db } from './db.js'
+import { sendPushToUser } from './push.js'
 export function audit(orgId, actorId, action, entityType, entityId, detail = '') {
   db.prepare(
     `INSERT INTO audit_logs (id, org_id, actor_id, action, entity_type, entity_id, detail, created_at)
@@ -28,13 +29,27 @@ export function audit(orgId, actorId, action, entityType, entityId, detail = '')
   ).run(id('aud'), orgId, actorId, action, entityType, entityId, typeof detail === 'string' ? detail : JSON.stringify(detail), now())
 }
 
-// Create an in-app notification for a single recipient.
+// Short, human title per notification type — shown as the push heading.
+const PUSH_TITLES = {
+  task_assigned: 'New task assigned',
+  task_comment: 'New comment',
+  task_submitted: 'Task submitted',
+  task_approved: 'Task approved',
+  task_reopened: 'Task reopened',
+  chat_message: 'New message',
+}
+
+// Create an in-app notification for a single recipient, and fire a native push
+// to their devices (no-op if FCM isn't configured). Push is fire-and-forget so a
+// slow/failed send never blocks the request.
 export function notify(orgId, userId, type, message, taskId = null) {
   if (!userId) return
   db.prepare(
     `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, read, created_at)
      VALUES (?,?,?,?,?,?,0,?)`
   ).run(id('ntf'), orgId, userId, type, message, taskId, now())
+  sendPushToUser(userId, { title: PUSH_TITLES[type] || 'SmartTask', body: message, data: { type, taskId } })
+    .catch(() => {})
 }
 
 // Notify every manager/admin in the org (e.g. when an employee submits work).
