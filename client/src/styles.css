@@ -68,8 +68,11 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .sidebar-user .meta { flex: 1; min-width: 0; }
 .sidebar-user .meta .n { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-user .meta .r { font-size: 11px; color: var(--sidebar-muted); text-transform: capitalize; }
-.logout-btn { color: #fff; background: linear-gradient(135deg,#e07a2f,#c5560f); border: 1px solid var(--primary-dark); width: 34px; height: 34px; padding: 0; border-radius: 9px; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(197,86,15,.4); flex-shrink: 0; }
-.logout-btn:hover { background: linear-gradient(135deg,#c5560f,#a8480c); color: #fff; transform: translateY(-1px); }
+/* Scoped with .sidebar-user for higher specificity than the mobile `.btn`
+   padding override (which otherwise squeezes/clips this fixed-size icon button
+   on phones). box-sizing keeps it square regardless of inherited padding. */
+.sidebar-user .logout-btn { color: #fff; background: linear-gradient(135deg,#e07a2f,#c5560f); border: 1px solid var(--primary-dark); width: 36px; height: 36px; min-width: 36px; padding: 0; box-sizing: border-box; border-radius: 9px; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(197,86,15,.4); flex-shrink: 0; }
+.sidebar-user .logout-btn:hover { background: linear-gradient(135deg,#c5560f,#a8480c); color: #fff; transform: translateY(-1px); }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
