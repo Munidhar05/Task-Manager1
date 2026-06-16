@@ -60,7 +60,7 @@ export default function NotificationBell() {
           <div className="card-head spread"><h3 style={{ fontSize: 14, margin: 0 }}>Notifications</h3></div>
           {items.length === 0 && <div className="empty" style={{ padding: 24 }}>You're all caught up 🎉</div>}
           {items.map((n) => (
-            <div key={n.id} style={{ padding: '11px 14px', borderTop: '1px solid #f1f5f9', background: n.read ? '#fff' : '#eff6ff', fontSize: 13, display: 'flex', gap: 8 }}>
+            <div key={n.id} style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(197,86,15,.08)', fontSize: 13, display: 'flex', gap: 8 }}>
               <span>{ICON[n.type] || '•'}</span>
               <div>
                 <div>{n.message}</div>
