@@ -61,6 +61,19 @@ export function ConfidenceScore({ score }: { score: number }) {
   )
 }
 
+// Friendly full-area placeholder for empty lists/views — a big icon, a title,
+// an optional hint line, and an optional call-to-action (e.g. a "New task" button).
+export function EmptyState({ icon, title, hint, action }: { icon?: React.ReactNode; title: string; hint?: string; action?: React.ReactNode }) {
+  return (
+    <div className="empty-state">
+      {icon != null && <div className="empty-state-icon">{icon}</div>}
+      <div className="empty-state-title">{title}</div>
+      {hint && <div className="empty-state-hint">{hint}</div>}
+      {action && <div className="empty-state-action">{action}</div>}
+    </div>
+  )
+}
+
 export function Stat({ label, value, accent, hint }: { label: string; value: React.ReactNode; accent?: string; hint?: string }) {
   return (
     <div className="stat-card">
