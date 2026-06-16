@@ -29,7 +29,7 @@ const ICONS = {
 // The Manager is the Admin of the org: it owns the Administration hub
 // (org metrics, full user management & audit log).
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: ICONS.dashboard, roles: ['manager'] },
+  { to: '/', label: 'Dashboard', icon: ICONS.dashboard, roles: ['manager', 'employee'] },
   { to: '/tasks', label: 'Tasks', icon: ICONS.tasks, roles: ['manager', 'employee'] },
   { to: '/chats', label: 'Chats', icon: ICONS.chats, roles: ['manager', 'employee'] },
   { to: '/meetings', label: 'Meetings', icon: ICONS.meetings, roles: ['manager'] },
@@ -143,10 +143,9 @@ function Protected({ children, roles }: { children: React.ReactNode; roles?: str
   return <Layout>{children}</Layout>
 }
 
-// Home routes employees straight to their Tasks; the manager (admin) sees the Dashboard.
+// Home renders the role-aware Dashboard: employees see their personal overview,
+// the manager (admin) sees the org-wide command center. (Dashboard branches internally.)
 function Home() {
-  const { user } = useAuth()
-  if (user?.role === 'employee') return <Navigate to="/tasks" replace />
   return <Dashboard />
 }
 
