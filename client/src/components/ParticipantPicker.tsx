@@ -1,15 +1,24 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, User } from '../api'
 import { Avatar } from '../ui'
 
 // Pick meeting attendees. Selected people show as chips. The full employee list
 // stays hidden until the manager clicks "＋ Add members", then a scrollable list
 // (with an optional filter) drops down so he can add people without typing names.
-export default function ParticipantPicker({ value, onChange }: { value: string[]; onChange: (ids: string[]) => void }) {
+// With autoSelectAll, everyone is pre-added when the list loads (absentees can
+// then be removed) — the default for a new meeting.
+export default function ParticipantPicker({ value, onChange, autoSelectAll }: { value: string[]; onChange: (ids: string[]) => void; autoSelectAll?: boolean }) {
   const [users, setUsers] = useState<User[]>([])
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
-  useEffect(() => { api.get('/users').then(setUsers).catch(() => {}) }, [])
+  const seeded = useRef(false) // pre-select everyone only once, so the user can still remove people
+  useEffect(() => {
+    api.get('/users').then((list: User[]) => {
+      setUsers(list)
+      if (autoSelectAll && !seeded.current && value.length === 0) onChange(list.map((u) => u.id))
+      seeded.current = true
+    }).catch(() => {})
+  }, [])
 
   const selected = users.filter((u) => value.includes(u.id))
   const available = useMemo(() => {
