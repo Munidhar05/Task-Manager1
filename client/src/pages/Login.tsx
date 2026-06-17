@@ -48,6 +48,9 @@ export default function Login() {
               onFocus={() => setEmailFocused(true)}
               onBlur={() => setEmailFocused(false)}
               type="email"
+              name="email"
+              autoComplete="username"
+              inputMode="email"
               placeholder="you@befach.com"
               autoFocus
             />
@@ -62,6 +65,8 @@ export default function Login() {
                 onFocus={() => setPwFocused(true)}
                 onBlur={() => setPwFocused(false)}
                 type={showPw ? 'text' : 'password'}
+                name="password"
+                autoComplete="current-password"
                 placeholder="Password"
               />
               <button
