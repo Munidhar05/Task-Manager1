@@ -1,6 +1,8 @@
-import React, { useRef, useState } from 'react'
-import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
+import React, { useEffect, useRef, useState } from 'react'
+import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
+import { runBackHandlers } from './back'
 import { api, userAvatarUrl, getToken, API_BASE } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
@@ -149,8 +151,30 @@ function Home() {
   return <Dashboard />
 }
 
+// Make the Android hardware back button step back through the app (close an open
+// panel/modal, then go back a screen) instead of quitting the app outright.
+function useAndroidBackButton() {
+  const navigate = useNavigate()
+  const loc = useLocation()
+  const pathRef = useRef(loc.pathname)
+  useEffect(() => { pathRef.current = loc.pathname }, [loc.pathname])
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    let handle: { remove: () => void } | undefined
+    import('@capacitor/app').then(({ App: CapApp }) => {
+      CapApp.addListener('backButton', () => {
+        if (runBackHandlers()) return        // a page closed a modal/panel
+        if (pathRef.current !== '/') navigate(-1) // step back a screen
+        else CapApp.exitApp()                // already home → leave the app
+      }).then((h) => { handle = h })
+    }).catch(() => {})
+    return () => { handle?.remove() }
+  }, [navigate])
+}
+
 export default function App() {
   const { user } = useAuth()
+  useAndroidBackButton()
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />

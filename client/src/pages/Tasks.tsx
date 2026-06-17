@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
+import { pushBackHandler } from '../back'
 
 // Date the task was GIVEN to its owner — drives grouping, ordering, and the Time
 // column. Using the given date (not the latest activity) means completing a task
@@ -48,6 +49,13 @@ export default function Tasks() {
   }
   useEffect(() => { load() }, [filters])
   useEffect(() => { api.get('/users').then(setUsers) }, [])
+
+  // Android back button: close the open task drawer / new-task modal first.
+  useEffect(() => pushBackHandler(() => {
+    if (showNew) { setShowNew(false); return true }
+    if (openId) { setOpenId(null); return true }
+    return false
+  }), [showNew, openId])
 
   const isManager = user?.role !== 'employee'
   // A row is "narrowed" when a server filter or a non-default quick view is active —

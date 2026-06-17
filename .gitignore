@@ -4,3 +4,13 @@ server/.env
 dist/
 *.log
 .DS_Store
+*.apk
+client/tsconfig.tsbuildinfo
+
+# Android (Capacitor) generated build artifacts & machine-specific config
+client/android/.gradle/
+client/android/build/
+client/android/app/build/
+client/android/capacitor-cordova-android-plugins/build/
+client/android/.idea/
+client/android/local.properties
