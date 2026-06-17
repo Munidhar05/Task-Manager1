@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, EmptyState } from '../ui'
+import { pushBackHandler } from '../back'
 
 interface Member { id: string; name: string; avatar_color?: string; avatar_file?: string | null; role: string }
 interface Conversation {
@@ -139,6 +140,19 @@ export default function Chats() {
   useEffect(() => { if (activeId) { loadThread(activeId); setReplyTo(null); setEditing(null); setInSearch(''); setInSearchOpen(false); setShowInfo(false) } }, [activeId])
   useEffect(() => { if (!inSearchOpen) logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [messages, busy, typingName, inSearchOpen])
   useEffect(() => { const h = () => { setMenuId(null); setReactFor(null); setConvoMenu(null) }; document.addEventListener('click', h); return () => document.removeEventListener('click', h) }, [])
+
+  // Android back button: close the top-most open layer (menu → modal → search →
+  // conversation list) instead of leaving Chats / quitting the app.
+  useEffect(() => pushBackHandler(() => {
+    if (menuId || reactFor || convoMenu) { setMenuId(null); setReactFor(null); setConvoMenu(null); return true }
+    if (forwardMsg) { setForwardMsg(null); return true }
+    if (showStarred) { setShowStarred(false); return true }
+    if (showInfo) { setShowInfo(false); return true }
+    if (showNew) { setShowNew(false); return true }
+    if (inSearchOpen) { setInSearchOpen(false); setInSearch(''); return true }
+    if (navOpen) { setNavOpen(false); return true }
+    return false
+  }), [menuId, reactFor, convoMenu, forwardMsg, showStarred, showInfo, showNew, inSearchOpen, navOpen])
 
   // WebSocket: messages, edits, reactions, deletes, reads, typing, membership changes.
   useEffect(() => {
