@@ -4,6 +4,8 @@ server/.env
 dist/
 *.log
 .DS_Store
+*.apk
+client/tsconfig.tsbuildinfo
 
 # Android (Capacitor) generated build artifacts & machine-specific config
 client/android/.gradle/
