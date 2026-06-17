@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Capacitor } from '@capacitor/core'
 import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { LANG_LABEL } from '../ui'
@@ -272,6 +273,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const [provider, setProvider] = useState('none')
   const [mode, setMode] = useState<'auto' | 'browser'>('browser')
   const [recording, setRecording] = useState(false)
+  const [paused, setPaused] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
@@ -283,7 +285,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const wsRef = useRef<WebSocket | null>(null)
   const pcmRef = useRef<PcmStream | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const recordingRef = useRef(false)
+  const recordingRef = useRef(false)  // true only while actively capturing (false when paused)
+  const pausedRef = useRef(false)
   const speakerRef = useRef(speaker)
   useEffect(() => { speakerRef.current = speaker }, [speaker])
   const transcriptRef = useRef('')
@@ -303,10 +306,10 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   }, [])
 
   useEffect(() => {
-    if (!recording) return
+    if (!recording || paused) return
     const id = setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => clearInterval(id)
-  }, [recording])
+  }, [recording, paused])
 
   // stop & clean up on unmount
   useEffect(() => () => {
@@ -315,6 +318,29 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     try { pcmRef.current?.stop() } catch {}
     try { wsRef.current?.close() } catch {}
     streamRef.current?.getTracks().forEach((t) => t.stop())
+    keepScreenAwake(false)
+  }, [])
+
+  // Keep the device screen on while a meeting is in progress (native only) — the
+  // WebView (and thus recording) is suspended if the screen sleeps.
+  const keepScreenAwake = (on: boolean) => {
+    if (!Capacitor.isNativePlatform()) return
+    import('@capacitor-community/keep-awake')
+      .then(({ KeepAwake }) => (on ? KeepAwake.keepAwake() : KeepAwake.allowSleep()))
+      .catch(() => {})
+  }
+
+  // Treat the app being backgrounded mid-capture (incoming call, screen lock,
+  // home button) as an interruption: pause and surface a Resume button.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    let handle: { remove: () => void } | undefined
+    import('@capacitor/app').then(({ App }) => {
+      App.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive && recordingRef.current) pauseRecording()
+      }).then((h) => { handle = h })
+    }).catch(() => {})
+    return () => { handle?.remove() }
   }, [])
 
   const appendLine = (text: string) => {
@@ -378,6 +404,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
     catch { setErr('Microphone permission denied. Allow mic access and try again.'); return }
     streamRef.current = stream
+    // A phone call grabs the mic → the track mutes/ends; treat that as an interruption.
+    stream.getAudioTracks().forEach((t) => {
+      t.onmute = () => { if (recordingRef.current) pauseRecording() }
+      t.onended = () => { if (recordingRef.current) pauseRecording() }
+    })
     recordingRef.current = true
     setRecording(true)
     ;(async () => {
@@ -446,18 +477,52 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     try { rec.start() } catch {}
   }
 
-  const start = () => {
-    setSeconds(0)
+  // Spin up the capture engine for the current mode (used by both start & resume).
+  const beginCapture = () => {
     if (mode === 'auto') { provider === 'sarvam' ? startSarvamStream() : startAuto() }
     else startBrowser()
   }
-  const stop = () => {
-    recordingRef.current = false
-    setRecording(false)
-    setInterim('')
+  // Tear down the active capture engine without ending the session/transcript.
+  const teardownEngines = () => {
     try { recRef.current?.stop() } catch {}
     try { pcmRef.current?.stop(); pcmRef.current = null } catch {}
     try { wsRef.current?.close(); wsRef.current = null } catch {}
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null } catch {}
+  }
+
+  const start = () => {
+    setSeconds(0)
+    setPaused(false); pausedRef.current = false
+    keepScreenAwake(true)
+    beginCapture()
+  }
+
+  // Interruption: stop capturing but keep the session + transcript; show Resume.
+  const pauseRecording = () => {
+    if (!recordingRef.current || pausedRef.current) return
+    recordingRef.current = false   // halts capture loops / auto-restart
+    pausedRef.current = true
+    setPaused(true)
+    setTranscribing(false); setInterim('')
+    teardownEngines()
+  }
+  // Resume after an interruption: spin a fresh engine (old mic/ws may be dead).
+  const resumeRecording = () => {
+    if (!pausedRef.current) return
+    pausedRef.current = false
+    setPaused(false)
+    keepScreenAwake(true)
+    beginCapture()
+  }
+
+  const stop = () => {
+    recordingRef.current = false
+    pausedRef.current = false
+    setRecording(false)
+    setPaused(false)
+    setInterim('')
+    teardownEngines()
+    keepScreenAwake(false)
   }
 
   const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -512,15 +577,31 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             </div>
             <div className="muted" style={{ alignSelf: 'end', fontSize: 12 }}>Summary &amp; tasks: <b>English</b></div>
             <div style={{ alignSelf: 'end' }} className="muted">
-              {recording ? <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span> : 'Ready'}
+              {recording
+                ? paused
+                  ? <span style={{ color: '#f59e0b', fontWeight: 700 }}>❚❚ PAUSED {mmss}</span>
+                  : <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span>
+                : 'Ready'}
             </div>
           </div>
 
+          {recording && paused && (
+            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+              ❚❚ <b>Meeting paused</b> — recording was interrupted (e.g. a phone call, or the screen turned off). Tap <b>Resume meeting</b> to continue capturing.
+            </div>
+          )}
           <div className="row" style={{ gap: 10 }}>
-            {!recording
-              ? <button className="btn btn-primary" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
-              : <button className="btn btn-danger" onClick={stop}>■ Stop</button>}
-            {recording && transcribing && <span className="spinner" />}
+            {!recording ? (
+              <button className="btn btn-primary" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
+            ) : paused ? (
+              <>
+                <button className="btn btn-primary" onClick={resumeRecording}>▶ Resume meeting</button>
+                <button className="btn btn-danger" onClick={stop}>■ Stop</button>
+              </>
+            ) : (
+              <button className="btn btn-danger" onClick={stop}>■ Stop</button>
+            )}
+            {recording && !paused && transcribing && <span className="spinner" />}
           </div>
 
           <div>
