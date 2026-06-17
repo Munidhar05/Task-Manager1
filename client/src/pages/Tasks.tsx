@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { api, Task, User } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, dueLabel, fmtDateTime } from '../ui'
+import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
+import TaskBoard from '../components/TaskBoard'
 
-// Most recent meaningful timestamp for a task, used for the Time column + sorting.
-const activityOf = (t: Task) => t.completed_at || t.submitted_at || t.assigned_at || t.updated_at || t.created_at || ''
-const activityLabel = (t: Task) =>
-  t.completed_at ? '✅ Completed' : t.submitted_at ? '📩 Submitted' : t.assigned_at ? '📌 Assigned' : '🆕 Created'
+// Date the task was GIVEN to its owner — drives grouping, ordering, and the Time
+// column. Using the given date (not the latest activity) means completing a task
+// or sending it to review never bumps it to Today or to the top of the table.
+const givenOf = (t: Task) => t.assigned_at || t.created_at || ''
+const givenLabel = (t: Task) => (t.assigned_at ? '📌 Assigned' : '🆕 Created')
 
 // Sortable columns. Ranks make Priority/Status sort by logical order (not alphabetically);
 // tasks with no due date sort last. Each returns an ascending-order comparator value.
@@ -22,7 +24,7 @@ const cmpAsc = (a: Task, b: Task, key: SortKey): number => {
     // Unassigned tasks sort last (high sentinel) regardless of name comparison.
     case 'assignee': return (a.assignee?.name || '￿').localeCompare(b.assignee?.name || '￿', undefined, { sensitivity: 'base' })
     case 'due': return (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31')
-    case 'time': return activityOf(a).localeCompare(activityOf(b))
+    case 'time': return givenOf(a).localeCompare(givenOf(b))
   }
 }
 
@@ -32,6 +34,8 @@ export default function Tasks() {
   const [users, setUsers] = useState<User[]>([])
   const [openId, setOpenId] = useState<string | null>(null)
   const [showNew, setShowNew] = useState(false)
+  const [view, setView] = useState<'list' | 'board'>('list')
+  const [quickView, setQuickView] = useState<'active' | 'overdue' | 'today' | 'completed'>('active')
   const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: '', status: '', assignee: '' })
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'time', dir: 'desc' })
   // Click a header: toggle direction if it's the active column, else switch to it (default desc).
@@ -46,14 +50,47 @@ export default function Tasks() {
   useEffect(() => { api.get('/users').then(setUsers) }, [])
 
   const isManager = user?.role !== 'employee'
+  // A row is "narrowed" when a server filter or a non-default quick view is active —
+  // used to tailor the empty-state copy (and offer a Clear button).
+  const narrowed = !!(filters.q || filters.priority || filters.status || filters.assignee) || quickView === 'overdue' || quickView === 'today'
+  const clearFilters = () => { setFilters({ q: '', priority: '', status: '', assignee: '' }); setQuickView('active') }
+
+  // Quick views split the list into ACTIVE work vs the COMPLETED archive.
+  // A completed task = status 'Done' (employee tasks reach 'Done' only once a
+  // manager accepts them); these are removed from the active list and shown,
+  // with their assigned + completed dates, in the Completed view.
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const matchesQuick = (t: Task, key: typeof quickView) => {
+    switch (key) {
+      case 'completed': return t.status === 'Done'
+      case 'overdue': return !!t.due_date && t.due_date < todayStr && t.status !== 'Done'
+      case 'today': return t.due_date === todayStr && t.status !== 'Done'
+      default: return t.status !== 'Done' // 'active'
+    }
+  }
+  const visibleTasks = tasks.filter((t) => matchesQuick(t, quickView))
+  const QUICK_CHIPS: { key: typeof quickView; label: string; danger?: boolean }[] = [
+    { key: 'active', label: 'Active' },
+    { key: 'overdue', label: 'Overdue', danger: true },
+    { key: 'today', label: 'Due today' },
+    { key: 'completed', label: '✓ Completed' },
+  ]
+
+  // Left-edge accent on each row by due-date urgency (overdue/today) or completion.
+  const rowClass = (t: Task) => {
+    if (t.status === 'Done') return 'row-done'
+    if (t.due_date && t.due_date < todayStr) return 'row-overdue'
+    if (t.due_date === todayStr) return 'row-today'
+    return ''
+  }
 
   // Group tasks by their activity day, sort WITHIN each day by the active column,
   // and keep the day groups newest-first — so changing the sort only reorders rows
   // inside a date, never the dates themselves.
   const groupedByDay = (() => {
     const groups: Record<string, Task[]> = {}
-    for (const t of tasks) {
-      const day = (activityOf(t) || '').slice(0, 10) || 'No date'
+    for (const t of visibleTasks) {
+      const day = (givenOf(t) || '').slice(0, 10) || 'No date'
       ;(groups[day] ||= []).push(t)
     }
     for (const day in groups) {
@@ -83,6 +120,12 @@ export default function Tasks() {
     api.patch(`/tasks/${taskId}`, { assignee_id: userId }).then(load)
   }
 
+  // Board drag-and-drop: optimistically move the card, then persist via the status API.
+  const moveStatus = (taskId: string, status: string) => {
+    setTasks((ts) => ts.map((t) => (t.id === taskId ? { ...t, status } : t)))
+    api.post(`/tasks/${taskId}/status`, { status }).then(load).catch(() => load())
+  }
+
   // Clickable, sortable column header. Active column shows the direction arrow; the
   // others show a faint ↕ to hint they're sortable too.
   const sortTh = (label: string, key: SortKey) => (
@@ -92,7 +135,7 @@ export default function Tasks() {
   )
 
   const renderRow = (t: Task) => (
-    <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
+    <tr key={t.id} className={'clickable ' + rowClass(t)} onClick={() => setOpenId(t.id)}>
       <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
       <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
       <td data-label="Status"><StatusBadge s={t.status} /></td>
@@ -116,9 +159,25 @@ export default function Tasks() {
       </td>
       <td data-label="Due">{dueLabel(t)}</td>
       <td data-label="Time">
-        <div style={{ fontSize: 12.5 }}>{fmtDateTime(activityOf(t))}</div>
-        <div className="muted" style={{ fontSize: 11 }}>{activityLabel(t)}</div>
+        <div style={{ fontSize: 12.5 }}>{fmtDateTime(givenOf(t))}</div>
+        <div className="muted" style={{ fontSize: 11 }}>{givenLabel(t)}</div>
       </td>
+    </tr>
+  )
+
+  // Completed archive: accepted/done tasks, newest completion first, with both dates.
+  const completedRows = [...visibleTasks].sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
+  const renderCompletedRow = (t: Task) => (
+    <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
+      <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div></td>
+      <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
+      <td data-label="Assignee">
+        {t.assignee
+          ? <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
+          : <span className="muted">Unassigned</span>}
+      </td>
+      <td data-label="Assigned">{fmtDateTime(givenOf(t))}</td>
+      <td data-label="Completed"><span style={{ color: '#10b981', fontWeight: 600 }}>{fmtDateTime(t.completed_at)}</span></td>
     </tr>
   )
 
@@ -139,34 +198,111 @@ export default function Tasks() {
             {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
         )}
-        <div className="row" style={{ marginLeft: 'auto', gap: 6 }}>
+        <div className="row" style={{ marginLeft: 'auto', gap: 8 }}>
+          <div className="seg">
+            <button className={'seg-btn' + (view === 'list' ? ' active' : '')} onClick={() => setView('list')} title="List view">☰ List</button>
+            <button className={'seg-btn' + (view === 'board' ? ' active' : '')} onClick={() => setView('board')} title="Board view">▤ Board</button>
+          </div>
           <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New task</button>
         </div>
       </div>
 
-      <div className="card table-card-wrap">
-        <table className="table-cards">
-          <thead><tr>
-            {sortTh('Task', 'task')}
-            {sortTh('Priority', 'priority')}
-            {sortTh('Status', 'status')}
-            {sortTh('Assignee', 'assignee')}
-            {sortTh('Due', 'due')}
-            {sortTh('Time', 'time')}
-          </tr></thead>
-          <tbody>
-            {groupedByDay.map((g) => (
-              <React.Fragment key={g.day}>
-                <tr className="day-group-row">
-                  <td colSpan={6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
-                </tr>
-                {g.items.map(renderRow)}
-              </React.Fragment>
-            ))}
-            {tasks.length === 0 && <tr><td colSpan={6} className="empty">No tasks match your filters.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      {view === 'board' ? (
+        tasks.length === 0 ? (
+          <div className="card">
+            <EmptyState
+              icon="🎉"
+              title="You're all caught up!"
+              hint={isManager
+                ? 'No tasks yet. Create one to start tracking work.'
+                : 'No tasks assigned to you yet. Create a personal task to get started.'}
+              action={<button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New task</button>}
+            />
+          </div>
+        ) : (
+          <TaskBoard tasks={tasks} onOpen={setOpenId} onMove={moveStatus} />
+        )
+      ) : (
+        <>
+          {tasks.length > 0 && (
+            <div className="chips">
+              {QUICK_CHIPS.map((c) => {
+                const count = tasks.filter((t) => matchesQuick(t, c.key)).length
+                return (
+                  <button
+                    key={c.key}
+                    className={'chip' + (c.danger ? ' danger' : '') + (quickView === c.key ? ' active' : '')}
+                    onClick={() => setQuickView(c.key)}
+                  >
+                    {c.label}
+                    <span className="chip-count">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {visibleTasks.length === 0 ? (
+            <div className="card">
+              {quickView === 'completed' ? (
+                <EmptyState
+                  icon="📦"
+                  title="No completed tasks yet"
+                  hint="Tasks marked Done and accepted by a manager will appear here, with their assigned and completed dates."
+                />
+              ) : narrowed ? (
+                <EmptyState
+                  icon="🔍"
+                  title="No tasks match your filters"
+                  hint="Try a different search term, or clear the filters to see everything."
+                  action={<button className="btn btn-sm" onClick={clearFilters}>Clear filters</button>}
+                />
+              ) : (
+                <EmptyState
+                  icon="🎉"
+                  title="You're all caught up!"
+                  hint={isManager
+                    ? 'No active tasks. Create one to start tracking work.'
+                    : 'No active tasks assigned to you. Create a personal task to get started.'}
+                  action={<button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New task</button>}
+                />
+              )}
+            </div>
+          ) : quickView === 'completed' ? (
+            <div className="card table-card-wrap">
+              <table className="table-cards">
+                <thead><tr>
+                  <th>Task</th><th>Priority</th><th>Assignee</th><th>Assigned</th><th>Completed ↓</th>
+                </tr></thead>
+                <tbody>{completedRows.map(renderCompletedRow)}</tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="card table-card-wrap">
+              <table className="table-cards">
+                <thead><tr>
+                  {sortTh('Task', 'task')}
+                  {sortTh('Priority', 'priority')}
+                  {sortTh('Status', 'status')}
+                  {sortTh('Assignee', 'assignee')}
+                  {sortTh('Due', 'due')}
+                  {sortTh('Time', 'time')}
+                </tr></thead>
+                <tbody>
+                  {groupedByDay.map((g) => (
+                    <React.Fragment key={g.day}>
+                      <tr className="day-group-row">
+                        <td colSpan={6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
+                      </tr>
+                      {g.items.map(renderRow)}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
 
       {openId && <TaskDrawer taskId={openId} onClose={() => setOpenId(null)} onChange={load} />}
       {showNew && <NewTaskModal users={users} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}

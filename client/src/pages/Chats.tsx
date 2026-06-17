@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
-import { Avatar } from '../ui'
+import { Avatar, EmptyState } from '../ui'
 
 interface Member { id: string; name: string; avatar_color?: string; avatar_file?: string | null; role: string }
 interface Conversation {
@@ -433,7 +433,18 @@ export default function Chats() {
           )}
 
           <div className="chat-log" ref={logRef}>
-            {!active && <div className="empty" style={{ margin: 'auto' }}>Select a chat or start a new one</div>}
+            {!active && (
+              <div style={{ margin: 'auto' }}>
+                <EmptyState
+                  icon="💬"
+                  title={convos.length ? 'Select a conversation' : 'No conversations yet'}
+                  hint={convos.length
+                    ? 'Choose a chat from the list to read and reply to messages.'
+                    : 'Start a new chat with a teammate or create a group to begin messaging.'}
+                  action={!convos.length ? <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>＋ New chat</button> : undefined}
+                />
+              </div>
+            )}
             {active && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}>{inSearch ? 'No matching messages' : <>No messages yet.<br />Say hello 👋</>}</div>}
             {logItems.map((it, idx) => {
               if ('sep' in it) return <div key={'sep' + idx} className="date-sep"><span>{it.sep}</span></div>

@@ -199,7 +199,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
             <div><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
           </div>
           <div><label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this meeting about?" /></div>
-          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} /></div>
+          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} autoSelectAll /></div>
 
           {mode === 'audio' ? (
             <div>
@@ -485,7 +485,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             <div><label>Speaker label</label><input value={speaker} onChange={(e) => setSpeaker(e.target.value)} /></div>
           </div>
           <div><label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this meeting about?" /></div>
-          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} /></div>
+          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} autoSelectAll /></div>
 
           <div>
             <label>Recognition mode</label>
