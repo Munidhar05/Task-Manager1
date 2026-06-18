@@ -79,6 +79,6 @@ export interface Task {
   assignee?: User; assignedBy?: User; assignee_name_raw?: string; assigned_by_name_raw?: string
   project?: { id: string; name: string }; meeting_id?: string
   assigned_at?: string; submitted_at?: string; completed_at?: string; created_at?: string; updated_at?: string
-  visible_to_manager?: number
+  visible_to_manager?: number; parent_task_id?: string | null
   subtasks?: Task[]; comments?: any[]; dependencies?: any[]; attachments?: any[]
 }

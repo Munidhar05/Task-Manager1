@@ -22,6 +22,28 @@ function hydrate(t) {
   return { ...t, assignee, assignedBy, project, subtasks, comments, dependencies: deps, attachments }
 }
 
+// Roll a split parent's status up from its children: once every shared part is
+// Done the parent auto-completes; if a part is later reopened, the parent reopens
+// too — so the owner stays accountable and the roll-up stays honest.
+function syncParentStatus(parentId) {
+  if (!parentId) return
+  const parent = db.prepare('SELECT * FROM tasks WHERE id=?').get(parentId)
+  if (!parent) return
+  const kids = db.prepare('SELECT status FROM tasks WHERE parent_task_id=?').all(parentId)
+  if (!kids.length) return
+  const allDone = kids.every((k) => k.status === 'Done')
+  if (allDone && parent.status !== 'Done') {
+    db.prepare('UPDATE tasks SET status=?, progress=100, completed_at=?, updated_at=? WHERE id=?')
+      .run('Done', now(), now(), parentId)
+    notify(parent.org_id, parent.assignee_id, 'task_approved', `All parts of "${parent.title}" are done — task completed`, parentId)
+    indexTask(parentId)
+  } else if (!allDone && parent.status === 'Done') {
+    db.prepare('UPDATE tasks SET status=?, progress=?, completed_at=NULL, updated_at=? WHERE id=?')
+      .run('Reopened', Math.min(parent.progress ?? 0, 80), now(), parentId)
+    indexTask(parentId)
+  }
+}
+
 // LIST with filters: ?status=&priority=&assignee=&project=&meeting=&mine=1&q=
 r.get('/', (req, res) => {
   const { status, priority, assignee, project, meeting, mine, q, confidence } = req.query
@@ -120,6 +142,7 @@ r.patch('/:id', (req, res) => {
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id=?`).run(...args)
   audit(req.user.org_id, req.user.id, 'task.update', 'task', t.id, b)
   if (newlyAssigned) notify(t.org_id, newlyAssigned, 'task_assigned', `${req.user.name} assigned you "${t.title}"`, t.id)
+  if (t.parent_task_id && 'status' in b) syncParentStatus(t.parent_task_id)
   indexTask(t.id) // re-index on edit (title/desc/assignee/status may have changed)
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
@@ -145,8 +168,53 @@ r.post('/:id/status', (req, res) => {
   if (status === 'In Review') {
     notifyManagers(t.org_id, 'task_submitted', `${req.user.name} submitted "${t.title}" for approval`, t.id, req.user.id)
   }
+  if (t.parent_task_id) syncParentStatus(t.parent_task_id) // a shared part changed → re-roll the parent
   indexTask(t.id) // status change updates the embedded metadata
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+})
+
+// SPLIT — the task owner (or a manager) distributes parts of a task to peers as
+// child tasks. Each part becomes a visible subtask assigned to a colleague, who
+// is notified. The split always surfaces the parent to managers (visibility).
+r.post('/:id/split', (req, res) => {
+  const parent = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!parent) return res.status(404).json({ error: 'Not found' })
+  const isManager = req.user.role === 'manager' || req.user.role === 'admin'
+  if (!isManager && parent.assignee_id !== req.user.id) {
+    return res.status(403).json({ error: 'Only the task owner can split this task.' })
+  }
+  if (parent.parent_task_id) return res.status(400).json({ error: 'A shared part cannot be split again.' })
+
+  const parts = (Array.isArray(req.body?.parts) ? req.body.parts : [])
+    .map((p) => ({ title: String(p?.title || '').trim(), assignee_id: p?.assignee_id || null }))
+    .filter((p) => p.title && p.assignee_id)
+  if (!parts.length) return res.status(400).json({ error: 'Add at least one part with a title and a person.' })
+
+  for (const p of parts) {
+    const assignee = db.prepare('SELECT id, name FROM users WHERE id=? AND org_id=?').get(p.assignee_id, req.user.org_id)
+    if (!assignee) continue
+    const cid = id('task')
+    db.prepare(`INSERT INTO tasks
+      (id, org_id, title, description, assignee_id, assigned_by_id, due_date, due_date_raw, priority, status,
+       project_id, department_id, meeting_id, ownership_confidence, parent_task_id, progress, approval_status, source_quote,
+       assigned_at, visible_to_manager, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      cid, parent.org_id, p.title, '', assignee.id, req.user.id,
+      parent.due_date, parent.due_date_raw, parent.priority, 'To Do',
+      parent.project_id, parent.department_id, parent.meeting_id,
+      'high', parent.id, 0, 'none', null, now(), 1, now(), now())
+    audit(parent.org_id, req.user.id, 'task.split', 'task', cid, p.title)
+    indexTask(cid)
+    if (assignee.id !== req.user.id) {
+      notify(parent.org_id, assignee.id, 'task_assigned', `${req.user.name} shared a part of "${parent.title}" with you: ${p.title}`, cid)
+    }
+  }
+  // Splitting makes the parent (and its parts) visible to managers for oversight.
+  if (!parent.visible_to_manager) {
+    db.prepare('UPDATE tasks SET visible_to_manager=1, updated_at=? WHERE id=?').run(now(), parent.id)
+    indexTask(parent.id)
+  }
+  res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(parent.id)))
 })
 
 // APPROVAL workflow (managers/admins)
