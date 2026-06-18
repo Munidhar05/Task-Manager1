@@ -80,16 +80,16 @@ r.get('/:id', (req, res) => {
 r.post('/', (req, res) => {
   const b = req.body || {}
   if (!b.title) return res.status(400).json({ error: 'title required' })
-  const isEmployee = req.user.role === 'employee'
-  // A PRIVATE self-task — an employee's draft, or a manager's personal to-do
-  // (b.personal) — is owned by the creator and hidden from everyone else.
-  // Managers otherwise create normal, visible, assignable tasks.
-  const selfOnly = isEmployee || !!b.personal
-  const assignee = selfOnly
+  // A personal task (b.personal — a private to-do / My Tasks) is owned by the
+  // creator and hidden from everyone else. Otherwise ANYONE may assign the task
+  // to ANYONE in the org (employee→employee, employee→manager, …) or leave it
+  // unassigned.
+  const personal = !!b.personal
+  const assignee = personal
     ? { id: req.user.id }
     : (b.assignee_id ? db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(b.assignee_id, req.user.org_id) : null)
-  const visible = selfOnly ? 0 : 1
-  const confidence = selfOnly ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
+  const visible = personal ? 0 : 1
+  const confidence = personal ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
   const priority = b.priority || 'Medium'
   // Auto-fill the due date from priority when the caller didn't supply one.
   const dueDate = b.due_date || dueDateForPriority(priority)
@@ -105,6 +105,10 @@ r.post('/', (req, res) => {
     confidence, b.parent_task_id || null,
     0, 'none', b.source_quote || null, assignee ? now() : null, visible, now(), now())
   audit(req.user.org_id, req.user.id, 'task.create', 'task', tid, b.title)
+  // Notify the assignee when someone assigns them a task (not their own).
+  if (assignee && assignee.id !== req.user.id) {
+    notify(req.user.org_id, assignee.id, 'task_assigned', `${req.user.name} assigned you "${b.title}"`, tid)
+  }
   indexTask(tid) // fire-and-forget RAG indexing
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(tid)))
 })

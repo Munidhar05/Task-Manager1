@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api, Task, User } from '../api'
 import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime } from '../ui'
@@ -328,26 +328,62 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; personal?: boolean; onClose: () => void; onCreated: () => void }) {
   const { user } = useAuth()
   const isEmployee = user?.role === 'employee'
-  // asPersonal = a private self-task: always for employees, and for managers in My Tasks.
-  const asPersonal = personal || isEmployee
-  const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: '', due_date: '' })
+  // Private only in My Tasks (personal) mode. Everywhere else, anyone may assign
+  // the task to anyone — so the assignee picker is shown to everyone.
+  const asPersonal = !!personal
+  // Default the owner to yourself (so it shows in your list); managers triage, so
+  // they default to Unassigned.
+  const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: isEmployee ? (user?.id || '') : '', due_date: '' })
   const [busy, setBusy] = useState(false)
   const save = async () => {
     if (!form.title) return
     setBusy(true)
     try { await api.post('/tasks', { ...form, personal: asPersonal }); onCreated() } finally { setBusy(false) }
   }
+
+  // ---- Voice input: dictate the task title (Web Speech API). ----
+  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+  const recRef = useRef<any>(null)
+  const [listening, setListening] = useState(false)
+  useEffect(() => () => { try { recRef.current?.stop() } catch {} }, [])
+  const toggleMic = () => {
+    if (!SR) { alert('Voice input needs Google Chrome or Microsoft Edge.'); return }
+    if (listening) { try { recRef.current?.stop() } catch {}; setListening(false); return }
+    const rec = new SR()
+    rec.lang = 'en-IN'; rec.interimResults = true; rec.continuous = false
+    const base = form.title ? form.title.trim() + ' ' : ''
+    let finalText = ''
+    rec.onresult = (e: any) => {
+      let interim = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i]
+        if (r.isFinal) finalText += r[0].transcript + ' '; else interim += r[0].transcript
+      }
+      setForm((f: any) => ({ ...f, title: (base + finalText + interim).replace(/\s+/g, ' ').trimStart() }))
+    }
+    rec.onerror = () => setListening(false)
+    rec.onend = () => setListening(false)
+    recRef.current = rec; setListening(true)
+    try { rec.start() } catch { setListening(false) }
+  }
+
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread"><h3>{asPersonal ? 'New personal task' : 'New task'}</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
         <div className="card-pad grid" style={{ gap: 12 }}>
-          {asPersonal && <div className="muted" style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>🔒 Private to you — {personal ? 'only you can see this task.' : <>your manager won't see it until you open it and click <strong>Submit as complete</strong>.</>}</div>}
-          <div><label>Title</label><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></div>
+          {asPersonal && <div className="muted" style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>🔒 Private to you — only you can see this task.</div>}
+          <div>
+            <label>Title {listening && <span style={{ color: '#dc2626', fontWeight: 700, fontSize: 11 }}>● listening…</span>}</label>
+            <div className="row" style={{ gap: 6 }}>
+              <input style={{ flex: 1 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
+              {SR && <button type="button" className={'btn btn-sm' + (listening ? ' btn-danger' : '')} onClick={toggleMic} title="Dictate the task by voice">{listening ? '■ Stop' : '🎤 Speak'}</button>}
+            </div>
+          </div>
           <div><label>Description</label><textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>
             <div><label>Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
-            {!asPersonal && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>}
+            {!asPersonal && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}</select></div>}
             <div><label>Due date</label><input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></div>
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
