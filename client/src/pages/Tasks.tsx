@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Task, User } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime } from '../ui'
+import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime, PRIORITY_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
 import { pushBackHandler } from '../back'
@@ -130,6 +130,10 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     if (!userId) return
     api.patch(`/tasks/${taskId}`, { assignee_id: userId }).then(load)
   }
+  // Inline priority change from the report row (managers only).
+  const changePriority = (taskId: string, priority: string) => api.patch(`/tasks/${taskId}`, { priority }).then(load)
+  // Inline approve: a manager marks an In-Review task as Done straight from the row.
+  const markDone = (taskId: string) => api.post(`/tasks/${taskId}/approve`, { decision: 'approved' }).then(load)
 
   // Board drag-and-drop: optimistically move the card, then persist via the status API.
   const moveStatus = (taskId: string, status: string) => {
@@ -148,8 +152,26 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const renderRow = (t: Task) => (
     <tr key={t.id} className={'clickable ' + rowClass(t)} onClick={() => setOpenId(t.id)}>
       <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
-      <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
-      <td data-label="Status"><StatusBadge s={t.status} /></td>
+      <td data-label="Priority">
+        {isManager ? (
+          <select
+            value={t.priority}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => { e.stopPropagation(); changePriority(t.id, e.target.value) }}
+            style={{ width: 'auto', padding: '4px 8px', fontSize: 12.5, fontWeight: 700, color: PRIORITY_COLORS[t.priority], borderColor: (PRIORITY_COLORS[t.priority] || '#cbd5e1') + '88' }}
+          >
+            {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p} value={p} style={{ color: '#1f1a16' }}>{p}</option>)}
+          </select>
+        ) : <PriorityBadge p={t.priority} />}
+      </td>
+      <td data-label="Status">
+        <span className="row" style={{ gap: 8 }}>
+          <StatusBadge s={t.status} />
+          {isManager && t.status === 'In Review' && (
+            <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); markDone(t.id) }} title="Approve & mark as done">✓ Done</button>
+          )}
+        </span>
+      </td>
       {!personal && (
         <td data-label="Assignee">
           {t.assignee ? (
