@@ -29,7 +29,7 @@ const cmpAsc = (a: Task, b: Task, key: SortKey): number => {
   }
 }
 
-export default function Tasks() {
+export default function Tasks({ personal = false }: { personal?: boolean }) {
   const { user } = useAuth()
   const [tasks, setTasks] = useState<Task[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -45,6 +45,7 @@ export default function Tasks() {
   const load = () => {
     const p = new URLSearchParams()
     Object.entries(filters).forEach(([k, v]) => v && p.set(k, v))
+    if (personal) p.set('mine', '1') // My Tasks: only the current user's own tasks
     api.get('/tasks?' + p.toString()).then(setTasks)
   }
   useEffect(() => { load() }, [filters])
@@ -57,7 +58,9 @@ export default function Tasks() {
     return false
   }), [showNew, openId])
 
-  const isManager = user?.role !== 'employee'
+  // In "My Tasks" (personal) mode, behave like a personal board even for managers:
+  // own tasks only, no assignee column/picker, and new tasks are private.
+  const isManager = user?.role !== 'employee' && !personal
   // A row is "narrowed" when a server filter or a non-default quick view is active —
   // used to tailor the empty-state copy (and offer a Clear button).
   const narrowed = !!(filters.q || filters.priority || filters.status || filters.assignee) || quickView === 'overdue' || quickView === 'today'
@@ -147,24 +150,26 @@ export default function Tasks() {
       <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
       <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
       <td data-label="Status"><StatusBadge s={t.status} /></td>
-      <td data-label="Assignee">
-        {t.assignee ? (
-          <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
-        ) : isManager ? (
-          <select
-            className="btn btn-sm"
-            style={{ maxWidth: 150 }}
-            value=""
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => { e.stopPropagation(); assign(t.id, e.target.value) }}
-          >
-            <option value="">＋ Assign…</option>
-            {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-          </select>
-        ) : (
-          <span className="muted">Unassigned</span>
-        )}
-      </td>
+      {!personal && (
+        <td data-label="Assignee">
+          {t.assignee ? (
+            <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
+          ) : isManager ? (
+            <select
+              className="btn btn-sm"
+              style={{ maxWidth: 150 }}
+              value=""
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => { e.stopPropagation(); assign(t.id, e.target.value) }}
+            >
+              <option value="">＋ Assign…</option>
+              {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          ) : (
+            <span className="muted">Unassigned</span>
+          )}
+        </td>
+      )}
       <td data-label="Due">{dueLabel(t)}</td>
       <td data-label="Time">
         <div style={{ fontSize: 12.5 }}>{fmtDateTime(givenOf(t))}</div>
@@ -179,11 +184,13 @@ export default function Tasks() {
     <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
       <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div></td>
       <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
-      <td data-label="Assignee">
-        {t.assignee
-          ? <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
-          : <span className="muted">Unassigned</span>}
-      </td>
+      {!personal && (
+        <td data-label="Assignee">
+          {t.assignee
+            ? <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
+            : <span className="muted">Unassigned</span>}
+        </td>
+      )}
       <td data-label="Assigned">{fmtDateTime(givenOf(t))}</td>
       <td data-label="Completed"><span style={{ color: '#10b981', fontWeight: 600 }}>{fmtDateTime(t.completed_at)}</span></td>
     </tr>
@@ -280,7 +287,7 @@ export default function Tasks() {
             <div className="card table-card-wrap">
               <table className="table-cards">
                 <thead><tr>
-                  <th>Task</th><th>Priority</th><th>Assignee</th><th>Assigned</th><th>Completed ↓</th>
+                  <th>Task</th><th>Priority</th>{!personal && <th>Assignee</th>}<th>Assigned</th><th>Completed ↓</th>
                 </tr></thead>
                 <tbody>{completedRows.map(renderCompletedRow)}</tbody>
               </table>
@@ -292,7 +299,7 @@ export default function Tasks() {
                   {sortTh('Task', 'task')}
                   {sortTh('Priority', 'priority')}
                   {sortTh('Status', 'status')}
-                  {sortTh('Assignee', 'assignee')}
+                  {!personal && sortTh('Assignee', 'assignee')}
                   {sortTh('Due', 'due')}
                   {sortTh('Time', 'time')}
                 </tr></thead>
@@ -300,7 +307,7 @@ export default function Tasks() {
                   {groupedByDay.map((g) => (
                     <React.Fragment key={g.day}>
                       <tr className="day-group-row">
-                        <td colSpan={6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
+                        <td colSpan={personal ? 5 : 6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
                       </tr>
                       {g.items.map(renderRow)}
                     </React.Fragment>
@@ -313,32 +320,34 @@ export default function Tasks() {
       )}
 
       {openId && <TaskDrawer taskId={openId} onClose={() => setOpenId(null)} onChange={load} />}
-      {showNew && <NewTaskModal users={users} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
+      {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
     </>
   )
 }
 
-function NewTaskModal({ users, onClose, onCreated }: { users: User[]; onClose: () => void; onCreated: () => void }) {
+function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; personal?: boolean; onClose: () => void; onCreated: () => void }) {
   const { user } = useAuth()
   const isEmployee = user?.role === 'employee'
+  // asPersonal = a private self-task: always for employees, and for managers in My Tasks.
+  const asPersonal = personal || isEmployee
   const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: '', due_date: '' })
   const [busy, setBusy] = useState(false)
   const save = async () => {
     if (!form.title) return
     setBusy(true)
-    try { await api.post('/tasks', form); onCreated() } finally { setBusy(false) }
+    try { await api.post('/tasks', { ...form, personal: asPersonal }); onCreated() } finally { setBusy(false) }
   }
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="card-head spread"><h3>{isEmployee ? 'New personal task' : 'New task'}</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
+        <div className="card-head spread"><h3>{asPersonal ? 'New personal task' : 'New task'}</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
         <div className="card-pad grid" style={{ gap: 12 }}>
-          {isEmployee && <div className="muted" style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>🔒 Private to you — your manager won't see it until you open it and click <strong>Submit as complete</strong>.</div>}
+          {asPersonal && <div className="muted" style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>🔒 Private to you — {personal ? 'only you can see this task.' : <>your manager won't see it until you open it and click <strong>Submit as complete</strong>.</>}</div>}
           <div><label>Title</label><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></div>
           <div><label>Description</label><textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-          <div className={isEmployee ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>
+          <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>
             <div><label>Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
-            {!isEmployee && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>}
+            {!asPersonal && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>}
             <div><label>Due date</label><input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></div>
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>

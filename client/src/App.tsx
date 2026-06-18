@@ -22,6 +22,7 @@ const Icon = ({ children }: { children: React.ReactNode }) => (
 const ICONS = {
   dashboard: <Icon><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></Icon>,
   tasks: <Icon><rect x="3" y="3" width="18" height="18" rx="3" /><path d="m8.5 12 2.5 2.5L16 9" /></Icon>,
+  mytasks: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="m15 11 2 2 4-4" /></Icon>,
   chats: <Icon><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z" /></Icon>,
   meetings: <Icon><rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1" /><line x1="12" y1="19" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" /></Icon>,
   assistant: <Icon><path d="M12 2.5 14 8l5.5 2-5.5 2-2 5.5L10 12 4.5 10 10 8z" /><path d="M19 14.5 19.8 17l2.5.8-2.5.8L19 21l-.8-2.4-2.5-.8 2.5-.8z" /></Icon>,
@@ -31,6 +32,7 @@ const ICONS = {
 // The Manager is the Admin of the org: it owns the Administration hub
 // (org metrics, full user management & audit log).
 const NAV = [
+  { to: '/my-tasks', label: 'My Tasks', icon: ICONS.mytasks, roles: ['manager'] },
   { to: '/', label: 'Dashboard', icon: ICONS.dashboard, roles: ['manager', 'employee'] },
   { to: '/tasks', label: 'Tasks', icon: ICONS.tasks, roles: ['manager', 'employee'] },
   { to: '/chats', label: 'Chats', icon: ICONS.chats, roles: ['manager', 'employee'] },
@@ -40,6 +42,7 @@ const NAV = [
 ]
 
 const TITLES: Record<string, { t: string; s: string }> = {
+  '/my-tasks': { t: 'My Tasks', s: 'Your private personal tasks — visible only to you' },
   '/': { t: 'Dashboard', s: 'Your meeting-to-task command center' },
   '/tasks': { t: 'Tasks', s: 'Track the full task lifecycle' },
   '/chats': { t: 'Chats', s: 'Message your manager and teammates' },
@@ -179,6 +182,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/" element={<Protected><Home /></Protected>} />
+      <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
       <Route path="/chats" element={<Protected><Chats /></Protected>} />
       <Route path="/meetings" element={<Protected roles={['manager']}><Meetings /></Protected>} />

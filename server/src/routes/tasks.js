@@ -81,13 +81,15 @@ r.post('/', (req, res) => {
   const b = req.body || {}
   if (!b.title) return res.status(400).json({ error: 'title required' })
   const isEmployee = req.user.role === 'employee'
-  // An employee's new task is a PRIVATE self-task: owned by them, hidden from the
-  // manager until they submit it. Managers/admins create normal, visible tasks.
-  const assignee = isEmployee
+  // A PRIVATE self-task — an employee's draft, or a manager's personal to-do
+  // (b.personal) — is owned by the creator and hidden from everyone else.
+  // Managers otherwise create normal, visible, assignable tasks.
+  const selfOnly = isEmployee || !!b.personal
+  const assignee = selfOnly
     ? { id: req.user.id }
     : (b.assignee_id ? db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(b.assignee_id, req.user.org_id) : null)
-  const visible = isEmployee ? 0 : 1
-  const confidence = isEmployee ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
+  const visible = selfOnly ? 0 : 1
+  const confidence = selfOnly ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
   const priority = b.priority || 'Medium'
   // Auto-fill the due date from priority when the caller didn't supply one.
   const dueDate = b.due_date || dueDateForPriority(priority)
