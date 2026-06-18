@@ -14,6 +14,11 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const [pendingAssignee, setPendingAssignee] = useState('')
   // A status the user has picked but not yet confirmed — applied only on "Accept".
   const [pendingStatus, setPendingStatus] = useState('')
+  // Split & share: when open, `parts` holds the rows (each = a piece + a person).
+  const [showSplit, setShowSplit] = useState(false)
+  const [parts, setParts] = useState<{ title: string; assignee_id: string }[]>([])
+  const updatePart = (i: number, patch: Partial<{ title: string; assignee_id: string }>) =>
+    setParts((ps) => ps.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
 
   const load = () => api.get(`/tasks/${taskId}`).then(setTask)
   useEffect(() => { load(); api.get('/users').then(setUsers) }, [taskId])
@@ -33,6 +38,13 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const setProgress = (progress: number) => mutate(() => api.patch(`/tasks/${taskId}`, { progress }))
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
+  const openSplit = () => { setParts([{ title: task?.title || '', assignee_id: '' }]); setShowSplit(true) }
+  const doSplit = async () => {
+    const valid = parts.filter((p) => p.title.trim() && p.assignee_id)
+    if (!valid.length) return
+    await mutate(() => api.post(`/tasks/${taskId}/split`, { parts: valid }))
+    setShowSplit(false)
+  }
   const del = async () => {
     if (!window.confirm('Delete this task? This cannot be undone.')) return
     setBusy(true)
@@ -46,6 +58,12 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const isManager = user?.role !== 'employee'
   // Managers can delete anything; an employee can delete only their own private draft.
   const canDelete = isManager || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
+  // The task owner (or a manager) can split a top-level task into shared parts.
+  const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
+  const subs = task.subtasks || []
+  const subDone = subs.filter((s: any) => s.status === 'Done').length
+  const subPct = subs.length ? Math.round((subDone / subs.length) * 100) : 0
+  const lookupUser = (uid?: string | null) => users.find((u) => u.id === uid)
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -178,6 +196,37 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             )}
           </div>
 
+          {!task.parent_task_id && (subs.length > 0 || canSplit) && (
+            <div style={{ margin: '16px 0' }}>
+              <div className="spread">
+                <label style={{ margin: 0 }}>Shared parts{subs.length ? ` — ${subDone}/${subs.length} done` : ''}</label>
+                {canSplit && <button className="btn btn-sm" disabled={busy} onClick={openSplit}>✂ Split &amp; share</button>}
+              </div>
+              {subs.length > 0 ? (
+                <>
+                  <div className="bar-track" style={{ margin: '8px 0' }}><div className="bar-fill" style={{ width: subPct + '%', background: '#10b981' }} /></div>
+                  <div style={{ display: 'grid', gap: 2 }}>
+                    {subs.map((s: any) => {
+                      const u = lookupUser(s.assignee_id)
+                      return (
+                        <div key={s.id} className="spread" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid #f1f5f9' }}>
+                          <span>{s.status === 'Done' ? '✅' : '•'} {s.title}</span>
+                          <span className="row" style={{ gap: 6 }}>
+                            {u && <Avatar name={u.name} color={u.avatar_color} size={18} />}
+                            <span className="muted">{u?.name || '—'}</span>
+                            <StatusBadge s={s.status} />
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : (
+                <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>Break this task into parts and share them with colleagues. You stay responsible — it completes automatically when all parts are done.</p>
+              )}
+            </div>
+          )}
+
           {isManager && task.approval_status === 'pending' && (
             <div className="card-pad" style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, marginBottom: 16 }}>
               <strong>Approval requested</strong>
@@ -213,6 +262,32 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
           </div>
         </div>
+
+        {showSplit && (
+          <div className="modal-center" onClick={() => setShowSplit(false)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="card-head spread"><h3 style={{ fontSize: 16 }}>Split &amp; share</h3><button className="btn btn-ghost" onClick={() => setShowSplit(false)}>✕</button></div>
+              <div className="card-pad grid" style={{ gap: 10 }}>
+                <p className="muted" style={{ fontSize: 12 }}>Add each part and pick who does it. Parts inherit this task's due date &amp; priority. You stay responsible — it completes when all parts are done.</p>
+                {parts.map((p, i) => (
+                  <div className="row" key={i} style={{ gap: 8 }}>
+                    <input style={{ flex: 1 }} placeholder={`Part ${i + 1} — what needs doing`} value={p.title} onChange={(e) => updatePart(i, { title: e.target.value })} autoFocus={i === 0} />
+                    <select value={p.assignee_id} onChange={(e) => updatePart(i, { assignee_id: e.target.value })} style={{ maxWidth: 160 }}>
+                      <option value="">Who…</option>
+                      {users.filter((u) => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}
+                    </select>
+                    {parts.length > 1 && <button className="btn btn-ghost btn-sm" title="Remove" onClick={() => setParts((ps) => ps.filter((_, idx) => idx !== i))}>✕</button>}
+                  </div>
+                ))}
+                <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setParts((ps) => [...ps, { title: '', assignee_id: '' }])}>+ Add another part</button>
+                <div className="row" style={{ justifyContent: 'flex-end' }}>
+                  <button className="btn" onClick={() => setShowSplit(false)}>Cancel</button>
+                  <button className="btn btn-primary" disabled={busy || !parts.some((p) => p.title.trim() && p.assignee_id)} onClick={doSplit}>{busy ? <span className="spinner" /> : '✉ Share parts'}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -4,6 +4,15 @@ import { api, Suggestion } from '../api'
 import { PriorityBadge, StatusBadge, ConfidenceScore, Avatar, dueLabel, LANG_LABEL, defaultDueDate } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 
+// A textarea that grows to fit its content — so a long task wraps and is fully
+// readable instead of scrolling word-by-word inside a one-line input.
+function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = React.useRef<HTMLTextAreaElement>(null)
+  const fit = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }
+  React.useEffect(fit, [props.value])
+  return <textarea ref={ref} rows={1} {...props} onInput={fit} style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }} />
+}
+
 const SUMMARY_SECTIONS: { key: string; label: string; icon: string }[] = [
   { key: 'key_decisions', label: 'Key Decisions', icon: '✓' },
   { key: 'action_items', label: 'Action Items', icon: '→' },
@@ -296,9 +305,9 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
             return (
               <div key={r.id} style={{ border: '1px solid ' + (r._error ? '#ef444466' : '#e7ddd1'), borderRadius: 10, padding: 12 }}>
                 <div className="grid" style={{ gap: 8 }}>
-                  <div className="spread" style={{ gap: 8 }}>
-                    <input value={r.title} onChange={(e) => set(i, { title: e.target.value })} style={{ fontWeight: 600 }} />
-                    <ConfidenceScore score={r.confidence} />
+                  <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+                    <AutoTextarea value={r.title} onChange={(e) => set(i, { title: e.target.value })} style={{ fontWeight: 600, flex: 1 }} />
+                    <div style={{ paddingTop: 10, flexShrink: 0 }}><ConfidenceScore score={r.confidence} /></div>
                   </div>
                   <div className="grid grid-3" style={{ gap: 8 }}>
                     <div>
