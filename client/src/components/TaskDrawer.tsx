@@ -270,9 +270,9 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               <div className="card-pad grid" style={{ gap: 10 }}>
                 <p className="muted" style={{ fontSize: 12 }}>Add each part and pick who does it. Parts inherit this task's due date &amp; priority. You stay responsible — it completes when all parts are done.</p>
                 {parts.map((p, i) => (
-                  <div className="row" key={i} style={{ gap: 8 }}>
-                    <input style={{ flex: 1 }} placeholder={`Part ${i + 1} — what needs doing`} value={p.title} onChange={(e) => updatePart(i, { title: e.target.value })} autoFocus={i === 0} />
-                    <select value={p.assignee_id} onChange={(e) => updatePart(i, { assignee_id: e.target.value })} style={{ maxWidth: 160 }}>
+                  <div className="row split-part" key={i} style={{ gap: 8 }}>
+                    <input className="split-part-title" placeholder={`Part ${i + 1} — what needs doing`} value={p.title} onChange={(e) => updatePart(i, { title: e.target.value })} autoFocus={i === 0} />
+                    <select className="split-part-who" value={p.assignee_id} onChange={(e) => updatePart(i, { assignee_id: e.target.value })}>
                       <option value="">Who…</option>
                       {users.filter((u) => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}
                     </select>

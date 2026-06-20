@@ -93,8 +93,8 @@ export default function MeetingDetail() {
                 <div className="card-pad grid" style={{ gap: 10 }}>
                   {pending.map((sg) => (
                     <div key={sg.id} style={{ border: '1px solid ' + (sg.confidence < 50 ? '#f59e0b66' : '#e7ddd1'), borderRadius: 10, padding: 12, background: sg.confidence < 50 ? '#fffbeb' : '#fff' }}>
-                      <div className="spread">
-                        <div style={{ fontWeight: 600 }}>{sg.title}</div>
+                      <div className="spread" style={{ alignItems: 'flex-start', gap: 8 }}>
+                        <div style={{ fontWeight: 600, minWidth: 0, overflowWrap: 'anywhere' }}>{sg.title}</div>
                         <PriorityBadge p={sg.priority} />
                       </div>
                       <div className="row" style={{ gap: 10, marginTop: 6, flexWrap: 'wrap' }}>

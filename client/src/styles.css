@@ -60,6 +60,12 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .btn-tick:hover { background: #10b981; border-color: #10b981; color: #fff; transform: scale(1.08); box-shadow: 0 2px 6px rgba(16,185,129,.4); }
 .btn-tick:active { transform: scale(1); }
 
+/* Split & share rows: title grows, assignee select is capped so a long name
+   can't starve the title input. On phones the two stack full-width. */
+.split-part { align-items: center; }
+.split-part-title { flex: 1 1 auto; min-width: 0; }
+.split-part-who { flex: 0 0 160px; max-width: 160px; min-width: 0; }
+
 /* Voice "Speak" button: warm accent at rest, pulsing red while recording */
 .btn-mic { gap: 6px; color: var(--primary); background: #fff7f0; border-color: #f0c9a8; font-weight: 700; }
 .btn-mic:hover:not(:disabled) { background: #fdeede; border-color: var(--primary); }
@@ -646,6 +652,12 @@ tbody tr:hover { background: #f8fafc; }
   /* keep the grid-3 rows inside modals single-column on phones */
   .modal .grid-3 { grid-template-columns: 1fr; }
   .modal .grid-3 > [style*="span 2"] { grid-column: auto; }
+
+  /* Split & share: title takes the full first line; the assignee select fills the
+     next line so both are fully readable instead of squeezed side-by-side. */
+  .modal .split-part > .split-part-title { flex: 1 1 100%; }
+  .modal .split-part > .split-part-who { flex: 1 1 auto; max-width: none; }
+  .modal .split-part > .btn { flex: 0 0 auto; }
 
   /* dashboard: let the overdue table scroll inside its card rather than the page */
   .pbi-overdue .pbi-scroll { overflow-x: auto; }

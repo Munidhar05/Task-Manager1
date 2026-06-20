@@ -176,7 +176,7 @@ function cleanTitle(sentence, vocative) {
   for (let i = 0; i < 3 && TITLE_PREFIXES.test(s); i++) s = s.replace(TITLE_PREFIXES, '')
   s = s.replace(/\s+/g, ' ').trim().replace(/[.!?।]+$/, '')
   if (s.length > 0) s = s[0].toUpperCase() + s.slice(1)
-  if (s.length > 80) s = s.slice(0, 77).replace(/\s+\S*$/, '') + '…'
+  if (s.length > 120) s = s.slice(0, 117).replace(/\s+\S*$/, '') + '…'
   return s || sentence.slice(0, 60)
 }
 
