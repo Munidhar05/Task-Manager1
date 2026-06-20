@@ -2,13 +2,15 @@
 // Example speech: "Create a high priority task for Ravi to fix the login page bug before Friday."
 // → { title, description, assignee_name, priority, due_date_raw }
 //
-// Mirrors the provider chain used elsewhere: Claude (ANTHROPIC_API_KEY) first,
-// then OpenAI (OPENAI_API_KEY). When no key is set, the caller should fall back
-// to using the raw transcript as the title.
+// Mirrors the provider chain used by the meeting extractor: OpenRouter
+// (OPENROUTER_API_KEY) first, then Claude (ANTHROPIC_API_KEY), then OpenAI
+// (OPENAI_API_KEY). When no key is set, the caller should fall back to using the
+// raw transcript as the title.
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
-export const hasLLM = () => !!(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)
+export const hasLLM = () => !!(process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)
 
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
 
@@ -38,6 +40,27 @@ function parseJson(text) {
   const end = text.lastIndexOf('}')
   if (start === -1 || end === -1) return null
   try { return JSON.parse(text.slice(start, end + 1)) } catch { return null }
+}
+
+async function callOpenRouter(system, userMsg) {
+  const res = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost',
+      'X-Title': process.env.OPENROUTER_APP_NAME || 'SmartTask AI',
+    },
+    body: JSON.stringify({
+      model: process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
+      messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+    }),
+  })
+  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content || ''
 }
 
 async function callClaude(system, userMsg) {
@@ -80,20 +103,26 @@ async function callOpenAI(system, userMsg) {
 // Returns { title, description, assignee_name, priority, due_date_raw }. Throws if
 // no provider is configured or the call/parse fails — the route handles fallback.
 export async function parseSpokenTask(transcript, { users = [] } = {}) {
+  const hasOpenRouter = !!process.env.OPENROUTER_API_KEY
   const hasClaude = !!process.env.ANTHROPIC_API_KEY
   const hasOpenAI = !!process.env.OPENAI_API_KEY
-  if (!hasClaude && !hasOpenAI) throw new Error('No LLM configured')
+  if (!hasOpenRouter && !hasClaude && !hasOpenAI) throw new Error('No LLM configured')
 
   const userMsg = buildUserMsg(transcript, users)
+  // Try each configured provider in turn (OpenRouter → Claude → OpenAI), falling
+  // through on error so a single out-of-credits/quota provider doesn't break voice.
   let raw
-  if (hasClaude) {
-    try { raw = await callClaude(SYSTEM_PROMPT, userMsg) }
-    catch (err) {
-      if (!hasOpenAI) throw err
-      console.warn('[voiceTask] Claude failed, trying OpenAI:', err.message)
-    }
+  const providers = [
+    hasOpenRouter && { name: 'OpenRouter', call: callOpenRouter },
+    hasClaude && { name: 'Claude', call: callClaude },
+    hasOpenAI && { name: 'OpenAI', call: callOpenAI },
+  ].filter(Boolean)
+  let lastErr
+  for (const p of providers) {
+    try { raw = await p.call(SYSTEM_PROMPT, userMsg); if (raw) break }
+    catch (err) { lastErr = err; console.warn(`[voiceTask] ${p.name} failed, trying next:`, err.message) }
   }
-  if (raw === undefined && hasOpenAI) raw = await callOpenAI(SYSTEM_PROMPT, userMsg)
+  if (raw === undefined) throw lastErr || new Error('All providers failed')
 
   const obj = parseJson(raw)
   if (!obj || !obj.title) throw new Error('Empty model response')

@@ -395,10 +395,12 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
   // description, who it's for, and the priority, then fills the form. ----
   const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   const recRef = useRef<any>(null)
+  const manualStopRef = useRef(false) // true once the user taps Stop (or closes) — prevents auto-restart
+  const fatalRef = useRef(false)      // true on a non-recoverable error (e.g. mic blocked)
   const [listening, setListening] = useState(false)
   const [parsing, setParsing] = useState(false)
   const [heard, setHeard] = useState('')
-  useEffect(() => () => { try { recRef.current?.stop() } catch {} }, [])
+  useEffect(() => () => { manualStopRef.current = true; try { recRef.current?.stop() } catch {} }, [])
 
   // Send the spoken sentence to the server, which extracts structured fields, and
   // merge them in. The assignee is applied only when not in personal mode.
@@ -423,7 +425,10 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
 
   const toggleMic = () => {
     if (!SR) { alert('Voice input needs Google Chrome or Microsoft Edge.'); return }
-    if (listening) { try { recRef.current?.stop() } catch {}; setListening(false); return }
+    // Tapping while listening = explicit Stop: flag it so onend won't auto-restart.
+    if (listening) { manualStopRef.current = true; try { recRef.current?.stop() } catch {}; setListening(false); return }
+    manualStopRef.current = false
+    fatalRef.current = false
     const rec = new SR()
     rec.lang = 'en-IN'; rec.interimResults = true; rec.continuous = true
     rec.maxAlternatives = 1
@@ -458,14 +463,25 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
       finalText = finals.join(' ').replace(/\s+/g, ' ').trim()
       setHeard((finalText + ' ' + interim).replace(/\s+/g, ' ').trim())
     }
-    // 'no-speech'/'aborted' just end the session quietly; surface mic-permission errors.
+    // Mic blocked → fatal, stop for good. 'no-speech'/'aborted'/'network' are
+    // transient: let onend decide whether to keep listening.
     rec.onerror = (e: any) => {
-      setListening(false)
       if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
+        fatalRef.current = true
+        setListening(false)
         alert('Microphone access is blocked. Allow mic permission for this app and try again.')
       }
     }
-    rec.onend = () => { setListening(false); applyVoice(finalText) }
+    // Android stops on a brief silence. Unless the user tapped Stop (or a fatal
+    // error occurred), restart so it keeps listening until they explicitly stop.
+    rec.onend = () => {
+      if (manualStopRef.current || fatalRef.current) {
+        setListening(false)
+        applyVoice(finalText)
+      } else {
+        try { rec.start() } catch { setListening(false); applyVoice(finalText) }
+      }
+    }
     recRef.current = rec; setListening(true); setHeard('')
     try { rec.start() } catch { setListening(false) }
   }
