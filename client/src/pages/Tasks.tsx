@@ -12,6 +12,17 @@ import { pushBackHandler } from '../back'
 const givenOf = (t: Task) => t.assigned_at || t.created_at || ''
 const givenLabel = (t: Task) => (t.assigned_at ? '📌 Assigned' : '🆕 Created')
 
+// Mirror of the server's priority→due-date default (server/src/util.js) so the
+// New Task form SHOWS the date the task will actually get. Critical=today,
+// High=+1, Medium=+3, Low=+5 days. Local date parts (matches the server).
+const DUE_DAYS_BY_PRIORITY: Record<string, number> = { Critical: 0, High: 1, Medium: 3, Low: 5 }
+const dueDateForPriority = (priority: string) => {
+  const d = new Date()
+  d.setDate(d.getDate() + (DUE_DAYS_BY_PRIORITY[priority] ?? DUE_DAYS_BY_PRIORITY.Medium))
+  const y = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, '0'), da = String(d.getDate()).padStart(2, '0')
+  return `${y}-${mo}-${da}`
+}
+
 // Auto-growing textarea: wraps long text and grows with content so the whole
 // title is readable instead of scrolling word-by-word inside a one-line input.
 function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -392,7 +403,12 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
   const asPersonal = !!personal
   // Default the owner to yourself (so it shows in your list); managers triage, so
   // they default to Unassigned.
-  const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: isEmployee ? (user?.id || '') : '', due_date: '' })
+  const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: isEmployee ? (user?.id || '') : '', due_date: dueDateForPriority('Medium') })
+  // Once the user picks a date by hand, stop auto-syncing it to the priority.
+  const [dueManual, setDueManual] = useState(false)
+  // Change priority and keep the due date in step (unless the user set it by hand).
+  const setPriority = (priority: string) =>
+    setForm((f: any) => ({ ...f, priority, due_date: dueManual ? f.due_date : dueDateForPriority(priority) }))
   const [busy, setBusy] = useState(false)
   const save = async () => {
     if (!form.title) return
@@ -419,13 +435,19 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     setParsing(true)
     try {
       const d = await api.post('/tasks/parse-voice', { transcript: text })
-      setForm((f: any) => ({
-        ...f,
-        title: d.title || f.title,
-        description: d.description || f.description,
-        priority: d.priority || f.priority,
-        assignee_id: !asPersonal && d.assignee_id ? d.assignee_id : f.assignee_id,
-      }))
+      setForm((f: any) => {
+        const priority = d.priority || f.priority
+        return {
+          ...f,
+          title: d.title || f.title,
+          description: d.description || f.description,
+          priority,
+          // Keep the due date in step with the (possibly new) priority unless the
+          // user already picked one by hand.
+          due_date: dueManual ? f.due_date : dueDateForPriority(priority),
+          assignee_id: !asPersonal && d.assignee_id ? d.assignee_id : f.assignee_id,
+        }
+      })
     } catch {
       // On failure, at least keep the raw words as the title.
       setForm((f: any) => ({ ...f, title: f.title || text }))
@@ -535,9 +557,9 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           </div>
           <div><label>Description</label><textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>
-            <div><label>Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
+            <div><label>Priority</label><select value={form.priority} onChange={(e) => setPriority(e.target.value)}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
             {!asPersonal && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}</select></div>}
-            <div><label>Due date</label><input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></div>
+            <div><label>Due date {!dueManual && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto from priority</span>}</label><input type="date" value={form.due_date} onChange={(e) => { setDueManual(true); setForm({ ...form, due_date: e.target.value }) }} /></div>
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
