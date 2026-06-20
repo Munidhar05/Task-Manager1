@@ -12,6 +12,15 @@ import { pushBackHandler } from '../back'
 const givenOf = (t: Task) => t.assigned_at || t.created_at || ''
 const givenLabel = (t: Task) => (t.assigned_at ? '📌 Assigned' : '🆕 Created')
 
+// Auto-growing textarea: wraps long text and grows with content so the whole
+// title is readable instead of scrolling word-by-word inside a one-line input.
+function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = React.useRef<HTMLTextAreaElement>(null)
+  const fit = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }
+  React.useEffect(fit, [props.value])
+  return <textarea ref={ref} rows={1} {...props} onInput={fit} style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }} />
+}
+
 // Clean line-art microphone (replaces the old 🎤 emoji on the Speak button).
 const MicIcon = ({ size = 14 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -498,24 +507,23 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
               {listening && <span style={{ color: '#dc2626', fontWeight: 700, fontSize: 11 }}> ● listening…</span>}
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
-            <div className="row" style={{ gap: 6 }}>
-              <input style={{ flex: 1 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
-              {SR && (
-                <button
-                  type="button"
-                  className={'btn btn-sm btn-mic' + (listening ? ' btn-mic-live' : '')}
-                  onClick={toggleMic}
-                  disabled={parsing}
-                  title="Speak the task — AI fills in the title, details, assignee & priority"
-                >
-                  {parsing
-                    ? <><span className="spinner" /> Thinking…</>
-                    : listening
-                      ? <><span className="mic-dot" /> Stop</>
-                      : <><MicIcon /> Speak</>}
-                </button>
-              )}
-            </div>
+            <AutoTextarea style={{ width: '100%' }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
+            {SR && (
+              <button
+                type="button"
+                className={'btn btn-sm btn-mic' + (listening ? ' btn-mic-live' : '')}
+                onClick={toggleMic}
+                disabled={parsing}
+                title="Speak the task — AI fills in the title, details, assignee & priority"
+                style={{ marginTop: 6 }}
+              >
+                {parsing
+                  ? <><span className="spinner" /> Thinking…</>
+                  : listening
+                    ? <><span className="mic-dot" /> Stop</>
+                    : <><MicIcon /> Speak</>}
+              </button>
+            )}
             {SR && !listening && !parsing && !heard && (
               <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
                 Tip: say the whole task — e.g. “High priority task for Ravi to fix the login page bug by Friday.”
