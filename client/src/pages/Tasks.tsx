@@ -426,16 +426,45 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     if (listening) { try { recRef.current?.stop() } catch {}; setListening(false); return }
     const rec = new SR()
     rec.lang = 'en-IN'; rec.interimResults = true; rec.continuous = true
+    rec.maxAlternatives = 1
+    // Android doesn't honour `continuous`: it re-fires the SAME utterance as
+    // growing-prefix finals across auto-restarts ("I" → "I want" → "I want to
+    // assign a task"), so naively appending every final stacks dozens of near-
+    // duplicates and the AI reads the same words many times. Fix (mirrors the live-
+    // meeting transcriber): keep a list of committed finals and, when a new final
+    // extends / is contained by / mostly shares a prefix with the last one, REPLACE
+    // it with the longer capture instead of adding a new segment.
+    const finals: string[] = []
     let finalText = ''
+    const sameUtterance = (a: string, b: string) => {
+      if (a === b || a.startsWith(b) || b.startsWith(a)) return true
+      const shorter = Math.min(a.length, b.length)
+      let common = 0
+      while (common < shorter && a[common] === b[common]) common++
+      return shorter > 0 && common / shorter >= 0.7
+    }
     rec.onresult = (e: any) => {
       let interim = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
-        if (r.isFinal) finalText += r[0].transcript + ' '; else interim += r[0].transcript
+        const txt = (r[0]?.transcript || '').trim()
+        if (!txt) continue
+        if (r.isFinal) {
+          const last = finals[finals.length - 1]
+          if (last && sameUtterance(last, txt)) finals[finals.length - 1] = txt.length >= last.length ? txt : last
+          else finals.push(txt)
+        } else interim += txt + ' '
       }
-      setHeard((finalText + interim).replace(/\s+/g, ' ').trim())
+      finalText = finals.join(' ').replace(/\s+/g, ' ').trim()
+      setHeard((finalText + ' ' + interim).replace(/\s+/g, ' ').trim())
     }
-    rec.onerror = () => setListening(false)
+    // 'no-speech'/'aborted' just end the session quietly; surface mic-permission errors.
+    rec.onerror = (e: any) => {
+      setListening(false)
+      if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
+        alert('Microphone access is blocked. Allow mic permission for this app and try again.')
+      }
+    }
     rec.onend = () => { setListening(false); applyVoice(finalText) }
     recRef.current = rec; setListening(true); setHeard('')
     try { rec.start() } catch { setListening(false) }
