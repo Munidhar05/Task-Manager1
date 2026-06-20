@@ -5,6 +5,7 @@ import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../u
 import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
 import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
+import { parseDueDate } from '../ai/dates.js'
 
 const r = Router()
 r.use(authRequired)
@@ -96,12 +97,18 @@ r.post('/parse-voice', async (req, res) => {
     const parsed = await parseSpokenTask(transcript, { users })
     // Resolve the spoken name to a real org user (null if no confident match).
     const match = parsed.assignee_name ? resolveUser(req.user.org_id, parsed.assignee_name) : null
+    // Resolve a spoken deadline ("by Friday", "tomorrow", "repu", "kal") to an
+    // absolute YYYY-MM-DD, anchored to today. Try the AI's extracted phrase first,
+    // then fall back to scanning the whole transcript.
+    const today = new Date().toISOString().slice(0, 10)
+    const due = parseDueDate(parsed.due_date_raw || '', today).date || parseDueDate(transcript, today).date
     res.json({
       title: parsed.title,
       description: parsed.description,
       assignee_id: match?.id || null,
       assignee_name: match?.name || parsed.assignee_name || null,
       priority: parsed.priority,
+      due_date: due || null,
       due_date_raw: parsed.due_date_raw,
       engine: 'llm',
     })

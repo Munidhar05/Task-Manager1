@@ -435,6 +435,9 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     setParsing(true)
     try {
       const d = await api.post('/tasks/parse-voice', { transcript: text })
+      // A spoken deadline ("by Friday", "tomorrow") wins and is treated as a manual
+      // pick so the priority default won't overwrite it.
+      if (d.due_date) setDueManual(true)
       setForm((f: any) => {
         const priority = d.priority || f.priority
         return {
@@ -442,9 +445,9 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           title: d.title || f.title,
           description: d.description || f.description,
           priority,
-          // Keep the due date in step with the (possibly new) priority unless the
-          // user already picked one by hand.
-          due_date: dueManual ? f.due_date : dueDateForPriority(priority),
+          // Spoken date first; otherwise keep the due date in step with the
+          // (possibly new) priority unless the user already picked one by hand.
+          due_date: d.due_date || (dueManual ? f.due_date : dueDateForPriority(priority)),
           assignee_id: !asPersonal && d.assignee_id ? d.assignee_id : f.assignee_id,
         }
       })
