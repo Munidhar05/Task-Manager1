@@ -12,6 +12,16 @@ import { pushBackHandler } from '../back'
 const givenOf = (t: Task) => t.assigned_at || t.created_at || ''
 const givenLabel = (t: Task) => (t.assigned_at ? '📌 Assigned' : '🆕 Created')
 
+// Clean line-art microphone (replaces the old 🎤 emoji on the Speak button).
+const MicIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="9" y="2" width="6" height="11" rx="3" />
+    <path d="M5 10a7 7 0 0 0 14 0" />
+    <line x1="12" y1="17" x2="12" y2="21" />
+    <line x1="8" y1="21" x2="16" y2="21" />
+  </svg>
+)
+
 // Sortable columns. Ranks make Priority/Status sort by logical order (not alphabetically);
 // tasks with no due date sort last. Each returns an ascending-order comparator value.
 type SortKey = 'task' | 'priority' | 'status' | 'assignee' | 'due' | 'time'
@@ -114,6 +124,16 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     return keys.map((day) => ({ day, items: groups[day] }))
   })()
 
+  // Priority sort is special: instead of grouping by day, mix ALL tasks across
+  // every date into one flat list ordered purely by priority (Critical → High →
+  // Medium → Low). Ties keep newest-activity-first. Only the priority column
+  // behaves this way; every other column stays day-grouped.
+  const sortedByPriority = [...visibleTasks].sort((a, b) => {
+    const cmp = cmpAsc(a, b, 'priority')
+    if (cmp !== 0) return sort.dir === 'desc' ? -cmp : cmp
+    return givenOf(b).localeCompare(givenOf(a)) // tie-break: newest first
+  })
+
   // Friendly heading for a day group, e.g. "Today · Wednesday, 11 June 2026".
   const dayHeading = (day: string) => {
     if (day === 'No date') return 'No date'
@@ -168,7 +188,10 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         <span className="row" style={{ gap: 8 }}>
           <StatusBadge s={t.status} />
           {isManager && t.status === 'In Review' && (
-            <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); markDone(t.id) }} title="Approve & mark as done">✓ Done</button>
+            <button className="btn btn-sm btn-done" onClick={(e) => { e.stopPropagation(); markDone(t.id) }} title="Approve & mark as done">✓ Done</button>
+          )}
+          {isManager && t.status !== 'In Review' && t.status !== 'Done' && (
+            <button className="btn-tick" onClick={(e) => { e.stopPropagation(); moveStatus(t.id, 'Done') }} title="Mark as completed" aria-label="Mark as completed">✓</button>
           )}
         </span>
       </td>
@@ -326,14 +349,16 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                   {sortTh('Time', 'time')}
                 </tr></thead>
                 <tbody>
-                  {groupedByDay.map((g) => (
-                    <React.Fragment key={g.day}>
-                      <tr className="day-group-row">
-                        <td colSpan={personal ? 5 : 6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
-                      </tr>
-                      {g.items.map(renderRow)}
-                    </React.Fragment>
-                  ))}
+                  {sort.key === 'priority'
+                    ? sortedByPriority.map(renderRow)
+                    : groupedByDay.map((g) => (
+                      <React.Fragment key={g.day}>
+                        <tr className="day-group-row">
+                          <td colSpan={personal ? 5 : 6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
+                        </tr>
+                        {g.items.map(renderRow)}
+                      </React.Fragment>
+                    ))}
                 </tbody>
               </table>
             </div>
@@ -363,17 +388,41 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     try { await api.post('/tasks', { ...form, personal: asPersonal }); onCreated() } finally { setBusy(false) }
   }
 
-  // ---- Voice input: dictate the task title (Web Speech API). ----
+  // ---- Voice input: speak the whole task aloud; the AI extracts the title,
+  // description, who it's for, and the priority, then fills the form. ----
   const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   const recRef = useRef<any>(null)
   const [listening, setListening] = useState(false)
+  const [parsing, setParsing] = useState(false)
+  const [heard, setHeard] = useState('')
   useEffect(() => () => { try { recRef.current?.stop() } catch {} }, [])
+
+  // Send the spoken sentence to the server, which extracts structured fields, and
+  // merge them in. The assignee is applied only when not in personal mode.
+  const applyVoice = async (transcript: string) => {
+    const text = transcript.trim()
+    if (!text) return
+    setParsing(true)
+    try {
+      const d = await api.post('/tasks/parse-voice', { transcript: text })
+      setForm((f: any) => ({
+        ...f,
+        title: d.title || f.title,
+        description: d.description || f.description,
+        priority: d.priority || f.priority,
+        assignee_id: !asPersonal && d.assignee_id ? d.assignee_id : f.assignee_id,
+      }))
+    } catch {
+      // On failure, at least keep the raw words as the title.
+      setForm((f: any) => ({ ...f, title: f.title || text }))
+    } finally { setParsing(false) }
+  }
+
   const toggleMic = () => {
     if (!SR) { alert('Voice input needs Google Chrome or Microsoft Edge.'); return }
     if (listening) { try { recRef.current?.stop() } catch {}; setListening(false); return }
     const rec = new SR()
-    rec.lang = 'en-IN'; rec.interimResults = true; rec.continuous = false
-    const base = form.title ? form.title.trim() + ' ' : ''
+    rec.lang = 'en-IN'; rec.interimResults = true; rec.continuous = true
     let finalText = ''
     rec.onresult = (e: any) => {
       let interim = ''
@@ -381,11 +430,11 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
         const r = e.results[i]
         if (r.isFinal) finalText += r[0].transcript + ' '; else interim += r[0].transcript
       }
-      setForm((f: any) => ({ ...f, title: (base + finalText + interim).replace(/\s+/g, ' ').trimStart() }))
+      setHeard((finalText + interim).replace(/\s+/g, ' ').trim())
     }
     rec.onerror = () => setListening(false)
-    rec.onend = () => setListening(false)
-    recRef.current = rec; setListening(true)
+    rec.onend = () => { setListening(false); applyVoice(finalText) }
+    recRef.current = rec; setListening(true); setHeard('')
     try { rec.start() } catch { setListening(false) }
   }
 
@@ -396,11 +445,37 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
         <div className="card-pad grid" style={{ gap: 12 }}>
           {asPersonal && <div className="muted" style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>🔒 Private to you — only you can see this task.</div>}
           <div>
-            <label>Title {listening && <span style={{ color: '#dc2626', fontWeight: 700, fontSize: 11 }}>● listening…</span>}</label>
+            <label>
+              Title
+              {listening && <span style={{ color: '#dc2626', fontWeight: 700, fontSize: 11 }}> ● listening…</span>}
+              {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
+            </label>
             <div className="row" style={{ gap: 6 }}>
               <input style={{ flex: 1 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
-              {SR && <button type="button" className={'btn btn-sm' + (listening ? ' btn-danger' : '')} onClick={toggleMic} title="Dictate the task by voice">{listening ? '■ Stop' : '🎤 Speak'}</button>}
+              {SR && (
+                <button
+                  type="button"
+                  className={'btn btn-sm btn-mic' + (listening ? ' btn-mic-live' : '')}
+                  onClick={toggleMic}
+                  disabled={parsing}
+                  title="Speak the task — AI fills in the title, details, assignee & priority"
+                >
+                  {parsing
+                    ? <><span className="spinner" /> Thinking…</>
+                    : listening
+                      ? <><span className="mic-dot" /> Stop</>
+                      : <><MicIcon /> Speak</>}
+                </button>
+              )}
             </div>
+            {SR && !listening && !parsing && !heard && (
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+                Tip: say the whole task — e.g. “High priority task for Ravi to fix the login page bug by Friday.”
+              </div>
+            )}
+            {(listening || parsing) && heard && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>“{heard}”</div>
+            )}
           </div>
           <div><label>Description</label><textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>

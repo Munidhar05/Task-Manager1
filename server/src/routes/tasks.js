@@ -4,6 +4,7 @@ import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../util.js'
 import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
+import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
 
 const r = Router()
 r.use(authRequired)
@@ -74,6 +75,40 @@ r.get('/:id', (req, res) => {
   const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!t) return res.status(404).json({ error: 'Not found' })
   res.json(hydrate(t))
+})
+
+// PARSE a dictated sentence into draft task fields (title/description/assignee/
+// priority). Used by the "Speak" button on the New Task modal. Falls back to
+// using the raw transcript as the title when no LLM is configured or the call
+// fails, so voice always produces *something*.
+r.post('/parse-voice', async (req, res) => {
+  const transcript = String(req.body?.transcript || '').trim()
+  if (!transcript) return res.status(400).json({ error: 'transcript required' })
+
+  const fallback = () => res.json({
+    title: transcript, description: '', assignee_id: null, assignee_name: null,
+    priority: 'Medium', due_date_raw: null, engine: 'none',
+  })
+
+  if (!hasLLM()) return fallback()
+  try {
+    const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(req.user.org_id)
+    const parsed = await parseSpokenTask(transcript, { users })
+    // Resolve the spoken name to a real org user (null if no confident match).
+    const match = parsed.assignee_name ? resolveUser(req.user.org_id, parsed.assignee_name) : null
+    res.json({
+      title: parsed.title,
+      description: parsed.description,
+      assignee_id: match?.id || null,
+      assignee_name: match?.name || parsed.assignee_name || null,
+      priority: parsed.priority,
+      due_date_raw: parsed.due_date_raw,
+      engine: 'llm',
+    })
+  } catch (err) {
+    console.warn('[tasks] voice parse failed, using raw transcript:', err.message)
+    fallback()
+  }
 })
 
 // CREATE
