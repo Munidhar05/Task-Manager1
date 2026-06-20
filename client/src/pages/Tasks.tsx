@@ -58,7 +58,10 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     if (personal) p.set('mine', '1') // My Tasks: only the current user's own tasks
     api.get('/tasks?' + p.toString()).then(setTasks)
   }
-  useEffect(() => { load() }, [filters])
+  // Re-fetch on `personal` too: /tasks and /my-tasks reuse this same component, so
+  // navigating between them flips `personal` without changing `filters` — without
+  // this dep the list would keep showing the previous route's tasks until a refresh.
+  useEffect(() => { load() }, [filters, personal])
   useEffect(() => { api.get('/users').then(setUsers) }, [])
 
   // Android back button: close the open task drawer / new-task modal first.
