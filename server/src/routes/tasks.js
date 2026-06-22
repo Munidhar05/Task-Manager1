@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import multer from 'multer'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../util.js'
@@ -6,9 +7,14 @@ import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
 import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
 import { parseDueDate } from '../ai/dates.js'
+import { transcribeAudio } from '../ai/transcribe.js'
 
 const r = Router()
 r.use(authRequired)
+
+// Voice dictation for the "Speak" button records ONE short audio clip (≤ ~30s)
+// per task, so a 10 MB cap is plenty and keeps abuse small.
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
 
 const VALID_STATUS = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
@@ -76,6 +82,26 @@ r.get('/:id', (req, res) => {
   const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!t) return res.status(404).json({ error: 'Not found' })
   res.json(hydrate(t))
+})
+
+// TRANSCRIBE a single dictated audio clip -> text. Powers the "Speak" button on
+// the New Task modal for EVERYONE (employees included) — unlike the meetings
+// transcriber, which is manager/admin only. Uses the same Sarvam/Whisper pipeline,
+// which is far more reliable on Android and for Telugu/Hindi/English code-mixing
+// than the browser's SpeechRecognition.
+r.post('/transcribe', audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'audio file required (field "audio")' })
+  try {
+    const { text, language } = await transcribeAudio(
+      req.file.buffer,
+      req.file.originalname || 'task.webm',
+      req.file.mimetype || 'audio/webm',
+    )
+    res.json({ text: text || '', language: language || null })
+  } catch (err) {
+    console.error('[tasks] transcribe failed:', err.message)
+    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+  }
 })
 
 // PARSE a dictated sentence into draft task fields (title/description/assignee/

@@ -17,13 +17,22 @@ export async function registerPush() {
   try {
     const { PushNotifications } = await import('@capacitor/push-notifications')
 
-    // Android 8+ needs a channel for the heads-up alert the server sends (channelId 'smarttask').
+    // Android 8+ needs a channel for the heads-up alert the server sends.
+    // IMPORTANT: a channel's sound/importance are FROZEN by Android the moment it's
+    // first created — later createChannel calls with the same id are ignored. The
+    // original 'smarttask' channel shipped silent on some installs, so we move to a
+    // NEW id ('smarttask_v2') to force a fresh channel WITH the default sound, and
+    // delete the stale one so it doesn't linger in the user's notification settings.
+    try { await PushNotifications.deleteChannel({ id: 'smarttask' }) } catch {}
     try {
+      // No `sound` field on purpose: omitting it makes the channel use the
+      // device's DEFAULT notification tone. (Capacitor's `sound` expects a file in
+      // res/raw without extension, so 'default' would resolve to nothing/silent.)
       await PushNotifications.createChannel({
-        id: 'smarttask',
+        id: 'smarttask_v2',
         name: 'SmartTask alerts',
         description: 'Task assignments and new messages',
-        importance: 5,
+        importance: 5,   // IMPORTANCE_HIGH → heads-up + default sound
         visibility: 1,
       })
     } catch {}
