@@ -6,25 +6,41 @@ import { analyzeWithOpenAI } from './openai.js'
 import { analyzeWithOpenRouter } from './openrouter.js'
 import { db } from '../db.js'
 
-// Match a spoken/raw name to a user in the org via name, alias, or fuzzy contains.
+// Match a spoken/raw name to a user in the org via name, alias, or token match.
+// Matching is WHOLE-WORD, not loose substring — so "an" never matches "Ananya"
+// and a spoken sentence only assigns when it actually contains the person's name.
 export function resolveUser(orgId, rawName) {
   if (!rawName) return null
   const users = db.prepare('SELECT * FROM users WHERE org_id = ?').all(orgId)
   const norm = (s) => (s || '').toLowerCase().trim()
   const target = norm(rawName)
+  if (!target) return null
+  const tokens = (s) => norm(s).split(/\s+/).filter(Boolean)
+  const targetTokens = tokens(target)
 
-  // exact name
+  // 1. Exact full name.
   let hit = users.find((u) => norm(u.name) === target)
   if (hit) return hit
-  // alias list
+  // 2. Alias list (comma-separated), exact match on a whole alias.
   hit = users.find((u) => (u.aliases || '').split(',').map(norm).filter(Boolean).includes(target))
   if (hit) return hit
-  // first-name match
-  hit = users.find((u) => norm(u.name).split(' ')[0] === target)
+  // 3. First name exactly equals what was spoken ("Ravi" -> "Ravi Kumar").
+  hit = users.find((u) => tokens(u.name)[0] === target)
   if (hit) return hit
-  // contains either direction
-  hit = users.find((u) => norm(u.name).includes(target) || target.includes(norm(u.name).split(' ')[0]))
-  return hit || null
+  // 4. Any name token exactly matches a spoken token (≥ 2 chars) — handles a
+  //    surname or a phrase that contains the person's name.
+  hit = users.find((u) => tokens(u.name).some((nt) => nt.length >= 2 && targetTokens.includes(nt)))
+  if (hit) return hit
+  // 5. Last resort: a clear prefix match on the first name (spoken "Reddep" for
+  //    "Reddeppa"), only for fragments ≥ 4 chars to avoid false hits.
+  if (target.length >= 4) {
+    hit = users.find((u) => {
+      const first = tokens(u.name)[0] || ''
+      return first && (first.startsWith(target) || target.startsWith(first))
+    })
+    if (hit) return hit
+  }
+  return null
 }
 
 // Resolve a spoken name to a user, restricted to a set of allowed user IDs

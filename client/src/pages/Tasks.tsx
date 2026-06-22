@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, Task, User } from '../api'
+import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime, PRIORITY_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
@@ -11,6 +11,17 @@ import { pushBackHandler } from '../back'
 // or sending it to review never bumps it to Today or to the top of the table.
 const givenOf = (t: Task) => t.assigned_at || t.created_at || ''
 const givenLabel = (t: Task) => (t.assigned_at ? '📌 Assigned' : '🆕 Created')
+
+// Mirror of the server's priority→due-date default (server/src/util.js) so the
+// New Task form SHOWS the date the task will actually get. Critical=today,
+// High=+1, Medium=+3, Low=+5 days. Local date parts (matches the server).
+const DUE_DAYS_BY_PRIORITY: Record<string, number> = { Critical: 0, High: 1, Medium: 3, Low: 5 }
+const dueDateForPriority = (priority: string) => {
+  const d = new Date()
+  d.setDate(d.getDate() + (DUE_DAYS_BY_PRIORITY[priority] ?? DUE_DAYS_BY_PRIORITY.Medium))
+  const y = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, '0'), da = String(d.getDate()).padStart(2, '0')
+  return `${y}-${mo}-${da}`
+}
 
 // Auto-growing textarea: wraps long text and grows with content so the whole
 // title is readable instead of scrolling word-by-word inside a one-line input.
@@ -392,7 +403,12 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
   const asPersonal = !!personal
   // Default the owner to yourself (so it shows in your list); managers triage, so
   // they default to Unassigned.
-  const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: isEmployee ? (user?.id || '') : '', due_date: '' })
+  const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: isEmployee ? (user?.id || '') : '', due_date: dueDateForPriority('Medium') })
+  // Once the user picks a date by hand, stop auto-syncing it to the priority.
+  const [dueManual, setDueManual] = useState(false)
+  // Change priority and keep the due date in step (unless the user set it by hand).
+  const setPriority = (priority: string) =>
+    setForm((f: any) => ({ ...f, priority, due_date: dueManual ? f.due_date : dueDateForPriority(priority) }))
   const [busy, setBusy] = useState(false)
   const save = async () => {
     if (!form.title) return
@@ -400,99 +416,104 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     try { await api.post('/tasks', { ...form, personal: asPersonal }); onCreated() } finally { setBusy(false) }
   }
 
-  // ---- Voice input: speak the whole task aloud; the AI extracts the title,
-  // description, who it's for, and the priority, then fills the form. ----
-  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-  const recRef = useRef<any>(null)
-  const manualStopRef = useRef(false) // true once the user taps Stop (or closes) — prevents auto-restart
-  const fatalRef = useRef(false)      // true on a non-recoverable error (e.g. mic blocked)
-  const [listening, setListening] = useState(false)
-  const [parsing, setParsing] = useState(false)
+  // ---- Voice input: record a short clip and transcribe it SERVER-SIDE (Sarvam /
+  // Whisper), which is far more reliable on Android and for Telugu/Hindi/English
+  // code-mixing than the browser's SpeechRecognition. The AI then extracts the
+  // title, description, assignee, priority & due date and fills the form. ----
+  const canRecord = typeof navigator !== 'undefined'
+    && !!navigator.mediaDevices?.getUserMedia
+    && typeof (window as any).MediaRecorder !== 'undefined'
+  const mrRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<BlobPart[]>([])
+  const [listening, setListening] = useState(false) // actively recording
+  const [parsing, setParsing] = useState(false)     // transcribing + AI extraction
   const [heard, setHeard] = useState('')
-  useEffect(() => () => { manualStopRef.current = true; try { recRef.current?.stop() } catch {} }, [])
+  // Read the "user picked a date by hand" flag from a ref so the async voice
+  // handler always sees the CURRENT value (not a stale render closure).
+  const dueManualRef = useRef(dueManual)
+  useEffect(() => { dueManualRef.current = dueManual }, [dueManual])
 
-  // Send the spoken sentence to the server, which extracts structured fields, and
-  // merge them in. The assignee is applied only when not in personal mode.
+  // Stop recording and release the mic device.
+  const releaseMic = () => {
+    try { if (mrRef.current && mrRef.current.state !== 'inactive') mrRef.current.stop() } catch {}
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+    streamRef.current = null
+  }
+  useEffect(() => releaseMic, []) // release on unmount (close)
+
+  // Merge the AI-extracted fields into the form. Assignee applies only when not in
+  // personal mode. The due date is NEVER left blank: spoken date wins, else it
+  // tracks the priority unless the user already picked one by hand.
   const applyVoice = async (transcript: string) => {
     const text = transcript.trim()
     if (!text) return
+    const d = await api.post('/tasks/parse-voice', { transcript: text })
+    if (d.due_date) { setDueManual(true); dueManualRef.current = true }
+    setForm((f: any) => {
+      const priority = d.priority || f.priority
+      const due = d.due_date
+        || (dueManualRef.current ? f.due_date : '')
+        || dueDateForPriority(priority)
+      return {
+        ...f,
+        title: d.title || f.title || text,
+        description: d.description || f.description,
+        priority,
+        due_date: due,
+        assignee_id: !asPersonal && d.assignee_id ? d.assignee_id : f.assignee_id,
+      }
+    })
+  }
+
+  // Upload the recorded clip → transcript → structured fields.
+  const transcribeAndApply = async (blob: Blob) => {
     setParsing(true)
     try {
-      const d = await api.post('/tasks/parse-voice', { transcript: text })
-      setForm((f: any) => ({
-        ...f,
-        title: d.title || f.title,
-        description: d.description || f.description,
-        priority: d.priority || f.priority,
-        assignee_id: !asPersonal && d.assignee_id ? d.assignee_id : f.assignee_id,
-      }))
-    } catch {
-      // On failure, at least keep the raw words as the title.
-      setForm((f: any) => ({ ...f, title: f.title || text }))
+      const fd = new FormData()
+      fd.append('audio', blob, 'task.webm')
+      const headers: Record<string, string> = {}
+      const token = getToken()
+      if (token) headers.authorization = `Bearer ${token}`
+      const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
+      const text = String(data?.text || '').trim()
+      setHeard(text)
+      if (!text) { alert("Didn't catch that — please tap Speak and try again."); return }
+      await applyVoice(text)
+    } catch (err: any) {
+      alert(err?.message || 'Could not transcribe the audio. Check your connection and try again.')
     } finally { setParsing(false) }
   }
 
-  const toggleMic = () => {
-    if (!SR) { alert('Voice input needs Google Chrome or Microsoft Edge.'); return }
-    // Tapping while listening = explicit Stop: flag it so onend won't auto-restart.
-    if (listening) { manualStopRef.current = true; try { recRef.current?.stop() } catch {}; setListening(false); return }
-    manualStopRef.current = false
-    fatalRef.current = false
-    const rec = new SR()
-    rec.lang = 'en-IN'; rec.interimResults = true; rec.continuous = true
-    rec.maxAlternatives = 1
-    // Android doesn't honour `continuous`: it re-fires the SAME utterance as
-    // growing-prefix finals across auto-restarts ("I" → "I want" → "I want to
-    // assign a task"), so naively appending every final stacks dozens of near-
-    // duplicates and the AI reads the same words many times. Fix (mirrors the live-
-    // meeting transcriber): keep a list of committed finals and, when a new final
-    // extends / is contained by / mostly shares a prefix with the last one, REPLACE
-    // it with the longer capture instead of adding a new segment.
-    const finals: string[] = []
-    let finalText = ''
-    const sameUtterance = (a: string, b: string) => {
-      if (a === b || a.startsWith(b) || b.startsWith(a)) return true
-      const shorter = Math.min(a.length, b.length)
-      let common = 0
-      while (common < shorter && a[common] === b[common]) common++
-      return shorter > 0 && common / shorter >= 0.7
+  const toggleMic = async () => {
+    // Tapping while recording = Stop → onstop transcribes the captured clip.
+    if (listening) {
+      setListening(false)
+      try { mrRef.current?.stop() } catch {}
+      return
     }
-    rec.onresult = (e: any) => {
-      let interim = ''
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i]
-        const txt = (r[0]?.transcript || '').trim()
-        if (!txt) continue
-        if (r.isFinal) {
-          const last = finals[finals.length - 1]
-          if (last && sameUtterance(last, txt)) finals[finals.length - 1] = txt.length >= last.length ? txt : last
-          else finals.push(txt)
-        } else interim += txt + ' '
-      }
-      finalText = finals.join(' ').replace(/\s+/g, ' ').trim()
-      setHeard((finalText + ' ' + interim).replace(/\s+/g, ' ').trim())
+    if (!canRecord) { alert('Voice input needs microphone access on this device.'); return }
+    let stream: MediaStream
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
+    catch { alert('Microphone access is blocked. Allow mic permission for this app and try again.'); return }
+    streamRef.current = stream
+    chunksRef.current = []
+    let mr: MediaRecorder
+    try { mr = new MediaRecorder(stream, { mimeType: 'audio/webm' }) } catch { mr = new MediaRecorder(stream) }
+    mrRef.current = mr
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
+    mr.onstop = () => {
+      try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+      streamRef.current = null
+      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' })
+      chunksRef.current = []
+      if (blob.size) transcribeAndApply(blob)
     }
-    // Mic blocked → fatal, stop for good. 'no-speech'/'aborted'/'network' are
-    // transient: let onend decide whether to keep listening.
-    rec.onerror = (e: any) => {
-      if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
-        fatalRef.current = true
-        setListening(false)
-        alert('Microphone access is blocked. Allow mic permission for this app and try again.')
-      }
-    }
-    // Android stops on a brief silence. Unless the user tapped Stop (or a fatal
-    // error occurred), restart so it keeps listening until they explicitly stop.
-    rec.onend = () => {
-      if (manualStopRef.current || fatalRef.current) {
-        setListening(false)
-        applyVoice(finalText)
-      } else {
-        try { rec.start() } catch { setListening(false); applyVoice(finalText) }
-      }
-    }
-    recRef.current = rec; setListening(true); setHeard('')
-    try { rec.start() } catch { setListening(false) }
+    setHeard('')
+    try { mr.start() } catch { setListening(false); releaseMic(); return }
+    setListening(true)
   }
 
   return (
@@ -504,11 +525,11 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           <div>
             <label>
               Title
-              {listening && <span style={{ color: '#dc2626', fontWeight: 700, fontSize: 11 }}> ● listening…</span>}
+              {listening && <span style={{ color: '#dc2626', fontWeight: 700, fontSize: 11 }}> ● recording…</span>}
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
             <AutoTextarea style={{ width: '100%' }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
-            {SR && (
+            {canRecord && (
               <button
                 type="button"
                 className={'btn btn-sm btn-mic' + (listening ? ' btn-mic-live' : '')}
@@ -524,20 +545,23 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
                     : <><MicIcon /> Speak</>}
               </button>
             )}
-            {SR && !listening && !parsing && !heard && (
+            {canRecord && !listening && !parsing && !heard && (
               <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
                 Tip: say the whole task — e.g. “High priority task for Ravi to fix the login page bug by Friday.”
               </div>
             )}
-            {(listening || parsing) && heard && (
+            {listening && (
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Listening… tap Stop when you're done.</div>
+            )}
+            {parsing && heard && (
               <div className="muted" style={{ fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>“{heard}”</div>
             )}
           </div>
           <div><label>Description</label><textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>
-            <div><label>Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
+            <div><label>Priority</label><select value={form.priority} onChange={(e) => setPriority(e.target.value)}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
             {!asPersonal && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}</select></div>}
-            <div><label>Due date</label><input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></div>
+            <div><label>Due date {!dueManual && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto from priority</span>}</label><input type="date" value={form.due_date} onChange={(e) => { setDueManual(true); setForm({ ...form, due_date: e.target.value }) }} /></div>
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>

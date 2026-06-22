@@ -13,7 +13,13 @@ const WEEKDAYS = {
 }
 
 function toISO(d) {
-  return d.toISOString().slice(0, 10)
+  // Local date parts (NOT toISOString, which is UTC) — otherwise a midnight-local
+  // date shifts back a day on servers/machines east of UTC (e.g. IST), making
+  // "tomorrow" resolve to today.
+  const y = d.getFullYear()
+  const mo = String(d.getMonth() + 1).padStart(2, '0')
+  const da = String(d.getDate()).padStart(2, '0')
+  return `${y}-${mo}-${da}`
 }
 function addDays(refDate, n) {
   const d = new Date(refDate)

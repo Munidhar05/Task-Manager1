@@ -102,7 +102,7 @@ export async function sendPushToUser(userId, { title, body, data }) {
             token: tok,
             notification: { title, body },
             data: stringData,
-            android: { priority: 'high', notification: { sound: 'default', channel_id: 'smarttask' } },
+            android: { priority: 'high', notification: { sound: 'default', channel_id: 'smarttask_v2' } },
           },
         }),
       })
