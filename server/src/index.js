@@ -9,6 +9,7 @@ import { initSchema, db } from './db.js'
 import { ensureSeed } from './seed.js'
 
 import authRoutes from './routes/auth.js'
+import inviteRoutes from './routes/invites.js'
 import userRoutes from './routes/users.js'
 import meetingRoutes from './routes/meetings.js'
 import taskRoutes from './routes/tasks.js'
@@ -55,6 +56,7 @@ app.get('/api/health', (req, res) => {
 })
 
 app.use('/api/auth', authRoutes)
+app.use('/api/invites', inviteRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/meetings', meetingRoutes)
 app.use('/api/tasks', taskRoutes)

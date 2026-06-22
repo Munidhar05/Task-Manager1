@@ -88,7 +88,9 @@ export default function Login() {
             {busy ? <span className="spinner" /> : 'LOGIN'}
           </button>
 
-          <div className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center', lineHeight: 1.8 }}>
+            <Link to="/forgot-password" style={{ color: 'var(--primary)', fontWeight: 600 }}>Forgot password?</Link>
+            <br />
             New here? <Link to="/signup" style={{ color: 'var(--primary)', fontWeight: 600 }}>Create your company</Link>
           </div>
         </form>

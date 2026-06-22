@@ -8,6 +8,10 @@ import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import AcceptInvite from './pages/AcceptInvite'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
+import VerifyEmail from './pages/VerifyEmail'
 import Dashboard from './pages/Dashboard'
 import Meetings from './pages/Meetings'
 import MeetingDetail from './pages/MeetingDetail'
@@ -135,8 +139,29 @@ function Layout({ children }: { children: React.ReactNode }) {
             <NotificationBell key={user.id} />
           </div>
         </header>
-        <main className="content">{children}</main>
+        <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
       </div>
+    </div>
+  )
+}
+
+// Gentle, dismissible-per-session prompt for users who haven't confirmed their
+// email yet. Non-blocking — the app stays fully usable.
+function VerifyEmailBanner() {
+  const { user } = useAuth()
+  const [dismissed, setDismissed] = useState(false)
+  const [sent, setSent] = useState(false)
+  if (!user || user.email_verified || dismissed) return null
+  const resend = async () => {
+    try { await api.post('/auth/resend-verification'); setSent(true) } catch {}
+  }
+  return (
+    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '9px 14px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
+      <span>✉ Please verify your email ({user.email}).</span>
+      {sent
+        ? <span className="muted">Verification email sent — check your inbox.</span>
+        : <button className="btn btn-sm" onClick={resend}>Resend link</button>}
+      <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setDismissed(true)} aria-label="Dismiss">✕</button>
     </div>
   )
 }
@@ -183,6 +208,10 @@ export default function App() {
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/signup" element={user ? <Navigate to="/" replace /> : <Signup />} />
+      <Route path="/accept-invite" element={user ? <Navigate to="/" replace /> : <AcceptInvite />} />
+      <Route path="/forgot-password" element={user ? <Navigate to="/" replace /> : <ForgotPassword />} />
+      <Route path="/reset-password" element={user ? <Navigate to="/" replace /> : <ResetPassword />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/" element={<Protected><Home /></Protected>} />
       <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />

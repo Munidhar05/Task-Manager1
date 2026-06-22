@@ -1,8 +1,21 @@
 import { customAlphabet } from 'nanoid'
+import crypto from 'node:crypto'
 
 const nano = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 12)
 export const id = (prefix = '') => (prefix ? `${prefix}_` : '') + nano()
 export const now = () => new Date().toISOString()
+
+// A high-entropy, URL-safe token for invite / password-reset / verification links.
+// 32 random bytes → 43-char base64url string (far stronger than an id()).
+export const genToken = () => crypto.randomBytes(32).toString('base64url')
+
+// Base URL of the front-end, used to build links inside emails. In production the
+// API and the web client share one origin (set APP_URL to it on Render); locally
+// the Vite dev server runs on :5173.
+export const appUrl = () => (process.env.APP_URL || 'http://localhost:5173').replace(/\/$/, '')
+
+// An ISO timestamp `days` in the future — for token expiry.
+export const inDays = (days) => new Date(Date.now() + days * 86400000).toISOString()
 
 // Default lead time (in days from today) for each priority — used to auto-fill a
 // task's due date when none was set. Critical = today, High = tomorrow, etc.

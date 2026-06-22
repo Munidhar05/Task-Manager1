@@ -3,11 +3,13 @@ import { api, setToken, getToken, User } from './api'
 import { registerPush, unregisterPush } from './push'
 
 interface SignupInput { company: string; name: string; email: string; password: string }
+interface AcceptInviteInput { token: string; name: string; password: string }
 interface AuthCtx {
   user: User | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
   signup: (input: SignupInput) => Promise<void>
+  acceptInvite: (input: AcceptInviteInput) => Promise<void>
   logout: () => void
   refresh: () => Promise<void>
 }
@@ -39,8 +41,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(d.user)
     registerPush()
   }
+  // Accept an emailed invite: creates the account in the inviting org, then logs in.
+  const acceptInvite = async (input: AcceptInviteInput) => {
+    const d = await api.post('/invites/accept', input)
+    setToken(d.token)
+    setUser(d.user)
+    registerPush()
+  }
   const logout = () => { unregisterPush(); setToken(null); setUser(null) }
   const refresh = async () => { try { const d = await api.get('/auth/me'); setUser(d.user) } catch {} }
 
-  return <Ctx.Provider value={{ user, loading, login, signup, logout, refresh }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ user, loading, login, signup, acceptInvite, logout, refresh }}>{children}</Ctx.Provider>
 }

@@ -21,7 +21,9 @@ r.get('/:id/avatar', (req, res) => {
   const u = (req.headers.authorization || '').startsWith('Bearer ')
     ? verifyToken(req.headers.authorization.slice(7)) : verifyToken(req.query.token)
   if (!u) return res.status(401).json({ error: 'Authentication required' })
-  const target = db.prepare('SELECT avatar_file FROM users WHERE id=?').get(req.params.id)
+  // Tenant isolation: only serve photos of users in the requester's own org, so a
+  // token from one company can't fetch another company's avatars by guessing ids.
+  const target = db.prepare('SELECT avatar_file FROM users WHERE id=? AND org_id=?').get(req.params.id, u.org_id)
   if (!target?.avatar_file) return res.status(404).json({ error: 'No avatar' })
   const abs = path.join(AVATAR_DIR, target.avatar_file)
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'Missing' })
