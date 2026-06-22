@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 
 export default function Login() {
@@ -86,6 +87,10 @@ export default function Login() {
           <button className="btn btn-primary login-btn" disabled={busy}>
             {busy ? <span className="spinner" /> : 'LOGIN'}
           </button>
+
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
+            New here? <Link to="/signup" style={{ color: 'var(--primary)', fontWeight: 600 }}>Create your company</Link>
+          </div>
         </form>
         <div className="paws-bottom">
           <Paw /><Paw />

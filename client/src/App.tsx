@@ -7,6 +7,7 @@ import { api, userAvatarUrl, getToken, API_BASE } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
 import Login from './pages/Login'
+import Signup from './pages/Signup'
 import Dashboard from './pages/Dashboard'
 import Meetings from './pages/Meetings'
 import MeetingDetail from './pages/MeetingDetail'
@@ -181,6 +182,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
+      <Route path="/signup" element={user ? <Navigate to="/" replace /> : <Signup />} />
       <Route path="/" element={<Protected><Home /></Protected>} />
       <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
