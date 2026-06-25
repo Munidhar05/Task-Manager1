@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 
 interface Notif { id: string; type: string; message: string; task_id?: string; read: number; created_at: string }
@@ -7,7 +8,44 @@ const ICON: Record<string, string> = {
   task_submitted: '📩', task_approved: '✅', task_reopened: '↩', task_assigned: '📌', task_comment: '💬', chat_message: '💬',
 }
 
+// Refined gradient bell for the topbar — amber→orange fill, no heavy outline, a
+// soft highlight and a slightly darker clapper. Crisp and premium on white.
+const BellIcon = ({ size = 22 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="bell-grad" x1="12" y1="2.5" x2="12" y2="19" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#fcd34d" />
+        <stop offset="1" stopColor="#ea580c" />
+      </linearGradient>
+    </defs>
+    <path
+      d="M12 3.1a1.5 1.5 0 0 0-1.5 1.5v.45A5.6 5.6 0 0 0 6.4 10.5v1.95c0 1.02-.41 2-1.14 2.71l-.16.16c-.69.68-.2 1.85.76 1.85h12.28c.96 0 1.45-1.17.76-1.85l-.16-.16a3.8 3.8 0 0 1-1.14-2.71V10.5a5.6 5.6 0 0 0-4.1-5.45V4.6A1.5 1.5 0 0 0 12 3.1Z"
+      fill="url(#bell-grad)"
+    />
+    <path d="M9.7 19.1a2.3 2.3 0 0 0 4.6 0Z" fill="#ea580c" />
+    <path d="M9.2 8.5a3.4 3.4 0 0 1 2.6-1.7" stroke="#fff" strokeOpacity=".55" strokeWidth="1.1" strokeLinecap="round" />
+  </svg>
+)
+
+// Line-style bell / bell-off for the small mute toggle inside the panel header
+// (replaces the 🔔 / 🔕 emoji so it matches the topbar icon's quality).
+const BellLineIcon = ({ size = 17 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+  </svg>
+)
+const BellOffIcon = ({ size = 17 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M8.7 3A6 6 0 0 1 18 8c0 2.4.33 4.1.77 5.4" />
+    <path d="M6.05 6.05A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h13" />
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    <line x1="2" y1="2" x2="22" y2="22" />
+  </svg>
+)
+
 export default function NotificationBell() {
+  const navigate = useNavigate()
   const [items, setItems] = useState<Notif[]>([])
   const [unread, setUnread] = useState(0)
   const [open, setOpen] = useState(false)
@@ -79,10 +117,18 @@ export default function NotificationBell() {
     if (next && unread > 0) { await api.post('/notifications/read-all'); setUnread(0); load() }
   }
 
+  // Click a notification → jump to whatever it's about: the related task drawer, or
+  // the Chats page for message notifications.
+  const openNotif = (n: Notif) => {
+    setOpen(false)
+    if (n.type === 'chat_message') navigate('/chats')
+    else if (n.task_id) navigate(`/tasks?task=${n.task_id}`)
+  }
+
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <button className="btn btn-ghost" onClick={toggle} title="Notifications" style={{ fontSize: 18, position: 'relative', lineHeight: 1 }}>
-        <span className={vibrating ? 'bell-vibrate' : ''} style={{ display: 'inline-block' }}>🔔</span>
+      <button className="btn btn-ghost bell-btn" onClick={toggle} title="Notifications" style={{ position: 'relative', lineHeight: 1, padding: 6 }}>
+        <span className={vibrating ? 'bell-vibrate' : ''} style={{ display: 'inline-flex' }}><BellIcon /></span>
         {unread > 0 && (
           <span style={{ position: 'absolute', top: -2, right: -2, background: '#ef4444', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'grid', placeItems: 'center', padding: '0 4px' }}>
             {unread > 9 ? '9+' : unread}
@@ -102,21 +148,32 @@ export default function NotificationBell() {
                 if (next) playChime() // preview the chime when turning it on
                 return next
               })}
-              style={{ fontSize: 16, lineHeight: 1, padding: '2px 6px' }}
+              style={{ lineHeight: 1, padding: '4px 6px', color: soundOn ? 'var(--primary)' : 'var(--muted)' }}
             >
-              {soundOn ? '🔔' : '🔕'}
+              {soundOn ? <BellLineIcon /> : <BellOffIcon />}
             </button>
           </div>
           {items.length === 0 && <div className="empty" style={{ padding: 24 }}>You're all caught up 🎉</div>}
-          {items.map((n) => (
-            <div key={n.id} style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(197,86,15,.08)', fontSize: 13, display: 'flex', gap: 8 }}>
-              <span>{ICON[n.type] || '•'}</span>
-              <div>
-                <div>{n.message}</div>
-                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{new Date(n.created_at).toLocaleString()}</div>
+          {items.map((n) => {
+            const actionable = n.type === 'chat_message' || !!n.task_id
+            return (
+              <div
+                key={n.id}
+                className={'notif-item' + (actionable ? ' actionable' : '')}
+                onClick={actionable ? () => openNotif(n) : undefined}
+                role={actionable ? 'button' : undefined}
+                tabIndex={actionable ? 0 : undefined}
+                onKeyDown={actionable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNotif(n) } } : undefined}
+                style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(197,86,15,.08)', fontSize: 13, display: 'flex', gap: 8 }}
+              >
+                <span>{ICON[n.type] || '•'}</span>
+                <div>
+                  <div>{n.message}</div>
+                  <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{new Date(n.created_at).toLocaleString()}</div>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

@@ -92,8 +92,10 @@ export function Bar({ value, max, color }: { value: number; max: number; color: 
 }
 
 // Power BI–style donut: SVG ring split into colored segments with the total in the center.
-export function Donut({ data, size = 150, thickness = 24 }:
-  { data: { label: string; value: number; color: string }[]; size?: number; thickness?: number }) {
+// Pass onSegmentClick to make each colored segment a clickable link (e.g. drill into
+// that priority's tasks). Zero-value slices are skipped so they're not clickable.
+export function Donut({ data, size = 150, thickness = 24, onSegmentClick }:
+  { data: { label: string; value: number; color: string }[]; size?: number; thickness?: number; onSegmentClick?: (label: string) => void }) {
   const total = data.reduce((s, d) => s + d.value, 0)
   const r = (size - thickness) / 2
   const circ = 2 * Math.PI * r
@@ -105,10 +107,14 @@ export function Donut({ data, size = 150, thickness = 24 }:
         <circle cx={cx} cy={cx} r={r} fill="none" stroke="#eef2f7" strokeWidth={thickness} />
         {total > 0 && data.map((d, i) => {
           const len = (d.value / total) * circ
+          const clickable = !!onSegmentClick && d.value > 0
           const seg = (
             <circle key={i} cx={cx} cy={cx} r={r} fill="none" stroke={d.color} strokeWidth={thickness}
               strokeDasharray={`${len} ${circ - len}`} strokeDashoffset={-offset}
-              style={{ transition: 'stroke-dasharray .5s' }} />
+              onClick={clickable ? () => onSegmentClick!(d.label) : undefined}
+              style={{ transition: 'stroke-dasharray .5s', cursor: clickable ? 'pointer' : undefined }}>
+              {clickable && <title>{`Open ${d.label} tasks (${d.value})`}</title>}
+            </circle>
           )
           offset += len
           return seg

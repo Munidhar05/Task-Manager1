@@ -331,9 +331,48 @@ export function initSchema() {
     FOREIGN KEY (suggested_assignee_id) REFERENCES users(id)
   );
   CREATE INDEX IF NOT EXISTS idx_suggested_meeting ON suggested_tasks(meeting_id, status);
+
+  -- Team invitations: a manager invites a teammate by email; the invitee follows
+  -- a tokenized link to set their own password and join the org with the given role.
+  CREATE TABLE IF NOT EXISTS invites (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL,
+    department_id TEXT,
+    token TEXT NOT NULL UNIQUE,
+    invited_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | accepted | revoked
+    created_at TEXT NOT NULL,
+    accepted_at TEXT,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (org_id) REFERENCES organizations(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_invites_org ON invites(org_id, status);
+
+  -- Single-use, expiring tokens for "forgot password".
+  CREATE TABLE IF NOT EXISTS password_resets (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  -- Single-use, expiring tokens that confirm a user owns their email address.
+  CREATE TABLE IF NOT EXISTS email_verifications (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
+  ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
   ensureColumn('tasks', 'assigned_at', 'TEXT')
   ensureColumn('tasks', 'submitted_at', 'TEXT')
   ensureColumn('tasks', 'completed_at', 'TEXT')

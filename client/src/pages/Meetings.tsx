@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
-import { LANG_LABEL } from '../ui'
+import { LANG_LABEL, EmptyState } from '../ui'
+import { confirmDialog } from '../lib/confirm'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
 
@@ -49,12 +50,17 @@ export default function Meetings() {
   const [showUpload, setShowUpload] = useState(false)
   const [showLive, setShowLive] = useState(false)
   const [editing, setEditing] = useState<any | null>(null)
-  const load = () => api.get('/meetings').then(setMeetings)
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState(false)
+  const load = () => {
+    setError(false)
+    api.get('/meetings').then((d) => { setMeetings(d); setLoaded(true) }).catch(() => { setError(true); setLoaded(true) })
+  }
   useEffect(() => { load() }, [])
   const isManager = user?.role !== 'employee'
 
   const del = async (m: any) => {
-    if (!window.confirm(`Delete "${m.title}" and its ${m.task_count || 0} extracted task(s)? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: 'Delete meeting', message: `Delete "${m.title}" and its ${m.task_count || 0} extracted task(s)? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return
     await api.del('/meetings/' + m.id)
     load()
   }
@@ -99,7 +105,20 @@ export default function Meetings() {
             </div>
           </div>
         ))}
-        {meetings.length === 0 && <div className="empty">No meetings yet. Upload one to see the AI extract tasks.</div>}
+        {!loaded && Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="card"><div className="card-pad"><span className="skeleton" style={{ height: 100, borderRadius: 10 }} /></div></div>
+        ))}
+        {loaded && error && (
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <EmptyState icon="⚠️" title="Couldn't load meetings" hint="Check your connection and try again."
+              action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
+          </div>
+        )}
+        {loaded && !error && meetings.length === 0 && (
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <EmptyState icon="🎙️" title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." />
+          </div>
+        )}
       </div>
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} onDone={(id) => { setShowUpload(false); load(); nav('/meetings/' + id) }} />}
       {showLive && <LiveMeetingModal defaultSpeaker={user?.name || 'Manager'} onClose={() => setShowLive(false)} onDone={(id) => { setShowLive(false); load(); nav('/meetings/' + id) }} />}

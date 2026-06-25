@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, User } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Badge } from '../ui'
+import { confirmDialog } from '../lib/confirm'
 
 // User-management UI for the Administration page. The manager is the org admin
 // and manages employees and other managers.
@@ -10,17 +11,27 @@ export default function UserManagement() {
   const isAdmin = user?.role === 'admin'
   const [users, setUsers] = useState<User[]>([])
   const [depts, setDepts] = useState<any[]>([])
+  const [invites, setInvites] = useState<any[]>([])
   const [editing, setEditing] = useState<any | null>(null) // 'new' | user | null
+  const [inviting, setInviting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
   const [digest, setDigest] = useState<{ mode: string; hour: number } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const load = () => api.get('/users').then(setUsers)
+  const loadInvites = () => api.get('/invites').then(setInvites).catch(() => {})
   useEffect(() => {
     load()
+    loadInvites()
     api.get('/users/meta/departments').then(setDepts)
     api.get('/digest/status').then(setDigest).catch(() => {})
   }, [])
   const deptName = (id?: string) => depts.find((d) => d.id === id)?.name || '—'
+
+  const revokeInvite = async (inv: any) => {
+    if (!(await confirmDialog({ title: 'Revoke invitation', message: `Revoke the invitation for ${inv.email}?`, confirmText: 'Revoke', danger: true }))) return
+    try { await api.del('/invites/' + inv.id); loadInvites() }
+    catch (e: any) { setImportMsg('✕ ' + e.message) }
+  }
 
   const onImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -41,7 +52,7 @@ export default function UserManagement() {
   }
 
   const sendDigestNow = async () => {
-    if (!window.confirm('Send the daily task digest now to everyone?')) return
+    if (!(await confirmDialog({ title: 'Send digest now', message: 'Send the daily task digest now to everyone?', confirmText: 'Send' }))) return
     setImportMsg('Sending digest…')
     try {
       const r = await api.post('/digest/send-now')
@@ -55,7 +66,7 @@ export default function UserManagement() {
 
   const remove = async (u: User) => {
     if (u.id === user?.id) { setImportMsg('✕ You cannot remove your own account'); return }
-    if (!window.confirm(`Remove ${u.name}? This permanently deletes the account and unassigns their tasks.`)) return
+    if (!(await confirmDialog({ title: 'Remove user', message: `Remove ${u.name}? This permanently deletes the account and unassigns their tasks.`, confirmText: 'Remove', danger: true }))) return
     try {
       await api.del('/users/' + u.id)
       setImportMsg(`✓ Removed ${u.name}`)
@@ -72,10 +83,22 @@ export default function UserManagement() {
           <button className="btn btn-sm" onClick={downloadTemplate}>⬇ Template</button>
           <button className="btn btn-sm" onClick={() => fileRef.current?.click()}>⬆ Import Excel/CSV</button>
           <button className="btn btn-sm" onClick={sendDigestNow}>✉ Send digest now</button>
+          <button className="btn btn-sm" onClick={() => setInviting(true)}>✉ Invite teammate</button>
           <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>+ Add user</button>
         </div>
       </div>
       {importMsg && <div className="muted" style={{ marginBottom: 10, fontSize: 13 }}>{importMsg}</div>}
+      {invites.length > 0 && (
+        <div className="card" style={{ marginBottom: 12, padding: '10px 14px' }}>
+          <div className="muted" style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Pending invitations ({invites.length})</div>
+          {invites.map((inv) => (
+            <div key={inv.id} className="row spread" style={{ padding: '5px 0', borderTop: '1px solid #f1f1f1' }}>
+              <span style={{ fontSize: 13 }}>{inv.email} <span className="muted">· {inv.role}</span></span>
+              <button className="btn btn-sm" style={{ color: '#ef4444' }} onClick={() => revokeInvite(inv)}>Revoke</button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="card table-card-wrap">
         <table className="table-cards">
           <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Department</th><th></th></tr></thead>
@@ -103,7 +126,74 @@ export default function UserManagement() {
         </table>
       </div>
       {editing && <UserForm user={editing === 'new' ? null : editing} depts={depts} isAdmin={isAdmin} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load() }} />}
+      {inviting && <InviteForm depts={depts} isAdmin={isAdmin} onClose={() => setInviting(false)} onDone={loadInvites} />}
     </>
+  )
+}
+
+// Invite a teammate by email. Shows the resulting accept-link so the manager can
+// copy/share it directly — essential when SMTP isn't configured (preview mode).
+function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
+  const [f, setF] = useState<any>({ email: '', role: 'employee', department_id: '' })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [result, setResult] = useState<{ link: string; emailed: boolean } | null>(null)
+  const [copied, setCopied] = useState(false)
+  const roleOptions = isAdmin ? ['employee', 'manager', 'admin'] : ['employee', 'manager']
+
+  const send = async () => {
+    setErr('')
+    const email = (f.email || '').trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setErr('Please enter a valid email address.'); return }
+    setBusy(true)
+    try {
+      const r = await api.post('/invites', { email, role: f.role, department_id: f.department_id || null })
+      setResult({ link: r.link, emailed: r.emailed })
+      onDone()
+    } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText(result!.link); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch {}
+  }
+
+  return (
+    <div className="modal-center" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="card-head spread"><h3>Invite teammate</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
+        <div className="card-pad grid" style={{ gap: 12 }}>
+          {result ? (
+            <>
+              <div className="muted" style={{ fontSize: 13.5, lineHeight: 1.5, background: result.emailed ? '#ecfdf5' : '#fffbeb', border: `1px solid ${result.emailed ? '#a7f3d0' : '#fde68a'}`, borderRadius: 8, padding: '12px 14px' }}>
+                {result.emailed
+                  ? '✅ Invitation emailed. They can also use the link below.'
+                  : '✉ Invitation created. Email isn’t configured, so copy this link and share it directly:'}
+              </div>
+              <div className="row" style={{ gap: 8 }}>
+                <input readOnly value={result.link} style={{ flex: 1 }} onFocus={(e) => e.currentTarget.select()} />
+                <button className="btn btn-sm btn-primary" onClick={copyLink}>{copied ? 'Copied!' : 'Copy'}</button>
+              </div>
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={onClose}>Done</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div><label>Email</label><input value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="teammate@company.com" type="email" autoFocus /></div>
+              <div className="grid grid-2" style={{ gap: 10 }}>
+                <div><label>Role</label><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roleOptions.map((r) => <option key={r}>{r}</option>)}</select></div>
+                <div><label>Department</label><select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}><option value="">—</option>{depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+              </div>
+              {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={onClose}>Cancel</button>
+                <button className="btn btn-primary" onClick={send} disabled={busy || !f.email}>{busy ? <span className="spinner" /> : 'Send invite'}</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 

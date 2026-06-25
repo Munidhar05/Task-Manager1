@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime, PRIORITY_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
 import { pushBackHandler } from '../back'
+import { toast } from '../lib/toast'
+import { useEscape } from '../lib/useEscape'
 
 // Date the task was GIVEN to its owner — drives grouping, ordering, and the Time
 // column. Using the given date (not the latest activity) means completing a task
@@ -31,6 +34,14 @@ function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) 
   React.useEffect(fit, [props.value])
   return <textarea ref={ref} rows={1} {...props} onInput={fit} style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }} />
 }
+
+// Clean line-art magnifier for the collapsible search control.
+const SearchIcon = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="11" cy="11" r="7" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+)
 
 // Clean line-art microphone (replaces the old 🎤 emoji on the Speak button).
 const MicIcon = ({ size = 14 }: { size?: number }) => (
@@ -59,30 +70,117 @@ const cmpAsc = (a: Task, b: Task, key: SortKey): number => {
   }
 }
 
+// A nicely themed sort control (replaces the plain native <select>, whose popup
+// can't be styled). Shows the active option, opens a rounded menu with a check on
+// the current choice, and closes on outside-click or selection.
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: 'time', label: 'Default' },
+  { key: 'priority', label: 'Priority' },
+  { key: 'status', label: 'Status' },
+  { key: 'assignee', label: 'Assignee' },
+  { key: 'due', label: 'Due date' },
+]
+const SortGlyph = () => (
+  <svg className="sortmenu-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m3 16 4 4 4-4" /><path d="M7 20V4" /><path d="m21 8-4-4-4 4" /><path d="M17 4v16" />
+  </svg>
+)
+function SortMenu({ sortKey, onPick }: { sortKey: SortKey; onPick: (key: SortKey) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+  const current = SORT_OPTIONS.find((o) => o.key === sortKey) || SORT_OPTIONS[0]
+  return (
+    <div className="sortmenu toolbar-sort" ref={ref}>
+      <button className="sortmenu-btn" onClick={() => setOpen((o) => !o)} title="Sort tasks" aria-haspopup="listbox" aria-expanded={open}>
+        <SortGlyph />
+        <span className="sortmenu-label">Sort: {current.label}</span>
+        <svg className={'sortmenu-chev' + (open ? ' flip' : '')} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div className="sortmenu-pop" role="listbox">
+          {SORT_OPTIONS.map((o) => (
+            <button
+              key={o.key}
+              role="option"
+              aria-selected={o.key === sortKey}
+              className={'sortmenu-item' + (o.key === sortKey ? ' active' : '')}
+              onClick={() => { onPick(o.key); setOpen(false) }}
+            >
+              <span>{o.label}</span>
+              {o.key === sortKey && (
+                <svg className="sortmenu-check" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Tasks({ personal = false }: { personal?: boolean }) {
   const { user } = useAuth()
+  // Dashboard KPI cards deep-link here, e.g. /tasks?view=completed or
+  // /tasks?status=Blocked — seed the quick view / status filter from the URL.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const QUICK_VIEWS = ['active', 'overdue', 'today', 'completed'] as const
+  const urlView = searchParams.get('view')
+  const initialQuick = (QUICK_VIEWS as readonly string[]).includes(urlView || '')
+    ? (urlView as 'active' | 'overdue' | 'today' | 'completed') : 'active'
   const [tasks, setTasks] = useState<Task[]>([])
   const [users, setUsers] = useState<User[]>([])
-  const [openId, setOpenId] = useState<string | null>(null)
+  // Opening a task by id (e.g. ?task=… from a clicked notification) shows its drawer.
+  const [openId, setOpenId] = useState<string | null>(searchParams.get('task'))
   const [showNew, setShowNew] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
-  const [quickView, setQuickView] = useState<'active' | 'overdue' | 'today' | 'completed'>('active')
-  const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: '', status: '', assignee: '' })
+  // Search is collapsed to just an icon by default; tapping it reveals the input.
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [quickView, setQuickView] = useState<'active' | 'overdue' | 'today' | 'completed'>(initialQuick)
+  const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: searchParams.get('priority') || '', status: searchParams.get('status') || '', assignee: searchParams.get('assignee') || '' })
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'time', dir: 'desc' })
   // Click a header: toggle direction if it's the active column, else switch to it (default desc).
   const toggleSort = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
 
+  const [loadError, setLoadError] = useState(false)
+  // Guard against out-of-order responses: only the latest request may apply state.
+  const reqIdRef = useRef(0)
   const load = () => {
+    const myReq = ++reqIdRef.current
+    setLoadError(false)
     const p = new URLSearchParams()
     Object.entries(filters).forEach(([k, v]) => v && p.set(k, v))
     if (personal) p.set('mine', '1') // My Tasks: only the current user's own tasks
-    api.get('/tasks?' + p.toString()).then(setTasks)
+    api.get('/tasks?' + p.toString())
+      .then((d) => { if (myReq === reqIdRef.current) setTasks(d) })
+      .catch(() => { if (myReq === reqIdRef.current) setLoadError(true) })
   }
   // Re-fetch on `personal` too: /tasks and /my-tasks reuse this same component, so
   // navigating between them flips `personal` without changing `filters` — without
   // this dep the list would keep showing the previous route's tasks until a refresh.
   useEffect(() => { load() }, [filters, personal])
   useEffect(() => { api.get('/users').then(setUsers) }, [])
+
+  // If navigated here with ?task=… (e.g. by clicking a notification) while already
+  // on this page, open that task's drawer too.
+  useEffect(() => {
+    const t = searchParams.get('task')
+    if (t) setOpenId(t)
+  }, [searchParams])
+
+  // Close the drawer and drop the ?task= param so it stays closed and the URL is clean.
+  const closeDrawer = () => {
+    setOpenId(null)
+    if (searchParams.get('task')) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('task')
+      setSearchParams(next, { replace: true })
+    }
+  }
 
   // Android back button: close the open task drawer / new-task modal first.
   useEffect(() => pushBackHandler(() => {
@@ -267,30 +365,73 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   return (
     <>
       <div className="toolbar">
-        <input placeholder="🔍 Search tasks…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} style={{ minWidth: 220 }} />
-        <select value={filters.priority} onChange={(e) => setFilters({ ...filters, priority: e.target.value })}>
-          <option value="">All priorities</option>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
-        </select>
-        <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
-          <option value="">All statuses</option>{['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened'].map((s) => <option key={s}>{s}</option>)}
-        </select>
-        {isManager && (
-          <select value={filters.assignee} onChange={(e) => setFilters({ ...filters, assignee: e.target.value })}>
-            <option value="">All assignees</option>
-            <option value="unassigned">⚠ Unassigned</option>
-            {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+        {/* search + sort + new task stay together on one line (esp. on mobile).
+            `.toolbar-actions` is display:contents on desktop so these flow into the
+            toolbar individually, and a single nowrap flex row on mobile. */}
+        <div className="toolbar-actions">
+          {searchOpen || filters.q ? (
+            <div className="search-box toolbar-search">
+              <span className="search-box-icon"><SearchIcon size={16} /></span>
+              <input
+                autoFocus
+                placeholder="Search tasks…"
+                value={filters.q}
+                onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+                onKeyDown={(e) => { if (e.key === 'Escape') { setFilters({ ...filters, q: '' }); setSearchOpen(false) } }}
+              />
+              <button
+                className="search-box-clear"
+                onClick={() => { setFilters({ ...filters, q: '' }); setSearchOpen(false) }}
+                title="Close search"
+                aria-label="Close search"
+              >✕</button>
+            </div>
+          ) : (
+            <button className="icon-btn toolbar-search" onClick={() => setSearchOpen(true)} title="Search tasks" aria-label="Search tasks">
+              <SearchIcon />
+            </button>
+          )}
+          {/* MOBILE-ONLY: sort the visible tasks. 'time' (newest first) is the default
+              "show everything" order; the rest pick a sensible direction per column. */}
+          {view === 'list' && (
+            <SortMenu
+              sortKey={sort.key}
+              onPick={(key) => setSort({ key, dir: key === 'time' || key === 'priority' ? 'desc' : 'asc' })}
+            />
+          )}
+          <button className="btn btn-primary btn-sm toolbar-newtask" onClick={() => setShowNew(true)}>+ New task</button>
+        </div>
+        {/* DESKTOP: the three filter dropdowns (+ sortable column headers). Hidden on
+            mobile, where the Sort control above takes their place instead. */}
+        <div className="toolbar-filters">
+          <select value={filters.priority} onChange={(e) => setFilters({ ...filters, priority: e.target.value })}>
+            <option value="">All priorities</option>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
           </select>
-        )}
-        <div className="row" style={{ marginLeft: 'auto', gap: 8 }}>
+          <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
+            <option value="">All statuses</option>{['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened'].map((s) => <option key={s}>{s}</option>)}
+          </select>
+          {isManager && (
+            <select value={filters.assignee} onChange={(e) => setFilters({ ...filters, assignee: e.target.value })}>
+              <option value="">All assignees</option>
+              <option value="unassigned">⚠ Unassigned</option>
+              {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          )}
+        </div>
+        <div className="row toolbar-view" style={{ marginLeft: 'auto', gap: 8 }}>
           <div className="seg">
             <button className={'seg-btn' + (view === 'list' ? ' active' : '')} onClick={() => setView('list')} title="List view">☰ List</button>
             <button className={'seg-btn' + (view === 'board' ? ' active' : '')} onClick={() => setView('board')} title="Board view">▤ Board</button>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New task</button>
         </div>
       </div>
 
-      {view === 'board' ? (
+      {loadError ? (
+        <div className="card">
+          <EmptyState icon="⚠️" title="Couldn't load tasks" hint="Check your connection and try again."
+            action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
+        </div>
+      ) : view === 'board' ? (
         tasks.length === 0 ? (
           <div className="card">
             <EmptyState
@@ -389,7 +530,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         </>
       )}
 
-      {openId && <TaskDrawer taskId={openId} onClose={() => setOpenId(null)} onChange={load} />}
+      {openId && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={load} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
     </>
   )
@@ -397,6 +538,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
 function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; personal?: boolean; onClose: () => void; onCreated: () => void }) {
   const { user } = useAuth()
+  useEscape(onClose)
   const isEmployee = user?.role === 'employee'
   // Private only in My Tasks (personal) mode. Everywhere else, anyone may assign
   // the task to anyone — so the assignee picker is shown to everyone.
@@ -480,10 +622,10 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
       if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
       const text = String(data?.text || '').trim()
       setHeard(text)
-      if (!text) { alert("Didn't catch that — please tap Speak and try again."); return }
+      if (!text) { toast.info("Didn't catch that — please tap Speak and try again."); return }
       await applyVoice(text)
     } catch (err: any) {
-      alert(err?.message || 'Could not transcribe the audio. Check your connection and try again.')
+      toast.error(err?.message || 'Could not transcribe the audio. Check your connection and try again.')
     } finally { setParsing(false) }
   }
 
@@ -494,10 +636,10 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
       try { mrRef.current?.stop() } catch {}
       return
     }
-    if (!canRecord) { alert('Voice input needs microphone access on this device.'); return }
+    if (!canRecord) { toast.error('Voice input needs microphone access on this device.'); return }
     let stream: MediaStream
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
-    catch { alert('Microphone access is blocked. Allow mic permission for this app and try again.'); return }
+    catch { toast.error('Microphone access is blocked. Allow mic permission for this app and try again.'); return }
     streamRef.current = stream
     chunksRef.current = []
     let mr: MediaRecorder
@@ -528,7 +670,6 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
               {listening && <span style={{ color: '#dc2626', fontWeight: 700, fontSize: 11 }}> ● recording…</span>}
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
-            <AutoTextarea style={{ width: '100%' }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
             {canRecord && (
               <button
                 type="button"
@@ -536,7 +677,6 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
                 onClick={toggleMic}
                 disabled={parsing}
                 title="Speak the task — AI fills in the title, details, assignee & priority"
-                style={{ marginTop: 6 }}
               >
                 {parsing
                   ? <><span className="spinner" /> Thinking…</>
@@ -556,6 +696,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
             {parsing && heard && (
               <div className="muted" style={{ fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>“{heard}”</div>
             )}
+            <AutoTextarea style={{ width: '100%', marginTop: 8 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
           </div>
           <div><label>Description</label><textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>

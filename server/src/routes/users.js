@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
-import { authRequired, requireRole, hashPassword, verifyToken } from '../auth.js'
+import { authRequired, requireRole, hashPassword, verifyPassword, verifyToken } from '../auth.js'
 import { id, now, audit } from '../util.js'
 import { publicUser } from './auth.js'
 
@@ -21,7 +21,9 @@ r.get('/:id/avatar', (req, res) => {
   const u = (req.headers.authorization || '').startsWith('Bearer ')
     ? verifyToken(req.headers.authorization.slice(7)) : verifyToken(req.query.token)
   if (!u) return res.status(401).json({ error: 'Authentication required' })
-  const target = db.prepare('SELECT avatar_file FROM users WHERE id=?').get(req.params.id)
+  // Tenant isolation: only serve photos of users in the requester's own org, so a
+  // token from one company can't fetch another company's avatars by guessing ids.
+  const target = db.prepare('SELECT avatar_file FROM users WHERE id=? AND org_id=?').get(req.params.id, u.org_id)
   if (!target?.avatar_file) return res.status(404).json({ error: 'No avatar' })
   const abs = path.join(AVATAR_DIR, target.avatar_file)
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'Missing' })
@@ -48,6 +50,36 @@ r.post('/me/avatar', avatarUpload.single('file'), (req, res) => {
   db.prepare('UPDATE users SET avatar_file=? WHERE id=?').run(req.file.filename, req.user.id)
   if (old) try { fs.unlinkSync(path.join(AVATAR_DIR, old)) } catch {}
   res.json({ ok: true, avatar_file: req.file.filename })
+})
+
+// SELF-SERVICE: any signed-in user can update their OWN profile — name, preferred
+// language, and password. Changing the password requires the current one. This is
+// separate from the admin-only PATCH /:id below, and must be declared before it so
+// "/me" isn't captured as an :id.
+r.patch('/me', (req, res) => {
+  const b = req.body || {}
+  const sets = [], args = []
+  if ('name' in b) {
+    const name = String(b.name || '').trim()
+    if (!name) return res.status(400).json({ error: 'Name cannot be empty.' })
+    sets.push('name=?'); args.push(name)
+  }
+  if ('preferred_language' in b) { sets.push('preferred_language=?'); args.push(b.preferred_language || 'en') }
+  if (b.new_password) {
+    if (String(b.new_password).length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters.' })
+    const me = db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.user.id)
+    if (!verifyPassword(String(b.current_password || ''), me.password_hash)) {
+      return res.status(400).json({ error: 'Your current password is incorrect.' })
+    }
+    sets.push('password_hash=?'); args.push(hashPassword(b.new_password))
+  }
+  if (!sets.length) return res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)))
+  args.push(req.user.id)
+  db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id=?`).run(...args)
+  const changed = Object.keys(b).filter((k) => k !== 'current_password' && k !== 'new_password')
+  if (b.new_password) changed.push('password')
+  audit(req.user.org_id, req.user.id, 'user.self_update', 'user', req.user.id, changed.join(', '))
+  res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)))
 })
 
 // Validation: only @gmail.com / @befach.com emails, and phone must be 10 digits.
