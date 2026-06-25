@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, User } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Badge } from '../ui'
+import { confirmDialog } from '../lib/confirm'
 
 // User-management UI for the Administration page. The manager is the org admin
 // and manages employees and other managers.
@@ -27,7 +28,7 @@ export default function UserManagement() {
   const deptName = (id?: string) => depts.find((d) => d.id === id)?.name || '—'
 
   const revokeInvite = async (inv: any) => {
-    if (!window.confirm(`Revoke the invitation for ${inv.email}?`)) return
+    if (!(await confirmDialog({ title: 'Revoke invitation', message: `Revoke the invitation for ${inv.email}?`, confirmText: 'Revoke', danger: true }))) return
     try { await api.del('/invites/' + inv.id); loadInvites() }
     catch (e: any) { setImportMsg('✕ ' + e.message) }
   }
@@ -51,7 +52,7 @@ export default function UserManagement() {
   }
 
   const sendDigestNow = async () => {
-    if (!window.confirm('Send the daily task digest now to everyone?')) return
+    if (!(await confirmDialog({ title: 'Send digest now', message: 'Send the daily task digest now to everyone?', confirmText: 'Send' }))) return
     setImportMsg('Sending digest…')
     try {
       const r = await api.post('/digest/send-now')
@@ -65,7 +66,7 @@ export default function UserManagement() {
 
   const remove = async (u: User) => {
     if (u.id === user?.id) { setImportMsg('✕ You cannot remove your own account'); return }
-    if (!window.confirm(`Remove ${u.name}? This permanently deletes the account and unassigns their tasks.`)) return
+    if (!(await confirmDialog({ title: 'Remove user', message: `Remove ${u.name}? This permanently deletes the account and unassigns their tasks.`, confirmText: 'Remove', danger: true }))) return
     try {
       await api.del('/users/' + u.id)
       setImportMsg(`✓ Removed ${u.name}`)

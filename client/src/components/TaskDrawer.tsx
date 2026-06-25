@@ -2,11 +2,14 @@ import React, { useEffect, useState } from 'react'
 import { api, Task, User } from '../api'
 import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, dueLabel, fmtDateTime } from '../ui'
+import { confirmDialog } from '../lib/confirm'
+import { useEscape } from '../lib/useEscape'
 
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
 export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: string; onClose: () => void; onChange?: () => void }) {
   const { user } = useAuth()
+  useEscape(onClose)
   const [task, setTask] = useState<Task | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [comment, setComment] = useState('')
@@ -46,7 +49,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     setShowSplit(false)
   }
   const del = async () => {
-    if (!window.confirm('Delete this task? This cannot be undone.')) return
+    if (!(await confirmDialog({ title: 'Delete task', message: 'Delete this task? This cannot be undone.', confirmText: 'Delete', danger: true }))) return
     setBusy(true)
     try { await api.del(`/tasks/${taskId}`); onChange?.(); onClose() }
     finally { setBusy(false) }

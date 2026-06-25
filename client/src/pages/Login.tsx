@@ -2,6 +2,14 @@ import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 
+// Clean line-art eye / eye-off for the password reveal toggle.
+const EyeIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>
+)
+const EyeOffIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.45M6.6 6.6A13.2 13.2 0 0 0 2 11s3.5 7 10 7a9.1 9.1 0 0 0 4.2-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /><line x1="2" y1="2" x2="22" y2="22" /></svg>
+)
+
 export default function Login() {
   const { login } = useAuth()
   const [email, setEmail] = useState('')
@@ -77,7 +85,7 @@ export default function Login() {
                 tabIndex={-1}
                 aria-label={showPw ? 'Hide password' : 'Show password'}
               >
-                {showPw ? '🙈' : '👁'}
+                {showPw ? <EyeOffIcon /> : <EyeIcon />}
               </button>
             </div>
           </div>

@@ -3,9 +3,12 @@ import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'reac
 import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
 import { runBackHandlers } from './back'
-import { api, userAvatarUrl, getToken, API_BASE } from './api'
+import { api, userAvatarUrl } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
+import ProfileModal from './components/ProfileModal'
+import ToastHost from './components/ToastHost'
+import ConfirmHost from './components/ConfirmHost'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import AcceptInvite from './pages/AcceptInvite'
@@ -57,22 +60,20 @@ const TITLES: Record<string, { t: string; s: string }> = {
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
-  const { user, logout, refresh } = useAuth()
-  const avatarInput = useRef<HTMLInputElement>(null)
-  const uploadAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; e.target.value = ''
-    if (!file) return
-    if (!file.type.startsWith('image/')) { alert('Please choose an image'); return }
-    if (file.size > 5 * 1024 * 1024) { alert('Image too large (max 5 MB)'); return }
-    try {
-      const form = new FormData(); form.append('file', file)
-      const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`${API_BASE}/api/users/me/avatar`, { method: 'POST', headers, body: form })
-      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
-      await refresh()
-    } catch (err: any) { alert('Could not set photo: ' + err.message) }
-  }
+  const { user, logout } = useAuth()
+  const [showProfile, setShowProfile] = useState(false)
   const loc = useLocation()
+  const navigate = useNavigate()
+  // Step back one entry in history (the previous tab/view). React Router stamps an
+  // incrementing `idx` on history state; idx 0 means we landed here directly (fresh
+  // load / deep link) with nothing to go back to, so fall back to the Dashboard
+  // instead of leaving the app.
+  const goBack = () => {
+    const idx = (window.history.state && (window.history.state as any).idx) || 0
+    if (idx > 0) navigate(-1)
+    else navigate('/')
+  }
+  const showBack = loc.pathname !== '/'
   const [open, setOpen] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
   // Poll the unread chat count so the Chats nav item shows a live badge.
@@ -106,15 +107,14 @@ function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="sidebar-user">
-          <input ref={avatarInput} type="file" accept="image/*" style={{ display: 'none' }} onChange={uploadAvatar} />
-          <button className="avatar-edit-btn" title="Change profile photo" onClick={() => avatarInput.current?.click()}>
+          <button className="avatar-edit-btn" title="Open profile & settings" onClick={() => setShowProfile(true)}>
             <Avatar name={user.name} color={user.avatar_color} size={36} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
             <span className="avatar-edit-icon">✎</span>
           </button>
-          <div className="meta">
+          <button className="meta sidebar-user-meta" onClick={() => setShowProfile(true)} title="Open profile & settings">
             <div className="n">{user.name}</div>
             <div className="r">{user.role}</div>
-          </div>
+          </button>
           <button className="btn btn-ghost btn-sm logout-btn" onClick={logout} title="Log out" aria-label="Log out">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 3v9" />
@@ -131,6 +131,13 @@ function Layout({ children }: { children: React.ReactNode }) {
               <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
             </svg>
           </button>
+          {showBack && (
+            <button className="back-btn" onClick={goBack} aria-label="Go back" title="Back">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </button>
+          )}
           <div>
             <h1>{meta.t}</h1>
             <div className="sub">{meta.s}</div>
@@ -141,6 +148,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         </header>
         <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
       </div>
+      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
     </div>
   )
 }
@@ -205,6 +213,9 @@ export default function App() {
   const { user } = useAuth()
   useAndroidBackButton()
   return (
+    <>
+    <ToastHost />
+    <ConfirmHost />
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/signup" element={user ? <Navigate to="/" replace /> : <Signup />} />
@@ -222,5 +233,6 @@ export default function App() {
       <Route path="/admin" element={<Protected roles={['manager']}><Admin /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </>
   )
 }

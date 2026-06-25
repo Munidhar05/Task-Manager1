@@ -3,6 +3,8 @@ import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '.
 import { useAuth } from '../auth'
 import { Avatar, EmptyState } from '../ui'
 import { pushBackHandler } from '../back'
+import { toast } from '../lib/toast'
+import { confirmDialog } from '../lib/confirm'
 
 interface Member { id: string; name: string; avatar_color?: string; avatar_file?: string | null; role: string }
 interface Conversation {
@@ -87,7 +89,6 @@ export default function Chats() {
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [navOpen, setNavOpen] = useState(false)
   const [menuId, setMenuId] = useState<string | null>(null)
   const [reactFor, setReactFor] = useState<string | null>(null)
   const [typingName, setTypingName] = useState<string | null>(null)
@@ -136,7 +137,8 @@ export default function Chats() {
     return () => { cancel = true }
   }, [user?.id])
 
-  useEffect(() => { if (!activeId && convos.length) setActiveId(convos[0].id) }, [convos, activeId])
+  // WhatsApp-style: do NOT auto-open a chat. The list is shown first; the user
+  // taps a conversation to open it (and the back arrow returns to the list).
   useEffect(() => { if (activeId) { loadThread(activeId); setReplyTo(null); setEditing(null); setInSearch(''); setInSearchOpen(false); setShowInfo(false) } }, [activeId])
   useEffect(() => { if (!inSearchOpen) logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [messages, busy, typingName, inSearchOpen])
   useEffect(() => { const h = () => { setMenuId(null); setReactFor(null); setConvoMenu(null) }; document.addEventListener('click', h); return () => document.removeEventListener('click', h) }, [])
@@ -150,9 +152,9 @@ export default function Chats() {
     if (showInfo) { setShowInfo(false); return true }
     if (showNew) { setShowNew(false); return true }
     if (inSearchOpen) { setInSearchOpen(false); setInSearch(''); return true }
-    if (navOpen) { setNavOpen(false); return true }
+    if (activeId) { setActiveId(''); return true } // open chat → back to the list
     return false
-  }), [menuId, reactFor, convoMenu, forwardMsg, showStarred, showInfo, showNew, inSearchOpen, navOpen])
+  }), [menuId, reactFor, convoMenu, forwardMsg, showStarred, showInfo, showNew, inSearchOpen, activeId])
 
   // WebSocket: messages, edits, reactions, deletes, reads, typing, membership changes.
   useEffect(() => {
@@ -237,14 +239,14 @@ export default function Chats() {
       const saved = await api.post(`/chat/conversations/${active.id}/messages`, { body, replyTo: rep?.id })
       mergeIncoming(saved); loadConvos()
     } catch (e: any) {
-      setMessages((m) => m.filter((x) => x.id !== optimistic.id)); setInput(body); alert('Could not send: ' + e.message)
+      setMessages((m) => m.filter((x) => x.id !== optimistic.id)); setInput(body); toast.error('Could not send: ' + e.message)
     } finally { setBusy(false) }
   }
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; e.target.value = ''
     if (!file || !active || busy) return
-    if (file.size > MAX_FILE) { alert('File too large (max 15 MB)'); return }
+    if (file.size > MAX_FILE) { toast.error('File too large (max 15 MB)'); return }
     const caption = input.trim(); const rep = replyTo
     setInput(''); setBusy(true); setReplyTo(null)
     const tmpId = 'tmp_' + Date.now()
@@ -259,7 +261,7 @@ export default function Chats() {
       if (!res.ok) throw new Error(data?.error || 'Upload failed')
       setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x))); loadConvos()
     } catch (err: any) {
-      setMessages((m) => m.filter((x) => x.id !== tmpId)); alert('Could not send file: ' + err.message)
+      setMessages((m) => m.filter((x) => x.id !== tmpId)); toast.error('Could not send file: ' + err.message)
     } finally { setBusy(false) }
   }
 
@@ -271,7 +273,7 @@ export default function Chats() {
       await api.patch(`/chat/message/${editing.id}`, { body })
       setMessages((p) => p.map((m) => (m.id === editing.id ? { ...m, body, edited_at: new Date().toISOString() } : m)))
       setEditing(null); setInput('')
-    } catch (e: any) { alert('Could not edit: ' + e.message) } finally { setBusy(false) }
+    } catch (e: any) { toast.error('Could not edit: ' + e.message) } finally { setBusy(false) }
   }
 
   // ---- message actions ----
@@ -288,11 +290,11 @@ export default function Chats() {
   const del = async (m: Msg) => {
     setMenuId(null)
     const mine = m.sender_id === user!.id
-    if (!window.confirm(mine ? 'Delete this message for everyone?' : 'Remove this message for you?')) return
+    if (!(await confirmDialog({ message: mine ? 'Delete this message for everyone?' : 'Remove this message for you?', confirmText: mine ? 'Delete' : 'Remove', danger: true }))) return
     const snap = messages
     if (mine) setMessages((p) => p.map((x) => (x.id === m.id ? { ...x, deleted: true, body: '', file: null, reactions: [] } : x)))
     else setMessages((p) => p.filter((x) => x.id !== m.id))
-    try { await api.del(`/chat/message/${m.id}`); loadConvos() } catch (e: any) { setMessages(snap); alert('Could not delete: ' + e.message) }
+    try { await api.del(`/chat/message/${m.id}`); loadConvos() } catch (e: any) { setMessages(snap); toast.error('Could not delete: ' + e.message) }
   }
   const copy = async (m: Msg) => {
     setMenuId(null)
@@ -304,7 +306,7 @@ export default function Chats() {
     const url = m.file ? `${location.origin}${fileUrl(m)}` : undefined
     const shareData: any = m.file ? { title: m.file.name, url } : { text: m.body }
     if (navigator.share) { try { await navigator.share(shareData) } catch {} }
-    else { try { await navigator.clipboard.writeText(url || m.body); alert('Link copied to clipboard') } catch {} }
+    else { try { await navigator.clipboard.writeText(url || m.body); toast.success('Link copied to clipboard') } catch {} }
   }
   const download = (m: Msg) => {
     setMenuId(null)
@@ -323,9 +325,9 @@ export default function Chats() {
 
   const clearChat = async (c: Conversation) => {
     setConvoMenu(null)
-    if (!window.confirm('Clear all messages in this chat? This only clears them for you.')) return
+    if (!(await confirmDialog({ title: 'Clear chat', message: 'Clear all messages in this chat? This only clears them for you.', confirmText: 'Clear' }))) return
     try { await api.post(`/chat/conversations/${c.id}/clear`); if (c.id === activeId) setMessages([]); loadConvos() }
-    catch (e: any) { alert('Could not clear: ' + e.message) }
+    catch (e: any) { toast.error('Could not clear: ' + e.message) }
   }
 
   const senderName = (uid: string) => (active?.members.find((mm) => mm.id === uid)?.name) || (uid === user?.id ? 'You' : 'Unknown')
@@ -351,7 +353,7 @@ export default function Chats() {
   if (loading) return <div className="card" style={{ display: 'grid', placeItems: 'center', height: 'calc(100vh - 160px)' }}><span className="spinner" /></div>
 
   return (
-    <div className={'assistant-layout' + (navOpen ? ' nav-open' : '')}>
+    <div className={'assistant-layout chat-layout' + (activeId ? ' chat-open' : '')}>
       {/* ---- sidebar: conversations ---- */}
       <aside className="chat-history">
         <div className="chat-history-head">
@@ -365,7 +367,7 @@ export default function Chats() {
         <div className="convo-list">
           {filteredConvos.length === 0 && <div className="empty" style={{ padding: 16, fontSize: 13 }}>No chats yet</div>}
           {filteredConvos.map((c) => (
-            <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '')} onClick={() => { setActiveId(c.id); setNavOpen(false) }}>
+            <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '')} onClick={() => setActiveId(c.id)}>
               {c.type === 'group'
                 ? <GroupAvatar conv={c} size={38} />
                 : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
@@ -402,17 +404,10 @@ export default function Chats() {
       {/* ---- conversation pane ---- */}
       <div className="card chat-pane" style={{ padding: 18 }}>
         <div className="chat">
-          {/* No chat open: a single button to reveal the conversation list (mobile). */}
-          {!active && (
-            <div className="chat-mobile-bar">
-              <button className="btn btn-ghost btn-sm" onClick={() => setNavOpen(true)}>☰ Chats</button>
-            </div>
-          )}
-
           {active && (() => { const otherOnline = active.type === 'direct' && !!active.other_user_id && online.has(active.other_user_id); return (
             <div className="chat-peer-head">
-              {/* Mobile-only: back to the conversation list (replaces the old extra hamburger). */}
-              <button className="chat-list-btn" onClick={() => setNavOpen(true)} title="Back to chats" aria-label="Back to chats">
+              {/* Mobile-only: back to the conversation list (WhatsApp-style). */}
+              <button className="chat-list-btn" onClick={() => setActiveId('')} title="Back to chats" aria-label="Back to chats">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
               </button>
               {active.type === 'group'
@@ -597,7 +592,7 @@ function ForwardModal({ message, convos, onClose, onDone }: { message: Msg; conv
   const go = async () => {
     if (!sel.size) return
     setBusy(true)
-    try { await api.post(`/chat/message/${message.id}/forward`, { conversationIds: [...sel] }); onDone() } catch (e: any) { alert(e.message); setBusy(false) }
+    try { await api.post(`/chat/message/${message.id}/forward`, { conversationIds: [...sel] }); onDone() } catch (e: any) { toast.error(e.message); setBusy(false) }
   }
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -658,12 +653,12 @@ function NewChatModal({ user, convos, onClose, onOpen }: { user: OrgUser; convos
 
   const startDirect = async (uid: string) => {
     setBusy(true)
-    try { const c = await api.post('/chat/conversations', { type: 'direct', userId: uid }); onOpen(c.id) } catch (e: any) { alert(e.message); setBusy(false) }
+    try { const c = await api.post('/chat/conversations', { type: 'direct', userId: uid }); onOpen(c.id) } catch (e: any) { toast.error(e.message); setBusy(false) }
   }
   const createGroup = async () => {
     if (!groupName.trim() || sel.size === 0) return
     setBusy(true)
-    try { const c = await api.post('/chat/conversations', { type: 'group', name: groupName.trim(), memberIds: [...sel] }); onOpen(c.id) } catch (e: any) { alert(e.message); setBusy(false) }
+    try { const c = await api.post('/chat/conversations', { type: 'group', name: groupName.trim(), memberIds: [...sel] }); onOpen(c.id) } catch (e: any) { toast.error(e.message); setBusy(false) }
   }
 
   return (
@@ -705,21 +700,21 @@ function GroupInfo({ conv, user, onClose, onChanged, onLeft }: { conv: Conversat
   const uploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; e.target.value = ''
     if (!file) return
-    if (!file.type.startsWith('image/')) { alert('Please choose an image'); return }
+    if (!file.type.startsWith('image/')) { toast.error('Please choose an image'); return }
     try {
       const form = new FormData(); form.append('file', file)
       const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
       const res = await fetch(`${API_BASE}/api/chat/conversations/${conv.id}/avatar`, { method: 'POST', headers, body: form })
       if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
       onChanged()
-    } catch (err: any) { alert('Could not set photo: ' + err.message) }
+    } catch (err: any) { toast.error('Could not set photo: ' + err.message) }
   }
 
-  const rename = async () => { if (!name.trim() || name === conv.name) return; try { await api.patch(`/chat/conversations/${conv.id}`, { name: name.trim() }); onChanged() } catch (e: any) { alert(e.message) } }
-  const addMembers = async () => { if (!sel.size) return; try { await api.post(`/chat/conversations/${conv.id}/members`, { userIds: [...sel] }); setAdding(false); setSel(new Set()); onChanged() } catch (e: any) { alert(e.message) } }
-  const remove = async (uid: string) => { if (!window.confirm('Remove this member?')) return; try { await api.del(`/chat/conversations/${conv.id}/members/${uid}`); onChanged() } catch (e: any) { alert(e.message) } }
-  const leave = async () => { if (!window.confirm('Leave this group?')) return; try { await api.del(`/chat/conversations/${conv.id}/members/${user.id}`); onLeft() } catch (e: any) { alert(e.message) } }
-  const deleteGroup = async () => { if (!window.confirm(`Delete "${conv.name}" for everyone? This cannot be undone.`)) return; try { await api.del(`/chat/conversations/${conv.id}`); onLeft() } catch (e: any) { alert(e.message) } }
+  const rename = async () => { if (!name.trim() || name === conv.name) return; try { await api.patch(`/chat/conversations/${conv.id}`, { name: name.trim() }); onChanged() } catch (e: any) { toast.error(e.message) } }
+  const addMembers = async () => { if (!sel.size) return; try { await api.post(`/chat/conversations/${conv.id}/members`, { userIds: [...sel] }); setAdding(false); setSel(new Set()); onChanged() } catch (e: any) { toast.error(e.message) } }
+  const remove = async (uid: string) => { if (!(await confirmDialog({ message: 'Remove this member?', confirmText: 'Remove', danger: true }))) return; try { await api.del(`/chat/conversations/${conv.id}/members/${uid}`); onChanged() } catch (e: any) { toast.error(e.message) } }
+  const leave = async () => { if (!(await confirmDialog({ title: 'Leave group', message: 'Leave this group?', confirmText: 'Leave', danger: true }))) return; try { await api.del(`/chat/conversations/${conv.id}/members/${user.id}`); onLeft() } catch (e: any) { toast.error(e.message) } }
+  const deleteGroup = async () => { if (!(await confirmDialog({ title: 'Delete group', message: `Delete "${conv.name}" for everyone? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return; try { await api.del(`/chat/conversations/${conv.id}`); onLeft() } catch (e: any) { toast.error(e.message) } }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
