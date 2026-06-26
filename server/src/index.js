@@ -18,6 +18,7 @@ import assistantRoutes from './routes/assistant.js'
 import notificationRoutes from './routes/notifications.js'
 import digestRoutes from './routes/digest.js'
 import chatRoutes from './routes/chat.js'
+import platformRoutes from './routes/platform.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -65,6 +66,7 @@ app.use('/api/assistant', assistantRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/digest', digestRoutes)
 app.use('/api/chat', chatRoutes)
+app.use('/api/platform', platformRoutes)
 
 // --- Serve the built web client (client/dist) from this SAME service ----------
 // So one URL hosts BOTH the website (for people without the Android app) AND the

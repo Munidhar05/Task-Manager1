@@ -74,3 +74,7 @@ services:
       # serves the web client at the same origin, so this is the service URL.
       - key: APP_URL
         sync: false
+      # Comma-separated emails granted PLATFORM (super) admin — these accounts can
+      # oversee ALL organizations. Synced on login; leave blank for none.
+      - key: PLATFORM_ADMIN_EMAILS
+        sync: false

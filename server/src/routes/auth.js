@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { db } from '../db.js'
-import { signToken, verifyPassword, hashPassword, authRequired } from '../auth.js'
+import { signToken, verifyPassword, hashPassword, authRequired, platformAdminEmails } from '../auth.js'
 import { audit, id, now, genToken, appUrl, inDays, isCommonPassword } from '../util.js'
 import { sendMail } from '../mailer.js'
 
@@ -19,7 +19,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 // org-scoped data model — a solo user is simply an organization of one.
 function userWithWorkspace(user) {
   const org = db.prepare('SELECT is_personal FROM organizations WHERE id = ?').get(user.org_id)
-  return { ...publicUser(user), workspace_personal: org?.is_personal ? 1 : 0 }
+  return { ...publicUser(user), workspace_personal: org?.is_personal ? 1 : 0, platform_admin: user.platform_admin ? 1 : 0 }
 }
 
 r.post('/signup', (req, res) => {
@@ -94,6 +94,12 @@ r.post('/login', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase().trim())
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid credentials' })
+  }
+  // Sync platform-admin status from the env allowlist (grants or revokes on login).
+  const isPlatform = platformAdminEmails().includes(String(user.email).toLowerCase()) ? 1 : 0
+  if ((user.platform_admin ? 1 : 0) !== isPlatform) {
+    db.prepare('UPDATE users SET platform_admin=? WHERE id=?').run(isPlatform, user.id)
+    user.platform_admin = isPlatform
   }
   audit(user.org_id, user.id, 'auth.login', 'user', user.id)
   res.json({ token: signToken(user), user: userWithWorkspace(user) })

@@ -375,6 +375,9 @@ export function initSchema() {
   // Marks a workspace as a solo/personal account (org of one) vs a team company.
   // Existing orgs default to 0 (company) — no change to the org structure.
   ensureColumn('organizations', 'is_personal', 'INTEGER DEFAULT 0')
+  // Platform (super) admin — can oversee ALL organizations. Granted via the
+  // PLATFORM_ADMIN_EMAILS env var (synced on login). Default 0 for everyone.
+  ensureColumn('users', 'platform_admin', 'INTEGER DEFAULT 0')
   // Per-org allowed email domains (comma-separated). NULL/empty = no restriction.
   ensureColumn('organizations', 'allowed_domains', 'TEXT')
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
