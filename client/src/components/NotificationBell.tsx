@@ -8,22 +8,27 @@ const ICON: Record<string, string> = {
   task_submitted: '📩', task_approved: '✅', task_reopened: '↩', task_assigned: '📌', task_comment: '💬', chat_message: '💬',
 }
 
-// Refined gradient bell for the topbar — amber→orange fill, no heavy outline, a
-// soft highlight and a slightly darker clapper. Crisp and premium on white.
-const BellIcon = ({ size = 22 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+// 3D glossy notification logo: a round brand-orange button with a white outline
+// bell. Original artwork — gradient body + a soft top gloss for the 3D look.
+const BellIcon = ({ size = 33 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 40 40" fill="none" aria-hidden="true">
     <defs>
-      <linearGradient id="bell-grad" x1="12" y1="2.5" x2="12" y2="19" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stopColor="#fcd34d" />
-        <stop offset="1" stopColor="#ea580c" />
+      <linearGradient id="nb-circ" x1="20" y1="2" x2="20" y2="38" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#e8853c" />
+        <stop offset=".5" stopColor="#c5560f" />
+        <stop offset="1" stopColor="#a3450b" />
       </linearGradient>
     </defs>
-    <path
-      d="M12 3.1a1.5 1.5 0 0 0-1.5 1.5v.45A5.6 5.6 0 0 0 6.4 10.5v1.95c0 1.02-.41 2-1.14 2.71l-.16.16c-.69.68-.2 1.85.76 1.85h12.28c.96 0 1.45-1.17.76-1.85l-.16-.16a3.8 3.8 0 0 1-1.14-2.71V10.5a5.6 5.6 0 0 0-4.1-5.45V4.6A1.5 1.5 0 0 0 12 3.1Z"
-      fill="url(#bell-grad)"
-    />
-    <path d="M9.7 19.1a2.3 2.3 0 0 0 4.6 0Z" fill="#ea580c" />
-    <path d="M9.2 8.5a3.4 3.4 0 0 1 2.6-1.7" stroke="#fff" strokeOpacity=".55" strokeWidth="1.1" strokeLinecap="round" />
+    {/* button: dark rim + gradient body + glossy top reflection */}
+    <circle cx="20" cy="20" r="19" fill="#8f3c06" />
+    <circle cx="20" cy="20" r="18" fill="url(#nb-circ)" />
+    <ellipse cx="20" cy="12.5" rx="13.5" ry="7.5" fill="#ffffff" opacity=".2" />
+    {/* white outline bell */}
+    <g stroke="#fff" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 25V18a6 6 0 0 1 12 0v7" />
+      <line x1="11.5" y1="25" x2="28.5" y2="25" />
+      <path d="M17.8 28a2.3 2.3 0 0 0 4.4 0" />
+    </g>
   </svg>
 )
 
@@ -140,17 +145,18 @@ export default function NotificationBell() {
           <div className="card-head spread">
             <h3 style={{ fontSize: 14, margin: 0 }}>Notifications</h3>
             <button
-              className="btn btn-ghost btn-sm"
-              title={soundOn ? 'Mute notification sound' : 'Unmute notification sound'}
+              className={'mute-toggle' + (soundOn ? ' on' : ' off')}
+              title={soundOn ? 'Sound on — tap to mute' : 'Muted — tap to unmute'}
+              aria-pressed={soundOn}
               onClick={() => setSoundOn((on) => {
                 const next = !on
                 localStorage.setItem('notifSound', next ? 'on' : 'off')
                 if (next) playChime() // preview the chime when turning it on
                 return next
               })}
-              style={{ lineHeight: 1, padding: '4px 6px', color: soundOn ? 'var(--primary)' : 'var(--muted)' }}
             >
-              {soundOn ? <BellLineIcon /> : <BellOffIcon />}
+              <span className="mute-toggle-ic">{soundOn ? <BellLineIcon size={15} /> : <BellOffIcon size={15} />}</span>
+              <span className="mute-toggle-label">{soundOn ? 'Sound' : 'Muted'}</span>
             </button>
           </div>
           {items.length === 0 && <div className="empty" style={{ padding: 24 }}>You're all caught up 🎉</div>}
