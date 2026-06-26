@@ -66,7 +66,7 @@ function EmployeeDash() {
   return (
     <>
       <div className="emp-kpis section">
-        <Kpi value={c.assigned} label="Assigned to me" icon={KPI_ICONS.assigned} color="#c5560f" onClick={() => navigate('/tasks')} />
+        <Kpi value={c.assigned} label="Assigned" icon={KPI_ICONS.assigned} color="#c5560f" onClick={() => navigate('/tasks')} />
         <Kpi value={c.pending} label="Pending" icon={KPI_ICONS.pending} color="#3b82f6" onClick={() => navigate('/tasks?view=active')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
         <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" blink={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />

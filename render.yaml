@@ -69,3 +69,8 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Base URL used to build links inside emails (verify / reset / invite). MUST
+      # be the public app origin or those links point at localhost. The backend
+      # serves the web client at the same origin, so this is the service URL.
+      - key: APP_URL
+        sync: false

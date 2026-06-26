@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react'
 import { api, setToken, getToken, User } from './api'
 import { registerPush, unregisterPush } from './push'
 
-interface SignupInput { company: string; name: string; email: string; password: string }
+interface SignupInput { company: string; name: string; email: string; password: string; personal?: boolean }
 interface AcceptInviteInput { token: string; name: string; password: string }
 interface AuthCtx {
   user: User | null

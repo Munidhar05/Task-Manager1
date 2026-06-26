@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
 import { authRequired, requireRole, hashPassword, verifyPassword, verifyToken } from '../auth.js'
-import { id, now, audit } from '../util.js'
+import { id, now, audit, orgAllowedDomains, emailDomainAllowed } from '../util.js'
 import { publicUser } from './auth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -82,9 +82,16 @@ r.patch('/me', (req, res) => {
   res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)))
 })
 
-// Validation: only @gmail.com / @befach.com emails, and phone must be 10 digits.
-const EMAIL_RE = /^[^\s@]+@(gmail\.com|befach\.com)$/
+// Email must be a valid format; the ALLOWED DOMAIN is now per-org (configurable),
+// not hardcoded — so every organization enforces its own domains.
+const VALID_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const onlyDigits = (s) => String(s || '').replace(/\D/g, '')
+// Returns an error string if the email's domain isn't allowed for the org, else null.
+function domainError(orgId, email) {
+  if (emailDomainAllowed(orgId, email)) return null
+  const allowed = orgAllowedDomains(orgId)
+  return `Email domain not allowed. This organization permits: ${allowed.join(', ')}`
+}
 
 // Everyone can list org users (needed for assignment dropdowns) — minimal fields.
 r.get('/', (req, res) => {
@@ -99,7 +106,9 @@ r.post('/', requireRole('manager', 'admin'), (req, res) => {
   if (!['admin', 'manager', 'employee'].includes(role)) return res.status(400).json({ error: 'invalid role' })
   if (req.user.role === 'manager' && role === 'admin') return res.status(403).json({ error: 'Managers cannot create admin accounts' })
   const emailNorm = String(email).toLowerCase().trim()
-  if (!EMAIL_RE.test(emailNorm)) return res.status(400).json({ error: 'Email must be a @gmail.com or @befach.com address' })
+  if (!VALID_EMAIL.test(emailNorm)) return res.status(400).json({ error: 'Please enter a valid email address.' })
+  const domErr = domainError(req.user.org_id, emailNorm)
+  if (domErr) return res.status(400).json({ error: domErr })
   const phoneDigits = onlyDigits(phone)
   if (phoneDigits.length !== 10) return res.status(400).json({ error: 'Phone must be exactly 10 digits' })
   const exists = db.prepare('SELECT id FROM users WHERE email=?').get(emailNorm)
@@ -122,8 +131,11 @@ r.patch('/:id', requireRole('manager', 'admin'), (req, res) => {
   if (req.user.role === 'manager' && (u.role === 'admin' || b.role === 'admin')) {
     return res.status(403).json({ error: 'Managers cannot modify admin accounts' })
   }
-  if ('email' in b && b.email && !EMAIL_RE.test(String(b.email).toLowerCase().trim())) {
-    return res.status(400).json({ error: 'Email must be a @gmail.com or @befach.com address' })
+  if ('email' in b && b.email) {
+    const e = String(b.email).toLowerCase().trim()
+    if (!VALID_EMAIL.test(e)) return res.status(400).json({ error: 'Please enter a valid email address.' })
+    const domErr = domainError(req.user.org_id, e)
+    if (domErr) return res.status(400).json({ error: domErr })
   }
   if ('phone' in b) {
     b.phone = onlyDigits(b.phone)
@@ -194,6 +206,8 @@ r.post('/import', requireRole('manager', 'admin'), upload.single('file'), (req, 
       const name = String(pick(row, 'name', 'full name') || '').trim()
       const email = String(pick(row, 'email', 'email id', 'mail', 'mail id') || '').toLowerCase().trim()
       if (!name || !email) { errors.push(`Row ${i + 2}: missing name or email`); return }
+      if (!VALID_EMAIL.test(email)) { errors.push(`Row ${i + 2}: invalid email ${email}`); return }
+      if (!emailDomainAllowed(req.user.org_id, email)) { errors.push(`Row ${i + 2}: domain not allowed for ${email}`); return }
       let role = String(pick(row, 'role') || 'employee').toLowerCase().trim()
       if (!['admin', 'manager', 'employee'].includes(role)) role = 'employee'
       if (req.user.role === 'manager' && role === 'admin') role = 'employee' // managers can't grant admin
@@ -234,6 +248,20 @@ r.get('/meta/departments', (req, res) => {
 })
 r.get('/meta/projects', (req, res) => {
   res.json(db.prepare('SELECT * FROM projects WHERE org_id=? ORDER BY name').all(req.user.org_id))
+})
+
+// Org settings — allowed email domains. GET for anyone in the org; PATCH for admins.
+r.get('/meta/org', (req, res) => {
+  const org = db.prepare('SELECT id, name, is_personal FROM organizations WHERE id=?').get(req.user.org_id)
+  res.json({ ...org, allowed_domains: orgAllowedDomains(req.user.org_id) })
+})
+r.patch('/meta/org', requireRole('manager', 'admin'), (req, res) => {
+  const list = Array.isArray(req.body?.allowed_domains) ? req.body.allowed_domains : []
+  // Keep valid, unique, lowercase domains (e.g. befach.com). Empty list = no restriction.
+  const clean = [...new Set(list.map((d) => String(d).trim().toLowerCase().replace(/^@/, '')).filter((d) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)))]
+  db.prepare('UPDATE organizations SET allowed_domains=? WHERE id=?').run(clean.join(',') || null, req.user.org_id)
+  audit(req.user.org_id, req.user.id, 'org.domains_update', 'organization', req.user.org_id, clean.join(', '))
+  res.json({ allowed_domains: clean })
 })
 
 export default r

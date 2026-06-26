@@ -39,14 +39,16 @@ const ICONS = {
 
 // The Manager is the Admin of the org: it owns the Administration hub
 // (org metrics, full user management & audit log).
+// `teamOnly` items are hidden in a personal (solo) workspace — there's no team
+// to chat with or administer when it's just one person.
 const NAV = [
   { to: '/my-tasks', label: 'My Tasks', icon: ICONS.mytasks, roles: ['manager'] },
   { to: '/', label: 'Dashboard', icon: ICONS.dashboard, roles: ['manager', 'employee'] },
   { to: '/tasks', label: 'Tasks', icon: ICONS.tasks, roles: ['manager', 'employee'] },
-  { to: '/chats', label: 'Chats', icon: ICONS.chats, roles: ['manager', 'employee'] },
+  { to: '/chats', label: 'Chats', icon: ICONS.chats, roles: ['manager', 'employee'], teamOnly: true },
   { to: '/meetings', label: 'Meetings', icon: ICONS.meetings, roles: ['manager'] },
   { to: '/assistant', label: 'AI Assistant', icon: ICONS.assistant, roles: ['manager'] },
-  { to: '/admin', label: 'Administration', icon: ICONS.admin, roles: ['manager'] },
+  { to: '/admin', label: 'Administration', icon: ICONS.admin, roles: ['manager'], teamOnly: true },
 ]
 
 const TITLES: Record<string, { t: string; s: string }> = {
@@ -63,17 +65,8 @@ function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth()
   const [showProfile, setShowProfile] = useState(false)
   const loc = useLocation()
-  const navigate = useNavigate()
-  // Step back one entry in history (the previous tab/view). React Router stamps an
-  // incrementing `idx` on history state; idx 0 means we landed here directly (fresh
-  // load / deep link) with nothing to go back to, so fall back to the Dashboard
-  // instead of leaving the app.
-  const goBack = () => {
-    const idx = (window.history.state && (window.history.state as any).idx) || 0
-    if (idx > 0) navigate(-1)
-    else navigate('/')
-  }
-  const showBack = loc.pathname !== '/'
+  // No explicit in-app back button: Android handles "back" via the hardware
+  // button / swipe gesture (see useAndroidBackButton), and browsers have their own.
   const [open, setOpen] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
   // Poll the unread chat count so the Chats nav item shows a live badge.
@@ -99,7 +92,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <nav className="nav" onClick={() => setOpen(false)}>
-          {NAV.filter((n) => n.roles.includes(user.role)).map((n) => (
+          {NAV.filter((n) => n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly)).map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
               <span className="nav-icon">{n.icon}</span>{n.label}
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
@@ -131,13 +124,6 @@ function Layout({ children }: { children: React.ReactNode }) {
               <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
             </svg>
           </button>
-          {showBack && (
-            <button className="back-btn" onClick={goBack} aria-label="Go back" title="Back">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M15 18l-6-6 6-6" />
-              </svg>
-            </button>
-          )}
           <div>
             <h1>{meta.t}</h1>
             <div className="sub">{meta.s}</div>

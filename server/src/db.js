@@ -372,6 +372,11 @@ export function initSchema() {
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
+  // Marks a workspace as a solo/personal account (org of one) vs a team company.
+  // Existing orgs default to 0 (company) — no change to the org structure.
+  ensureColumn('organizations', 'is_personal', 'INTEGER DEFAULT 0')
+  // Per-org allowed email domains (comma-separated). NULL/empty = no restriction.
+  ensureColumn('organizations', 'allowed_domains', 'TEXT')
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
   ensureColumn('tasks', 'assigned_at', 'TEXT')
   ensureColumn('tasks', 'submitted_at', 'TEXT')

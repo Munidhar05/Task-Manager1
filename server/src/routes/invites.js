@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired, requireRole, signToken, hashPassword } from '../auth.js'
 import { publicUser } from './auth.js'
-import { id, now, genToken, appUrl, inDays, audit } from '../util.js'
+import { id, now, genToken, appUrl, inDays, audit, emailDomainAllowed, orgAllowedDomains, isCommonPassword } from '../util.js'
 import { sendMail } from '../mailer.js'
 
 const r = Router()
@@ -37,6 +37,10 @@ r.post('/', authRequired, requireRole('manager', 'admin'), async (req, res) => {
   let role = String(req.body?.role || 'employee').toLowerCase().trim()
   const departmentId = req.body?.department_id || null
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'A valid email is required.' })
+  // Enforce the org's allowed email domains (if any are configured).
+  if (!emailDomainAllowed(req.user.org_id, email)) {
+    return res.status(400).json({ error: `Email domain not allowed. This organization permits: ${orgAllowedDomains(req.user.org_id).join(', ')}` })
+  }
   if (!['manager', 'employee', 'admin'].includes(role)) role = 'employee'
   // Managers cannot mint admins (mirrors the users route rule).
   if (req.user.role === 'manager' && role === 'admin') {
@@ -116,6 +120,7 @@ r.post('/accept', (req, res) => {
   const password = String(req.body?.password || '')
   if (!name) return res.status(400).json({ error: 'Please enter your name.' })
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' })
+  if (isCommonPassword(password)) return res.status(400).json({ error: 'That password is too common — please choose a stronger one.' })
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(inv.email)) {
     db.prepare("UPDATE invites SET status='accepted', accepted_at=? WHERE id=?").run(now(), inv.id)
     return res.status(409).json({ error: 'An account with this email already exists. Please log in.' })

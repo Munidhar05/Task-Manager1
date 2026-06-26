@@ -123,6 +123,114 @@ function SortMenu({ sortKey, onPick }: { sortKey: SortKey; onPick: (key: SortKey
   )
 }
 
+// Search dialog: type or speak to search tasks. On submit it sets the query and
+// closes; the filtered list is then visible behind it. Voice uses the same
+// server-side transcription as the New Task form (reliable on Android).
+function SearchDialog({ initial, onSearch, onClose }: { initial: string; onSearch: (q: string) => void; onClose: () => void }) {
+  const [q, setQ] = useState(initial)
+  const [listening, setListening] = useState(false)
+  const [parsing, setParsing] = useState(false)
+  const mrRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<BlobPart[]>([])
+  useEscape(onClose)
+  const canRecord = typeof navigator !== 'undefined'
+    && !!navigator.mediaDevices?.getUserMedia
+    && typeof (window as any).MediaRecorder !== 'undefined'
+
+  const releaseMic = () => {
+    try { if (mrRef.current && mrRef.current.state !== 'inactive') mrRef.current.stop() } catch {}
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+    streamRef.current = null
+  }
+  useEffect(() => releaseMic, [])
+
+  const transcribe = async (blob: Blob) => {
+    setParsing(true)
+    try {
+      const fd = new FormData()
+      fd.append('audio', blob, 'search.webm')
+      const headers: Record<string, string> = {}
+      const token = getToken()
+      if (token) headers.authorization = `Bearer ${token}`
+      const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
+      const text = String(data?.text || '').trim()
+      if (text) setQ(text)
+      else toast.info("Didn't catch that — please tap and try again.")
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not transcribe. Check your connection and try again.')
+    } finally { setParsing(false) }
+  }
+
+  const toggleMic = async () => {
+    if (listening) { setListening(false); try { mrRef.current?.stop() } catch {}; return }
+    if (!canRecord) { toast.error('Voice search needs microphone access on this device.'); return }
+    let stream: MediaStream
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
+    catch { toast.error('Microphone access is blocked. Allow mic permission and try again.'); return }
+    streamRef.current = stream
+    chunksRef.current = []
+    let mr: MediaRecorder
+    try { mr = new MediaRecorder(stream, { mimeType: 'audio/webm' }) } catch { mr = new MediaRecorder(stream) }
+    mrRef.current = mr
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
+    mr.onstop = () => {
+      try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+      streamRef.current = null
+      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' })
+      chunksRef.current = []
+      if (blob.size) transcribe(blob)
+    }
+    try { mr.start() } catch { setListening(false); releaseMic(); return }
+    setListening(true)
+  }
+
+  const submit = () => { onSearch(q.trim()); onClose() }
+
+  return (
+    <div className="modal-center" onClick={onClose}>
+      <div className="modal search-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Search tasks">
+        <div className="card-head spread"><h3>Search tasks</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
+        <div className="card-pad grid" style={{ gap: 12 }}>
+          <div className="search-dialog-field">
+            <span className="search-dialog-icon"><SearchIcon size={18} /></span>
+            <input
+              autoFocus
+              placeholder="Search tasks by title…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
+            />
+            {q && <button className="search-dialog-clear" onClick={() => setQ('')} title="Clear" aria-label="Clear">✕</button>}
+          </div>
+          {canRecord && (
+            <button
+              type="button"
+              className={'btn btn-mic search-dialog-mic' + (listening ? ' btn-mic-live' : '')}
+              onClick={toggleMic}
+              disabled={parsing}
+              title="Speak to search"
+            >
+              {parsing
+                ? <><span className="spinner" /> Transcribing…</>
+                : listening
+                  ? <><span className="mic-dot" /> Stop & search</>
+                  : <><MicIcon size={16} /> Speak to search</>}
+            </button>
+          )}
+          {listening && <div className="muted" style={{ fontSize: 12 }}>Listening… tap Stop when done.</div>}
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" onClick={submit}>Search</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Tasks({ personal = false }: { personal?: boolean }) {
   const { user } = useAuth()
   // Dashboard KPI cards deep-link here, e.g. /tasks?view=completed or
@@ -369,22 +477,14 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
             `.toolbar-actions` is display:contents on desktop so these flow into the
             toolbar individually, and a single nowrap flex row on mobile. */}
         <div className="toolbar-actions">
-          {searchOpen || filters.q ? (
-            <div className="search-box toolbar-search">
-              <span className="search-box-icon"><SearchIcon size={16} /></span>
-              <input
-                autoFocus
-                placeholder="Search tasks…"
-                value={filters.q}
-                onChange={(e) => setFilters({ ...filters, q: e.target.value })}
-                onKeyDown={(e) => { if (e.key === 'Escape') { setFilters({ ...filters, q: '' }); setSearchOpen(false) } }}
-              />
-              <button
-                className="search-box-clear"
-                onClick={() => { setFilters({ ...filters, q: '' }); setSearchOpen(false) }}
-                title="Close search"
-                aria-label="Close search"
-              >✕</button>
+          {/* Search opens a dialog (type or speak) — keeps the toolbar aligned.
+              When a search is active, show a compact chip to edit/clear it. */}
+          {filters.q ? (
+            <div className="search-active toolbar-search">
+              <button className="search-active-label" onClick={() => setSearchOpen(true)} title="Edit search">
+                <SearchIcon size={14} /> <span className="search-active-q">{filters.q}</span>
+              </button>
+              <button className="search-active-clear" onClick={() => setFilters({ ...filters, q: '' })} title="Clear search" aria-label="Clear search">✕</button>
             </div>
           ) : (
             <button className="icon-btn toolbar-search" onClick={() => setSearchOpen(true)} title="Search tasks" aria-label="Search tasks">
@@ -418,13 +518,41 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
             </select>
           )}
         </div>
-        <div className="row toolbar-view" style={{ marginLeft: 'auto', gap: 8 }}>
-          <div className="seg">
-            <button className={'seg-btn' + (view === 'list' ? ' active' : '')} onClick={() => setView('list')} title="List view">☰ List</button>
-            <button className={'seg-btn' + (view === 'board' ? ' active' : '')} onClick={() => setView('board')} title="Board view">▤ Board</button>
-          </div>
-        </div>
       </div>
+
+      {/* Line 1: View toggle (left) + the "Active" chip. */}
+      <div className="viewbar">
+        <div className="seg">
+          <button className={'seg-btn' + (view === 'list' ? ' active' : '')} onClick={() => setView('list')} title="List view">☰ List</button>
+          <button className={'seg-btn' + (view === 'board' ? ' active' : '')} onClick={() => setView('board')} title="Board view">▤ Board</button>
+        </div>
+        {view === 'list' && tasks.length > 0 && QUICK_CHIPS.filter((c) => c.key === 'active').map((c) => {
+          const count = tasks.filter((t) => matchesQuick(t, c.key)).length
+          return (
+            <button key={c.key} className={'chip' + (quickView === c.key ? ' active' : '')} onClick={() => setQuickView(c.key)}>
+              {c.label}<span className="chip-count">{count}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Line 2: the remaining quick-view chips (Overdue, Due today, Completed) — kept on one line. */}
+      {view === 'list' && tasks.length > 0 && (
+        <div className="chips chips-quick">
+          {QUICK_CHIPS.filter((c) => c.key !== 'active').map((c) => {
+            const count = tasks.filter((t) => matchesQuick(t, c.key)).length
+            return (
+              <button
+                key={c.key}
+                className={'chip' + (c.danger ? ' danger' : '') + (quickView === c.key ? ' active' : '')}
+                onClick={() => setQuickView(c.key)}
+              >
+                {c.label}<span className="chip-count">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {loadError ? (
         <div className="card">
@@ -448,24 +576,6 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         )
       ) : (
         <>
-          {tasks.length > 0 && (
-            <div className="chips">
-              {QUICK_CHIPS.map((c) => {
-                const count = tasks.filter((t) => matchesQuick(t, c.key)).length
-                return (
-                  <button
-                    key={c.key}
-                    className={'chip' + (c.danger ? ' danger' : '') + (quickView === c.key ? ' active' : '')}
-                    onClick={() => setQuickView(c.key)}
-                  >
-                    {c.label}
-                    <span className="chip-count">{count}</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-
           {visibleTasks.length === 0 ? (
             <div className="card">
               {quickView === 'completed' ? (
@@ -532,6 +642,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {openId && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={load} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
+      {searchOpen && <SearchDialog initial={filters.q} onSearch={(q) => setFilters({ ...filters, q })} onClose={() => setSearchOpen(false)} />}
     </>
   )
 }
@@ -671,30 +782,32 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
             {canRecord && (
-              <button
-                type="button"
-                className={'btn btn-sm btn-mic' + (listening ? ' btn-mic-live' : '')}
-                onClick={toggleMic}
-                disabled={parsing}
-                title="Speak the task — AI fills in the title, details, assignee & priority"
-              >
-                {parsing
-                  ? <><span className="spinner" /> Thinking…</>
-                  : listening
-                    ? <><span className="mic-dot" /> Stop</>
-                    : <><MicIcon /> Speak</>}
-              </button>
+              <div className="speak-row">
+                <button
+                  type="button"
+                  className={'btn btn-mic btn-mic-hero' + (listening ? ' btn-mic-live' : '')}
+                  onClick={toggleMic}
+                  disabled={parsing}
+                  title="Speak the task — AI fills in the title, details, assignee & priority"
+                >
+                  {parsing
+                    ? <><span className="spinner" /> Thinking…</>
+                    : listening
+                      ? <><span className="mic-dot" /> Stop recording</>
+                      : <><MicIcon size={18} /> Speak your task</>}
+                </button>
+              </div>
             )}
             {canRecord && !listening && !parsing && !heard && (
-              <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, textAlign: 'center' }}>
                 Tip: say the whole task — e.g. “High priority task for Ravi to fix the login page bug by Friday.”
               </div>
             )}
             {listening && (
-              <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Listening… tap Stop when you're done.</div>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, textAlign: 'center' }}>Listening… tap Stop when you're done.</div>
             )}
             {parsing && heard && (
-              <div className="muted" style={{ fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>“{heard}”</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6, fontStyle: 'italic', textAlign: 'center' }}>“{heard}”</div>
             )}
             <AutoTextarea style={{ width: '100%', marginTop: 8 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
           </div>
