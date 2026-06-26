@@ -300,18 +300,30 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
           <div className="pbi-scroll">
             {(() => {
               const maxStatus = Math.max(...data.by_status.map((s: any) => s.count), 1)
-              return data.by_status.map((s: any) => (
-                <div key={s.status} style={{ marginBottom: 13 }}>
-                  <div className="spread" style={{ marginBottom: 4 }}>
-                    <span className="row" style={{ gap: 7, fontSize: 13 }}>
-                      <span style={{ width: 10, height: 10, borderRadius: 3, background: STATUS_COLORS[s.status] }} />
-                      {s.status}
-                    </span>
-                    <strong>{s.count}</strong>
+              return data.by_status.map((s: any) => {
+                const goToStatus = () => navigate(`/tasks?status=${encodeURIComponent(s.status)}`)
+                return (
+                  <div
+                    key={s.status}
+                    className="clickable"
+                    style={{ marginBottom: 13 }}
+                    onClick={goToStatus}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goToStatus() } }}
+                    title={`Open ${s.status} tasks (${s.count})`}
+                  >
+                    <div className="spread" style={{ marginBottom: 4 }}>
+                      <span className="row" style={{ gap: 7, fontSize: 13 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 3, background: STATUS_COLORS[s.status] }} />
+                        {s.status}
+                      </span>
+                      <strong>{s.count}</strong>
+                    </div>
+                    <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status]} />
                   </div>
-                  <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status]} />
-                </div>
-              ))
+                )
+              })
             })()}
           </div>
         </div>
