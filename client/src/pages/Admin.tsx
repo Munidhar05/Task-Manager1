@@ -2,6 +2,56 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 import { Stat, Badge } from '../ui'
 import UserManagement from '../components/UserManagement'
+import { toast } from '../lib/toast'
+
+// Manage which email domains may join this organization. Empty = any domain.
+function AllowedDomains() {
+  const [domains, setDomains] = useState<string[]>([])
+  const [input, setInput] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    api.get('/users/meta/org').then((d) => { setDomains(d.allowed_domains || []); setLoaded(true) }).catch(() => setLoaded(true))
+  }, [])
+  const add = () => {
+    const d = input.trim().toLowerCase().replace(/^@/, '')
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) { toast.error('Enter a valid domain, e.g. acme.com'); return }
+    if (!domains.includes(d)) setDomains([...domains, d])
+    setInput('')
+  }
+  const save = async () => {
+    setSaving(true)
+    try {
+      const r = await api.patch('/users/meta/org', { allowed_domains: domains })
+      setDomains(r.allowed_domains || []); toast.success('Allowed domains saved.')
+    } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
+  }
+  return (
+    <div className="card section">
+      <div className="card-head"><h3>Allowed email domains</h3></div>
+      <div className="card-pad" style={{ display: 'grid', gap: 12 }}>
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          Only these domains can be invited or added to your organization (members still verify their email).
+          Leave empty to allow any domain.
+        </div>
+        <div className="domain-chips">
+          {loaded && domains.length === 0 && <span className="muted" style={{ fontSize: 13 }}>No restriction — any domain is allowed.</span>}
+          {domains.map((d) => (
+            <span key={d} className="domain-chip">{d}<button onClick={() => setDomains(domains.filter((x) => x !== d))} aria-label={`Remove ${d}`}>✕</button></span>
+          ))}
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <input placeholder="acme.com" value={input} onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} style={{ maxWidth: 240 }} />
+          <button className="btn btn-sm" onClick={add}>+ Add domain</button>
+          <button className="btn btn-primary btn-sm" onClick={save} disabled={saving} style={{ marginLeft: 'auto' }}>
+            {saving ? <span className="spinner" /> : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function Admin() {
   const [tab, setTab] = useState<'overview' | 'users' | 'audit'>('overview')
@@ -13,7 +63,7 @@ export default function Admin() {
         <button className={'btn btn-sm' + (tab === 'audit' ? ' btn-primary' : '')} onClick={() => setTab('audit')}>Audit Log</button>
       </div>
       {tab === 'overview' && <Overview />}
-      {tab === 'users' && <UserManagement />}
+      {tab === 'users' && <><AllowedDomains /><UserManagement /></>}
       {tab === 'audit' && <Audit />}
     </>
   )

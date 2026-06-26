@@ -35,6 +35,35 @@ export function dueDateForPriority(priority, from = new Date()) {
 
 import { db } from './db.js'
 import { sendPushToUser } from './push.js'
+
+// --- Password safety: reject the most common/breached passwords server-side ---
+// (Defense in depth — the client also blocks these, but the API enforces it too.)
+const COMMON_PASSWORDS = new Set([
+  'password', 'password1', 'password123', 'passw0rd', '12345678', '123456789', '1234567890',
+  'qwerty', 'qwertyui', 'qwerty123', '11111111', '00000000', 'abc12345', 'iloveyou',
+  'admin123', 'welcome1', 'welcome123', 'letmein1', 'letmein123', 'football', 'monkey12',
+  'sunshine', 'princess', 'dragon123', 'master123', 'login123', 'changeme', 'secret12',
+])
+export function isCommonPassword(pw) {
+  return COMMON_PASSWORDS.has(String(pw || '').toLowerCase())
+}
+
+// --- Per-org allowed email domains -----------------------------------------
+// An org may restrict which email domains its members can use (e.g. befach.com,
+// gmail.com). Empty list = no restriction (any domain allowed). Used by user
+// creation, imports, and invites so every org enforces its OWN domains.
+export function orgAllowedDomains(orgId) {
+  const org = db.prepare('SELECT allowed_domains FROM organizations WHERE id=?').get(orgId)
+  const raw = (org?.allowed_domains || '').trim()
+  return raw ? raw.split(',').map((d) => d.trim().toLowerCase()).filter(Boolean) : []
+}
+export function emailDomainAllowed(orgId, email) {
+  const domains = orgAllowedDomains(orgId)
+  if (!domains.length) return true // no restriction configured
+  const dom = String(email || '').toLowerCase().split('@')[1] || ''
+  return domains.includes(dom)
+}
+
 export function audit(orgId, actorId, action, entityType, entityId, detail = '') {
   db.prepare(
     `INSERT INTO audit_logs (id, org_id, actor_id, action, entity_type, entity_id, detail, created_at)

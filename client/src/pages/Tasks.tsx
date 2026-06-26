@@ -782,30 +782,32 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
             {canRecord && (
-              <button
-                type="button"
-                className={'btn btn-sm btn-mic' + (listening ? ' btn-mic-live' : '')}
-                onClick={toggleMic}
-                disabled={parsing}
-                title="Speak the task — AI fills in the title, details, assignee & priority"
-              >
-                {parsing
-                  ? <><span className="spinner" /> Thinking…</>
-                  : listening
-                    ? <><span className="mic-dot" /> Stop</>
-                    : <><MicIcon /> Speak</>}
-              </button>
+              <div className="speak-row">
+                <button
+                  type="button"
+                  className={'btn btn-mic btn-mic-hero' + (listening ? ' btn-mic-live' : '')}
+                  onClick={toggleMic}
+                  disabled={parsing}
+                  title="Speak the task — AI fills in the title, details, assignee & priority"
+                >
+                  {parsing
+                    ? <><span className="spinner" /> Thinking…</>
+                    : listening
+                      ? <><span className="mic-dot" /> Stop recording</>
+                      : <><MicIcon size={18} /> Speak your task</>}
+                </button>
+              </div>
             )}
             {canRecord && !listening && !parsing && !heard && (
-              <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, textAlign: 'center' }}>
                 Tip: say the whole task — e.g. “High priority task for Ravi to fix the login page bug by Friday.”
               </div>
             )}
             {listening && (
-              <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Listening… tap Stop when you're done.</div>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, textAlign: 'center' }}>Listening… tap Stop when you're done.</div>
             )}
             {parsing && heard && (
-              <div className="muted" style={{ fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>“{heard}”</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6, fontStyle: 'italic', textAlign: 'center' }}>“{heard}”</div>
             )}
             <AutoTextarea style={{ width: '100%', marginTop: 8 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
           </div>

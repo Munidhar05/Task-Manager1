@@ -39,14 +39,16 @@ const ICONS = {
 
 // The Manager is the Admin of the org: it owns the Administration hub
 // (org metrics, full user management & audit log).
+// `teamOnly` items are hidden in a personal (solo) workspace — there's no team
+// to chat with or administer when it's just one person.
 const NAV = [
   { to: '/my-tasks', label: 'My Tasks', icon: ICONS.mytasks, roles: ['manager'] },
   { to: '/', label: 'Dashboard', icon: ICONS.dashboard, roles: ['manager', 'employee'] },
   { to: '/tasks', label: 'Tasks', icon: ICONS.tasks, roles: ['manager', 'employee'] },
-  { to: '/chats', label: 'Chats', icon: ICONS.chats, roles: ['manager', 'employee'] },
+  { to: '/chats', label: 'Chats', icon: ICONS.chats, roles: ['manager', 'employee'], teamOnly: true },
   { to: '/meetings', label: 'Meetings', icon: ICONS.meetings, roles: ['manager'] },
   { to: '/assistant', label: 'AI Assistant', icon: ICONS.assistant, roles: ['manager'] },
-  { to: '/admin', label: 'Administration', icon: ICONS.admin, roles: ['manager'] },
+  { to: '/admin', label: 'Administration', icon: ICONS.admin, roles: ['manager'], teamOnly: true },
 ]
 
 const TITLES: Record<string, { t: string; s: string }> = {
@@ -90,7 +92,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <nav className="nav" onClick={() => setOpen(false)}>
-          {NAV.filter((n) => n.roles.includes(user.role)).map((n) => (
+          {NAV.filter((n) => n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly)).map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
               <span className="nav-icon">{n.icon}</span>{n.label}
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}

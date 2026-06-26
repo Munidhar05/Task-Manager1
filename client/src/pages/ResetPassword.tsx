@@ -1,6 +1,11 @@
 import React, { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
+import PasswordStrength from '../components/PasswordStrength'
+import { passwordStrength, isCommonPassword } from '../lib/passwordStrength'
+
+const EyeIcon = () => (<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
+const EyeOffIcon = () => (<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.45M6.6 6.6A13.2 13.2 0 0 0 2 11s3.5 7 10 7a9.1 9.1 0 0 0 4.2-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /><line x1="2" y1="2" x2="22" y2="22" /></svg>)
 
 // Public page reached from the reset-password email link.
 export default function ResetPassword() {
@@ -17,6 +22,8 @@ export default function ResetPassword() {
     setErr('')
     if (!token) { setErr('This reset link is missing its token.'); return }
     if (password.length < 8) { setErr('Password must be at least 8 characters.'); return }
+    if (isCommonPassword(password)) { setErr('That password is too common — please choose a stronger one.'); return }
+    if (!passwordStrength(password).ok) { setErr('Please choose a stronger password (mix letters, numbers & symbols).'); return }
     setBusy(true)
     try { await api.post('/auth/reset-password', { token, password }); setDone(true) }
     catch (e: any) { setErr(e.message) } finally { setBusy(false) }
@@ -49,8 +56,9 @@ export default function ResetPassword() {
                   <input value={password} onChange={(e) => setPassword(e.target.value)} type={showPw ? 'text' : 'password'}
                     autoComplete="new-password" placeholder="At least 8 characters" autoFocus />
                   <button type="button" className="pw-toggle" onClick={() => setShowPw((s) => !s)} tabIndex={-1}
-                    aria-label={showPw ? 'Hide password' : 'Show password'}>{showPw ? '🙈' : '👁'}</button>
+                    aria-label={showPw ? 'Hide password' : 'Show password'}>{showPw ? <EyeOffIcon /> : <EyeIcon />}</button>
                 </div>
+                <PasswordStrength password={password} />
               </div>
               {err && <div className="login-err">{err}</div>}
               <button className="btn btn-primary login-btn" disabled={busy}>

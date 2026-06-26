@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db.js'
 import { signToken, verifyPassword, hashPassword, authRequired } from '../auth.js'
-import { audit, id, now, genToken, appUrl, inDays } from '../util.js'
+import { audit, id, now, genToken, appUrl, inDays, isCommonPassword } from '../util.js'
 import { sendMail } from '../mailer.js'
 
 const r = Router()
@@ -14,17 +14,34 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 // SELF-SERVE SIGNUP: create a brand-new organization plus its first account (a
 // "manager" — the de-facto org admin in this app) in one atomic step. This is what
 // lets a new company onboard itself without anyone provisioning them by hand.
+// Append the workspace type so the client can tailor the UI: a "personal" (solo)
+// workspace hides team features; a company workspace keeps them. Reuses the same
+// org-scoped data model — a solo user is simply an organization of one.
+function userWithWorkspace(user) {
+  const org = db.prepare('SELECT is_personal FROM organizations WHERE id = ?').get(user.org_id)
+  return { ...publicUser(user), workspace_personal: org?.is_personal ? 1 : 0 }
+}
+
 r.post('/signup', (req, res) => {
-  const company = String(req.body?.company || '').trim()
+  const personal = !!req.body?.personal
   const name = String(req.body?.name || '').trim()
   const email = String(req.body?.email || '').toLowerCase().trim()
   const password = String(req.body?.password || '')
+  // SOLO accounts need no company name — auto-derive a workspace name from the
+  // person's name. COMPANY signups still require one. Either way the user is the
+  // manager of their own org (org-of-one for solo), so nothing about orgs changes.
+  const company = personal
+    ? `${(name.split(' ')[0] || name || 'My')}'s workspace`
+    : String(req.body?.company || '').trim()
 
-  if (!company || !name || !email || !password) {
-    return res.status(400).json({ error: 'Company, name, email and password are all required.' })
+  if (!name || !email || !password || (!personal && !company)) {
+    return res.status(400).json({ error: personal
+      ? 'Name, email and password are all required.'
+      : 'Company, name, email and password are all required.' })
   }
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Please enter a valid email address.' })
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' })
+  if (isCommonPassword(password)) return res.status(400).json({ error: 'That password is too common — please choose a stronger one.' })
 
   // Email is globally unique (one login = one person). Friendly check up front so
   // we don't surface a raw SQLite constraint error.
@@ -34,9 +51,13 @@ r.post('/signup', (req, res) => {
 
   // Provision org + departments + first user atomically: if anything fails, nothing
   // is left half-created.
+  // Seed the org's allowed email domains from the founder's domain (company mode).
+  // Solo workspaces get no restriction. Admins can edit the list later.
+  const founderDomain = email.split('@')[1] || ''
   const provision = db.transaction(() => {
     const orgId = id('org')
-    db.prepare('INSERT INTO organizations (id, name, created_at) VALUES (?,?,?)').run(orgId, company, now())
+    db.prepare('INSERT INTO organizations (id, name, is_personal, allowed_domains, created_at) VALUES (?,?,?,?,?)')
+      .run(orgId, company, personal ? 1 : 0, personal ? null : founderDomain, now())
     let mgmtDeptId = null
     for (const dept of DEFAULT_DEPARTMENTS) {
       const did = id('dep')
@@ -62,9 +83,9 @@ r.post('/signup', (req, res) => {
     return res.status(500).json({ error: 'Could not create your account. Please try again.' })
   }
 
-  audit(user.org_id, user.id, 'org.signup', 'organization', user.org_id, company)
+  audit(user.org_id, user.id, personal ? 'account.signup' : 'org.signup', 'organization', user.org_id, company)
   sendVerificationEmail(user).catch((e) => console.warn('[auth] verification email failed:', e.message))
-  res.status(201).json({ token: signToken(user), user: publicUser(user) })
+  res.status(201).json({ token: signToken(user), user: userWithWorkspace(user) })
 })
 
 r.post('/login', (req, res) => {
@@ -75,11 +96,11 @@ r.post('/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid credentials' })
   }
   audit(user.org_id, user.id, 'auth.login', 'user', user.id)
-  res.json({ token: signToken(user), user: publicUser(user) })
+  res.json({ token: signToken(user), user: userWithWorkspace(user) })
 })
 
 r.get('/me', authRequired, (req, res) => {
-  res.json({ user: publicUser(req.user) })
+  res.json({ user: userWithWorkspace(req.user) })
 })
 
 // ---------------------------------------------------------------------------
@@ -160,6 +181,7 @@ r.post('/reset-password', (req, res) => {
   const token = String(req.body?.token || '')
   const password = String(req.body?.password || '')
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' })
+  if (isCommonPassword(password)) return res.status(400).json({ error: 'That password is too common — please choose a stronger one.' })
   const row = db.prepare('SELECT * FROM password_resets WHERE token = ?').get(token)
   if (!row || row.used || row.expires_at < now()) {
     return res.status(400).json({ error: 'This reset link is invalid or has expired.' })
