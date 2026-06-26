@@ -22,6 +22,7 @@ import Tasks from './pages/Tasks'
 import Assistant from './pages/Assistant'
 import Chats from './pages/Chats'
 import Admin from './pages/Admin'
+import Platform from './pages/Platform'
 
 // Clean line-style sidebar icons (inherit currentColor, so they turn white when active).
 const Icon = ({ children }: { children: React.ReactNode }) => (
@@ -35,6 +36,7 @@ const ICONS = {
   meetings: <Icon><rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1" /><line x1="12" y1="19" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" /></Icon>,
   assistant: <Icon><path d="M12 2.5 14 8l5.5 2-5.5 2-2 5.5L10 12 4.5 10 10 8z" /><path d="M19 14.5 19.8 17l2.5.8-2.5.8L19 21l-.8-2.4-2.5-.8 2.5-.8z" /></Icon>,
   admin: <Icon><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></Icon>,
+  platform: <Icon><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a14 14 0 0 1 0 18" /><path d="M12 3a14 14 0 0 0 0 18" /></Icon>,
 } as const
 
 // The Manager is the Admin of the org: it owns the Administration hub
@@ -49,6 +51,7 @@ const NAV = [
   { to: '/meetings', label: 'Meetings', icon: ICONS.meetings, roles: ['manager'] },
   { to: '/assistant', label: 'AI Assistant', icon: ICONS.assistant, roles: ['manager'] },
   { to: '/admin', label: 'Administration', icon: ICONS.admin, roles: ['manager'], teamOnly: true },
+  { to: '/platform', label: 'Platform', icon: ICONS.platform, roles: ['manager', 'employee'], platformOnly: true },
 ]
 
 const TITLES: Record<string, { t: string; s: string }> = {
@@ -59,6 +62,7 @@ const TITLES: Record<string, { t: string; s: string }> = {
   '/meetings': { t: 'Meetings', s: 'Upload conversations, get structured work' },
   '/assistant': { t: 'AI Assistant', s: 'Ask anything about your tasks' },
   '/admin': { t: 'Administration', s: 'Users, audit logs & org metrics' },
+  '/platform': { t: 'Platform', s: 'Oversee every organization on the platform' },
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -92,7 +96,9 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <nav className="nav" onClick={() => setOpen(false)}>
-          {NAV.filter((n) => n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly)).map((n) => (
+          {NAV.filter((n) => (n as any).platformOnly
+            ? !!user.platform_admin
+            : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly)).map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
               <span className="nav-icon">{n.icon}</span>{n.label}
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
@@ -160,10 +166,11 @@ function VerifyEmailBanner() {
   )
 }
 
-function Protected({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
+function Protected({ children, roles, platform }: { children: React.ReactNode; roles?: string[]; platform?: boolean }) {
   const { user, loading } = useAuth()
   if (loading) return <div style={{ display: 'grid', placeItems: 'center', height: '100vh' }}><span className="spinner" /></div>
   if (!user) return <Navigate to="/login" replace />
+  if (platform && !user.platform_admin) return <Navigate to="/" replace />
   if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />
   return <Layout>{children}</Layout>
 }
@@ -217,6 +224,7 @@ export default function App() {
       <Route path="/meetings/:id" element={<Protected roles={['manager']}><MeetingDetail /></Protected>} />
       <Route path="/assistant" element={<Protected roles={['manager']}><Assistant /></Protected>} />
       <Route path="/admin" element={<Protected roles={['manager']}><Admin /></Protected>} />
+      <Route path="/platform" element={<Protected platform><Platform /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
     </>
