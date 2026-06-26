@@ -238,8 +238,13 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const QUICK_VIEWS = ['active', 'overdue', 'today', 'completed'] as const
   const urlView = searchParams.get('view')
+  const urlStatus = searchParams.get('status')
   const initialQuick = (QUICK_VIEWS as readonly string[]).includes(urlView || '')
-    ? (urlView as 'active' | 'overdue' | 'today' | 'completed') : 'active'
+    ? (urlView as 'active' | 'overdue' | 'today' | 'completed')
+    // A Done deep-link (e.g. clicking "Done" on the dashboard) must land on the
+    // Completed view — the default 'active' view hides Done tasks, so pairing it
+    // with status=Done would filter everything out and show "No tasks".
+    : (urlStatus === 'Done' ? 'completed' : 'active')
   const [tasks, setTasks] = useState<Task[]>([])
   const [users, setUsers] = useState<User[]>([])
   // Opening a task by id (e.g. ?task=… from a clicked notification) shows its drawer.
