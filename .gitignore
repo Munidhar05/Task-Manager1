@@ -5,6 +5,7 @@ dist/
 *.log
 .DS_Store
 *.apk
+*.aab
 client/tsconfig.tsbuildinfo
 
 # Android (Capacitor) generated build artifacts & machine-specific config
@@ -14,3 +15,8 @@ client/android/app/build/
 client/android/capacitor-cordova-android-plugins/build/
 client/android/.idea/
 client/android/local.properties
+
+# Android release signing — NEVER commit these (losing them = can't update the app)
+client/android/keystore.properties
+*.jks
+*.keystore
