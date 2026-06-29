@@ -107,6 +107,8 @@ export default function Signup() {
 
           <div className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
             Already have an account? <Link to="/login" style={{ color: 'var(--primary)', fontWeight: 600 }}>Log in</Link>
+            <br />
+            By creating an account you agree to our <Link to="/privacy" style={{ color: 'var(--primary)', fontWeight: 600 }}>Privacy Policy</Link>.
           </div>
         </form>
       </div>

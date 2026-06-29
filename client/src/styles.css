@@ -138,6 +138,8 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .sidebar-user .meta { flex: 1; min-width: 0; }
 .sidebar-user .meta .n { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-user .meta .r { font-size: 11px; color: var(--sidebar-muted); text-transform: capitalize; }
+.sidebar-legal { display: block; text-align: center; margin-top: 12px; font-size: 11px; color: var(--sidebar-muted); text-decoration: none; }
+.sidebar-legal:hover { color: #fff; text-decoration: underline; }
 /* Scoped with .sidebar-user for higher specificity than the mobile `.btn`
    padding override (which otherwise squeezes/clips this fixed-size icon button
    on phones). box-sizing keeps it square regardless of inherited padding. */
