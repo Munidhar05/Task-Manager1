@@ -23,6 +23,7 @@ import Assistant from './pages/Assistant'
 import Chats from './pages/Chats'
 import Admin from './pages/Admin'
 import Platform from './pages/Platform'
+import PrivacyPolicy from './pages/PrivacyPolicy'
 
 // Clean line-style sidebar icons (inherit currentColor, so they turn white when active).
 const Icon = ({ children }: { children: React.ReactNode }) => (
@@ -121,6 +122,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             </svg>
           </button>
         </div>
+        <NavLink to="/privacy" className="sidebar-legal" onClick={() => setOpen(false)}>Privacy Policy</NavLink>
       </aside>
       {open && <div className="sidebar-backdrop" onClick={() => setOpen(false)} />}
       <div className="main">
@@ -216,6 +218,7 @@ export default function App() {
       <Route path="/forgot-password" element={user ? <Navigate to="/" replace /> : <ForgotPassword />} />
       <Route path="/reset-password" element={user ? <Navigate to="/" replace /> : <ResetPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/" element={<Protected><Home /></Protected>} />
       <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />

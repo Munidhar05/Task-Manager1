@@ -100,6 +100,8 @@ export default function Login() {
             <Link to="/forgot-password" style={{ color: 'var(--primary)', fontWeight: 600 }}>Forgot password?</Link>
             <br />
             New here? <Link to="/signup" style={{ color: 'var(--primary)', fontWeight: 600 }}>Create your company</Link>
+            <br />
+            <Link to="/privacy" style={{ color: 'var(--muted)', fontWeight: 600, fontSize: 11.5 }}>Privacy Policy</Link>
           </div>
         </form>
         <div className="paws-bottom">
