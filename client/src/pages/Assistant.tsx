@@ -1,11 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, dueLabel } from '../ui'
+import { toast } from '../lib/toast'
 import TaskDrawer from '../components/TaskDrawer'
 
 interface Msg { role: 'user' | 'ai'; text: string; tasks?: any[] }
 interface Convo { id: string; title: string; msgs: Msg[]; updated: number }
+
+const MicIcon = ({ size = 16 }: { size?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" />
+  </svg>
+)
 
 const GREETING: Msg = { role: 'ai', text: 'Hi! I\'m your task assistant. Ask me anything about your tasks, deadlines, meetings, or your team\'s workload — in plain language.' }
 
@@ -29,6 +36,68 @@ export default function Assistant() {
   const [navOpen, setNavOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem('smarttask_chat_sidebar_collapsed') === '1')
   const logRef = useRef<HTMLDivElement>(null)
+
+  // Voice input: record a short clip and transcribe it server-side (same Sarvam/
+  // Whisper pipeline as the task voice features — reliable on Android & multilingual).
+  const [listening, setListening] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const mrRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<BlobPart[]>([])
+  const canRecord = typeof navigator !== 'undefined'
+    && !!navigator.mediaDevices?.getUserMedia
+    && typeof (window as any).MediaRecorder !== 'undefined'
+
+  const releaseMic = () => {
+    try { if (mrRef.current && mrRef.current.state !== 'inactive') mrRef.current.stop() } catch {}
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+    streamRef.current = null
+  }
+  useEffect(() => releaseMic, [])
+
+  const transcribe = async (blob: Blob) => {
+    setTranscribing(true)
+    try {
+      const fd = new FormData()
+      fd.append('audio', blob, 'assistant.webm')
+      const headers: Record<string, string> = {}
+      const token = getToken()
+      if (token) headers.authorization = `Bearer ${token}`
+      const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
+      const text = String(data?.text || '').trim()
+      // Fill the box (append if the user already typed something) so they can review
+      // and edit before sending. The assistant LLM handles any language directly.
+      if (text) setInput((prev) => (prev ? prev.trim() + ' ' : '') + text)
+      else toast.info("Didn't catch that — please tap the mic and try again.")
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not transcribe. Check your connection and try again.')
+    } finally { setTranscribing(false) }
+  }
+
+  const toggleMic = async () => {
+    if (listening) { setListening(false); try { mrRef.current?.stop() } catch {}; return }
+    if (!canRecord) { toast.error('Voice input needs microphone access on this device.'); return }
+    let stream: MediaStream
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
+    catch { toast.error('Microphone access is blocked. Allow mic permission and try again.'); return }
+    streamRef.current = stream
+    chunksRef.current = []
+    let mr: MediaRecorder
+    try { mr = new MediaRecorder(stream, { mimeType: 'audio/webm' }) } catch { mr = new MediaRecorder(stream) }
+    mrRef.current = mr
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
+    mr.onstop = () => {
+      try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+      streamRef.current = null
+      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' })
+      chunksRef.current = []
+      if (blob.size) transcribe(blob)
+    }
+    try { mr.start() } catch { setListening(false); releaseMic(); return }
+    setListening(true)
+  }
 
   const setSidebar = (c: boolean) => { setCollapsed(c); localStorage.setItem('smarttask_chat_sidebar_collapsed', c ? '1' : '0') }
 
@@ -182,8 +251,20 @@ export default function Assistant() {
               </div>
             )}
             <div className="chat-input">
-              <input placeholder="Ask about your tasks…" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send(input)} autoFocus />
-              <button className="btn btn-primary" onClick={() => send(input)} disabled={busy}>Send</button>
+              <input placeholder={listening ? 'Listening… tap the mic to stop' : 'Ask about your tasks…'} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send(input)} autoFocus />
+              {canRecord && (
+                <button
+                  type="button"
+                  className={'btn btn-mic' + (listening ? ' btn-mic-live' : '')}
+                  onClick={toggleMic}
+                  disabled={transcribing}
+                  title={listening ? 'Stop' : 'Speak your question'}
+                  aria-label={listening ? 'Stop recording' : 'Speak your question'}
+                >
+                  {transcribing ? <span className="spinner" /> : listening ? <span className="mic-dot" /> : <MicIcon size={18} />}
+                </button>
+              )}
+              <button className="btn btn-primary" onClick={() => send(input)} disabled={busy || listening}>Send</button>
             </div>
           </div>
         </div>

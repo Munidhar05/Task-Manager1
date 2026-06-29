@@ -6,6 +6,7 @@ import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../u
 import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
 import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
+import { interpretVoiceSearch } from '../ai/voiceSearch.js'
 import { parseDueDate } from '../ai/dates.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 
@@ -72,7 +73,12 @@ r.get('/', (req, res) => {
   if (project) { sql += ' AND t.project_id=?'; args.push(project) }
   if (meeting) { sql += ' AND t.meeting_id=?'; args.push(meeting) }
   if (confidence) { sql += ' AND t.ownership_confidence=?'; args.push(confidence) }
-  if (q) { sql += ' AND (t.title LIKE ? OR t.description LIKE ?)'; args.push(`%${q}%`, `%${q}%`) }
+  // Match the query against the title, description, OR the assignee's name — so
+  // searching (or saying) a person's name surfaces all of their tasks.
+  if (q) {
+    sql += ' AND (t.title LIKE ? OR t.description LIKE ? OR t.assignee_id IN (SELECT id FROM users WHERE org_id=? AND name LIKE ?))'
+    args.push(`%${q}%`, `%${q}%`, req.user.org_id, `%${q}%`)
+  }
   sql += " ORDER BY CASE t.priority WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, t.due_date IS NULL, t.due_date"
   const rows = db.prepare(sql).all(...args)
   res.json(rows.map(hydrate))
@@ -100,6 +106,48 @@ r.post('/transcribe', audioUpload.single('audio'), async (req, res) => {
     res.json({ text: text || '', language: language || null })
   } catch (err) {
     console.error('[tasks] transcribe failed:', err.message)
+    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+  }
+})
+
+// VOICE SEARCH: transcribe a spoken query (any language), translate it to English,
+// and split it into structured filters the list endpoint understands. Saying a
+// person's name returns ALL of that employee's tasks; topic words search title/desc.
+r.post('/voice-search', audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'audio file required (field "audio")' })
+  try {
+    const { text } = await transcribeAudio(
+      req.file.buffer,
+      req.file.originalname || 'search.webm',
+      req.file.mimetype || 'audio/webm',
+    )
+    const transcript = String(text || '').trim()
+    // Default (no LLM / interpret failed): fall back to the raw transcript as the query.
+    let interp = { query: transcript, person: null, status: null, priority: null }
+    if (transcript && hasLLM()) {
+      try {
+        const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(req.user.org_id)
+        interp = await interpretVoiceSearch(transcript, { users })
+      } catch (e) { console.warn('[tasks] voice-search interpret failed, using transcript:', e.message) }
+    }
+    // Resolve a named person to an assignee id (handles aliases / first-name-only).
+    let assignee_id = null, assignee_name = null
+    if (interp.person) {
+      const u = resolveUser(req.user.org_id, interp.person)
+      if (u) { assignee_id = u.id; assignee_name = u.name }
+    }
+    res.json({
+      transcript,
+      // When we matched a person but found no topic words, leave query empty so the
+      // assignee filter alone returns every task for that employee.
+      query: interp.query || (assignee_id ? '' : transcript),
+      assignee_id,
+      assignee_name,
+      status: interp.status || null,
+      priority: interp.priority || null,
+    })
+  } catch (err) {
+    console.error('[tasks] voice-search failed:', err.message)
     res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
   }
 })
