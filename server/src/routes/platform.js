@@ -30,12 +30,15 @@ r.get('/orgs', (req, res) => {
   res.json(rows.map((o) => ({ ...o, allowed_domains: (o.allowed_domains || '').split(',').filter(Boolean) })))
 })
 
-// One org's members (read-only detail).
+// One org's members + task breakdown by status (read-only detail). Counts only —
+// no task content crosses the org boundary, keeping tenant isolation intact.
 r.get('/orgs/:id', (req, res) => {
   const org = db.prepare('SELECT * FROM organizations WHERE id=?').get(req.params.id)
   if (!org) return res.status(404).json({ error: 'Not found' })
   const members = db.prepare('SELECT id, name, email, role, platform_admin, created_at FROM users WHERE org_id=? ORDER BY created_at').all(org.id)
-  res.json({ org: { ...org, allowed_domains: (org.allowed_domains || '').split(',').filter(Boolean) }, members })
+  const by_status = db.prepare('SELECT status, COUNT(*) AS count FROM tasks WHERE org_id=? GROUP BY status ORDER BY count DESC').all(org.id)
+  const task_count = by_status.reduce((sum, s) => sum + s.count, 0)
+  res.json({ org: { ...org, allowed_domains: (org.allowed_domains || '').split(',').filter(Boolean) }, members, by_status, task_count })
 })
 
 // Org-scoped tables, deleted in dependency order. Tables without org_id are skipped
