@@ -89,7 +89,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     <div className="app">
       <aside className={'sidebar' + (open ? ' open' : '')}>
         <div className="brand">
-          <div className="brand-logo">B</div>
+          <img src="/logo.png" alt="Befach Task Manager" className="brand-logo" />
           <div>
             <div className="brand-name">Befach Task Manager</div>
             <div className="brand-sub">Meeting → Task</div>
