@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { authRequired } from '../auth.js'
 import { answerQuery } from '../ai/assistant.js'
 import { chatAnswer, hasLLM } from '../ai/assistantChat.js'
+import { recordUsage } from '../ai/usage.js'
 import { db } from '../db.js'
 import { id, now } from '../util.js'
 
@@ -67,7 +68,8 @@ r.post('/query', async (req, res, next) => {
 
   if (hasLLM()) {
     try {
-      const result = await chatAnswer(query, req.user, history)
+      const result = await chatAnswer(query, req.user, history,
+        (u) => recordUsage({ orgId: req.user.org_id, userId: req.user.id, feature: 'assistant', ...u }))
       return res.json({ ...result, tasks: hydrate(result.tasks) })
     } catch (err) {
       console.warn('[assistant] LLM failed, falling back to rules:', err.message)

@@ -42,7 +42,8 @@ export function parseJson(text) {
   try { return JSON.parse(text.slice(start, end + 1)) } catch { return null }
 }
 
-export async function callOpenRouter(system, userMsg) {
+export async function callOpenRouter(system, userMsg, onUsage) {
+  const model = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash'
   const res = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -52,7 +53,7 @@ export async function callOpenRouter(system, userMsg) {
       'X-Title': process.env.OPENROUTER_APP_NAME || 'SmartTask AI',
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
+      model,
       messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
       response_format: { type: 'json_object' },
       temperature: 0.2,
@@ -60,10 +61,12 @@ export async function callOpenRouter(system, userMsg) {
   })
   if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 200)}`)
   const data = await res.json()
+  if (onUsage) onUsage({ provider: 'openrouter', model, inputTokens: data.usage?.prompt_tokens || 0, outputTokens: data.usage?.completion_tokens || 0 })
   return data.choices?.[0]?.message?.content || ''
 }
 
-export async function callClaude(system, userMsg) {
+export async function callClaude(system, userMsg, onUsage) {
+  const model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8'
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: {
@@ -72,7 +75,7 @@ export async function callClaude(system, userMsg) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+      model,
       max_tokens: 512,
       system,
       messages: [{ role: 'user', content: userMsg }],
@@ -80,15 +83,17 @@ export async function callClaude(system, userMsg) {
   })
   if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 200)}`)
   const data = await res.json()
+  if (onUsage) onUsage({ provider: 'anthropic', model, inputTokens: data.usage?.input_tokens || 0, outputTokens: data.usage?.output_tokens || 0 })
   return (data.content || []).map((c) => c.text || '').join('')
 }
 
-export async function callOpenAI(system, userMsg) {
+export async function callOpenAI(system, userMsg, onUsage) {
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model,
       messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
       response_format: { type: 'json_object' },
       temperature: 0.2,
@@ -97,12 +102,13 @@ export async function callOpenAI(system, userMsg) {
   })
   if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`)
   const data = await res.json()
+  if (onUsage) onUsage({ provider: 'openai', model, inputTokens: data.usage?.prompt_tokens || 0, outputTokens: data.usage?.completion_tokens || 0 })
   return data.choices?.[0]?.message?.content || ''
 }
 
 // Returns { title, description, assignee_name, priority, due_date_raw }. Throws if
 // no provider is configured or the call/parse fails — the route handles fallback.
-export async function parseSpokenTask(transcript, { users = [] } = {}) {
+export async function parseSpokenTask(transcript, { users = [], onUsage } = {}) {
   const hasOpenRouter = !!process.env.OPENROUTER_API_KEY
   const hasClaude = !!process.env.ANTHROPIC_API_KEY
   const hasOpenAI = !!process.env.OPENAI_API_KEY
@@ -119,7 +125,7 @@ export async function parseSpokenTask(transcript, { users = [] } = {}) {
   ].filter(Boolean)
   let lastErr
   for (const p of providers) {
-    try { raw = await p.call(SYSTEM_PROMPT, userMsg); if (raw) break }
+    try { raw = await p.call(SYSTEM_PROMPT, userMsg, onUsage); if (raw) break }
     catch (err) { lastErr = err; console.warn(`[voiceTask] ${p.name} failed, trying next:`, err.message) }
   }
   if (raw === undefined) throw lastErr || new Error('All providers failed')

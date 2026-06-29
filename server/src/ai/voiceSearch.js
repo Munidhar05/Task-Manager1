@@ -37,7 +37,7 @@ function buildUserMsg(transcript, users) {
 
 // Returns { query, person, status, priority }. Throws only if no provider is
 // configured; the route catches errors and falls back to the raw transcript.
-export async function interpretVoiceSearch(transcript, { users = [] } = {}) {
+export async function interpretVoiceSearch(transcript, { users = [], onUsage } = {}) {
   const hasOpenRouter = !!process.env.OPENROUTER_API_KEY
   const hasClaude = !!process.env.ANTHROPIC_API_KEY
   const hasOpenAI = !!process.env.OPENAI_API_KEY
@@ -51,7 +51,7 @@ export async function interpretVoiceSearch(transcript, { users = [] } = {}) {
   ].filter(Boolean)
   let raw, lastErr
   for (const p of providers) {
-    try { raw = await p.call(SYSTEM_PROMPT, userMsg); if (raw) break }
+    try { raw = await p.call(SYSTEM_PROMPT, userMsg, onUsage); if (raw) break }
     catch (err) { lastErr = err; console.warn(`[voiceSearch] ${p.name} failed, trying next:`, err.message) }
   }
   if (raw === undefined) throw lastErr || new Error('All providers failed')

@@ -163,7 +163,8 @@ function parseModelJson(text) {
   } catch { return null }
 }
 
-async function callClaude(system, messages) {
+async function callClaude(system, messages, onUsage) {
+  const model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8'
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: {
@@ -172,7 +173,7 @@ async function callClaude(system, messages) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+      model,
       max_tokens: 1024,
       system,
       messages,
@@ -180,15 +181,17 @@ async function callClaude(system, messages) {
   })
   if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 200)}`)
   const data = await res.json()
+  if (onUsage) onUsage({ provider: 'anthropic', model, inputTokens: data.usage?.input_tokens || 0, outputTokens: data.usage?.output_tokens || 0 })
   return (data.content || []).map((c) => c.text || '').join('')
 }
 
-async function callOpenAI(system, messages) {
+async function callOpenAI(system, messages, onUsage) {
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model,
       messages: [{ role: 'system', content: system }, ...messages],
       response_format: { type: 'json_object' },
       temperature: 0.2,
@@ -197,6 +200,7 @@ async function callOpenAI(system, messages) {
   })
   if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`)
   const data = await res.json()
+  if (onUsage) onUsage({ provider: 'openai', model, inputTokens: data.usage?.prompt_tokens || 0, outputTokens: data.usage?.completion_tokens || 0 })
   return data.choices?.[0]?.message?.content || ''
 }
 
@@ -208,7 +212,7 @@ const toCard = (t) => ({
 
 // Main entry: returns { answer, tasks, engine }. Throws if no LLM is configured
 // or the provider call/parse fails — the route catches and falls back to rules.
-export async function chatAnswer(query, user, history = []) {
+export async function chatAnswer(query, user, history = [], onUsage) {
   const hasClaude = !!process.env.ANTHROPIC_API_KEY
   const hasOpenAI = !!process.env.OPENAI_API_KEY
   if (!hasClaude && !hasOpenAI) throw new Error('No LLM configured')
@@ -235,14 +239,14 @@ export async function chatAnswer(query, user, history = []) {
   // If Claude fails (e.g. no credit) and OpenAI is configured, fall through.
   let raw, engine
   if (hasClaude) {
-    try { raw = await callClaude(system, messages); engine = 'claude' }
+    try { raw = await callClaude(system, messages, onUsage); engine = 'claude' }
     catch (err) {
       if (!hasOpenAI) throw err
       console.warn('[assistant] Claude failed, trying OpenAI:', err.message)
     }
   }
   if (raw === undefined && hasOpenAI) {
-    raw = await callOpenAI(system, messages); engine = 'openai'
+    raw = await callOpenAI(system, messages, onUsage); engine = 'openai'
   }
 
   const parsed = parseModelJson(raw)
