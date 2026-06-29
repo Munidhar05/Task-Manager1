@@ -7,20 +7,32 @@ import { confirmDialog } from '../lib/confirm'
 interface Org {
   id: string; name: string; is_personal: number; allowed_domains: string[]; created_at: string
   user_count: number; task_count: number; last_activity: string | null; owner_email: string | null
+  usage_cost: number; usage_calls: number; usage_access: boolean
 }
 
 interface Member { id: string; name: string; email: string; role: string; platform_admin: number; created_at: string }
+interface UsageRow { provider?: string; feature?: string; calls: number; tokens: number; cost: number }
+interface Usage {
+  total: { calls: number; input_tokens: number; output_tokens: number; tokens: number; cost: number }
+  by_provider: UsageRow[]
+  by_feature: UsageRow[]
+}
 interface OrgDetail {
-  org: { id: string; name: string; is_personal: number; allowed_domains: string[]; created_at: string }
+  org: { id: string; name: string; is_personal: number; allowed_domains: string[]; created_at: string; usage_access: boolean }
   members: Member[]
   by_status: { status: string; count: number }[]
   task_count: number
+  usage: Usage
 }
+
+// Compact money / number formatting for the usage figures.
+export const fmtUsd = (n: number) => '$' + (n || 0).toLocaleString(undefined, { minimumFractionDigits: n < 1 ? 4 : 2, maximumFractionDigits: n < 1 ? 4 : 2 })
+export const fmtNum = (n: number) => (n || 0) >= 1000 ? (n / 1000).toFixed(n >= 1e6 ? 2 : 1).replace(/\.0$/, '') + (n >= 1e6 ? 'M' : 'k') : String(n || 0)
 
 // Platform admin console — oversee ALL organizations (super-admin only).
 export default function Platform() {
   const [orgs, setOrgs] = useState<Org[] | null>(null)
-  const [stats, setStats] = useState<{ orgs: number; users: number; tasks: number } | null>(null)
+  const [stats, setStats] = useState<{ orgs: number; users: number; tasks: number; ai_cost: number; ai_calls: number } | null>(null)
   const [error, setError] = useState(false)
   const [q, setQ] = useState('')
   // Org drill-down: null = closed; { id } while loading; full detail once fetched.
@@ -63,10 +75,11 @@ export default function Platform() {
 
   return (
     <>
-      <div className="emp-kpis section" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+      <div className="emp-kpis section" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="kpi" style={{ ['--kc' as any]: '#c5560f' }}><div><div className="kpi-val">{stats.orgs}</div><div className="kpi-label">Organizations</div></div></div>
         <div className="kpi" style={{ ['--kc' as any]: '#3b82f6' }}><div><div className="kpi-val">{stats.users}</div><div className="kpi-label">Total users</div></div></div>
         <div className="kpi" style={{ ['--kc' as any]: '#10b981' }}><div><div className="kpi-val">{stats.tasks}</div><div className="kpi-label">Total tasks</div></div></div>
+        <div className="kpi" style={{ ['--kc' as any]: '#a855f7' }}><div><div className="kpi-val">{fmtUsd(stats.ai_cost)}</div><div className="kpi-label">AI spend · {fmtNum(stats.ai_calls)} calls</div></div></div>
       </div>
 
       <div className="toolbar">
@@ -77,7 +90,7 @@ export default function Platform() {
       <div className="card table-card-wrap">
         <table className="table-cards">
           <thead><tr>
-            <th>Organization</th><th>Type</th><th>Owner</th><th>Users</th><th>Tasks</th><th>Created</th><th>Last activity</th><th></th>
+            <th>Organization</th><th>Type</th><th>Owner</th><th>Users</th><th>Tasks</th><th>AI usage</th><th>Created</th><th>Last activity</th><th></th>
           </tr></thead>
           <tbody>
             {filtered.map((o) => (
@@ -89,6 +102,10 @@ export default function Platform() {
                 <td data-label="Owner" className="muted">{o.owner_email || '—'}</td>
                 <td data-label="Users"><strong>{o.user_count}</strong></td>
                 <td data-label="Tasks">{o.task_count}</td>
+                <td data-label="AI usage">
+                  <strong>{fmtUsd(o.usage_cost)}</strong>
+                  <div className="muted" style={{ fontSize: 11 }}>{fmtNum(o.usage_calls)} calls{o.usage_access ? ' · shared' : ''}</div>
+                </td>
                 <td data-label="Created">{(o.created_at || '').slice(0, 10)}</td>
                 <td data-label="Last activity" className="muted">{o.last_activity ? fmtDateTime(o.last_activity) : '—'}</td>
                 <td><button className="btn btn-sm btn-danger" onClick={() => removeOrg(o)}>🗑 Delete</button></td>
@@ -99,18 +116,35 @@ export default function Platform() {
         {filtered.length === 0 && <div className="empty" style={{ padding: 20 }}>No organizations match your search.</div>}
       </div>
 
-      {detail && <OrgDetailModal state={detail} onClose={() => setDetail(null)} onRetry={() => openOrg(detail.id)} />}
+      {detail && <OrgDetailModal state={detail} onClose={() => setDetail(null)} onRetry={() => openOrg(detail.id)} onChanged={load} />}
     </>
   )
 }
 
-function OrgDetailModal({ state, onClose, onRetry }: {
+function OrgDetailModal({ state, onClose, onRetry, onChanged }: {
   state: { id: string; data: OrgDetail | null; error: boolean }
   onClose: () => void
   onRetry: () => void
+  onChanged: () => void
 }) {
   const d = state.data
   const maxStatus = d ? Math.max(...d.by_status.map((s) => s.count), 1) : 1
+  const [access, setAccess] = useState(false)
+  const [accessBusy, setAccessBusy] = useState(false)
+  useEffect(() => { if (d) setAccess(!!d.org.usage_access) }, [d])
+
+  const toggleAccess = async () => {
+    if (!d) return
+    const next = !access
+    setAccessBusy(true)
+    try {
+      await api.patch(`/platform/orgs/${d.org.id}/usage-access`, { enabled: next })
+      setAccess(next)
+      toast.success(next ? `${d.org.name}'s admins can now view their usage.` : `Usage access revoked for ${d.org.name}.`)
+      onChanged()
+    } catch (e: any) { toast.error(e.message) }
+    finally { setAccessBusy(false) }
+  }
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
@@ -145,6 +179,43 @@ function OrgDetailModal({ state, onClose, onRetry }: {
                     <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#64748b'} />
                   </div>
                 ))}
+              </div>
+
+              <div>
+                <div className="spread" style={{ marginBottom: 8 }}>
+                  <strong>AI / API usage</strong>
+                  <span className="muted" title="Estimated from public list prices">{fmtUsd(d.usage.total.cost)} est.</span>
+                </div>
+                <div className="row" style={{ gap: 16, marginBottom: 10, flexWrap: 'wrap' }}>
+                  <span className="muted" style={{ fontSize: 13 }}>{fmtNum(d.usage.total.calls)} calls</span>
+                  <span className="muted" style={{ fontSize: 13 }}>{fmtNum(d.usage.total.tokens)} tokens</span>
+                </div>
+                {d.usage.total.calls === 0 ? (
+                  <div className="muted" style={{ fontSize: 13 }}>No AI usage recorded yet.</div>
+                ) : (
+                  <div className="grid grid-2" style={{ gap: 14 }}>
+                    <div>
+                      <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: .4, marginBottom: 5 }}>By provider</div>
+                      {d.usage.by_provider.map((r) => (
+                        <div key={r.provider} className="spread" style={{ fontSize: 12.5, padding: '3px 0' }}>
+                          <span>{r.provider}</span><span className="muted">{r.calls} · {fmtUsd(r.cost)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: .4, marginBottom: 5 }}>By feature</div>
+                      {d.usage.by_feature.map((r) => (
+                        <div key={r.feature} className="spread" style={{ fontSize: 12.5, padding: '3px 0' }}>
+                          <span>{(r.feature || '').replace(/_/g, ' ')}</span><span className="muted">{r.calls} · {fmtUsd(r.cost)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <label className="row" style={{ gap: 8, marginTop: 12, fontSize: 13, cursor: accessBusy ? 'wait' : 'pointer' }}>
+                  <input type="checkbox" checked={access} disabled={accessBusy} onChange={toggleAccess} />
+                  Let this organization's admins view their own usage
+                </label>
               </div>
 
               <div>

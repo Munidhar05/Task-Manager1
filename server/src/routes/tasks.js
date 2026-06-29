@@ -7,6 +7,10 @@ import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
 import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
 import { interpretVoiceSearch } from '../ai/voiceSearch.js'
+import { recordUsage } from '../ai/usage.js'
+
+// The configured speech-to-text provider, for usage attribution.
+const STT_PROVIDER = (process.env.TRANSCRIPTION_PROVIDER || 'sarvam').toLowerCase()
 import { parseDueDate } from '../ai/dates.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 
@@ -103,6 +107,7 @@ r.post('/transcribe', audioUpload.single('audio'), async (req, res) => {
       req.file.originalname || 'task.webm',
       req.file.mimetype || 'audio/webm',
     )
+    recordUsage({ orgId: req.user.org_id, userId: req.user.id, provider: STT_PROVIDER, feature: 'transcription' })
     res.json({ text: text || '', language: language || null })
   } catch (err) {
     console.error('[tasks] transcribe failed:', err.message)
@@ -121,13 +126,17 @@ r.post('/voice-search', audioUpload.single('audio'), async (req, res) => {
       req.file.originalname || 'search.webm',
       req.file.mimetype || 'audio/webm',
     )
+    recordUsage({ orgId: req.user.org_id, userId: req.user.id, provider: STT_PROVIDER, feature: 'transcription' })
     const transcript = String(text || '').trim()
     // Default (no LLM / interpret failed): fall back to the raw transcript as the query.
     let interp = { query: transcript, person: null, status: null, priority: null }
     if (transcript && hasLLM()) {
       try {
         const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(req.user.org_id)
-        interp = await interpretVoiceSearch(transcript, { users })
+        interp = await interpretVoiceSearch(transcript, {
+          users,
+          onUsage: (u) => recordUsage({ orgId: req.user.org_id, userId: req.user.id, feature: 'voice_search', ...u }),
+        })
       } catch (e) { console.warn('[tasks] voice-search interpret failed, using transcript:', e.message) }
     }
     // Resolve a named person to an assignee id (handles aliases / first-name-only).
@@ -168,7 +177,10 @@ r.post('/parse-voice', async (req, res) => {
   if (!hasLLM()) return fallback()
   try {
     const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(req.user.org_id)
-    const parsed = await parseSpokenTask(transcript, { users })
+    const parsed = await parseSpokenTask(transcript, {
+      users,
+      onUsage: (u) => recordUsage({ orgId: req.user.org_id, userId: req.user.id, feature: 'voice_task', ...u }),
+    })
     // Resolve the spoken name to a real org user (null if no confident match).
     const match = parsed.assignee_name ? resolveUser(req.user.org_id, parsed.assignee_name) : null
     // Resolve a spoken deadline ("by Friday", "tomorrow", "repu", "kal") to an

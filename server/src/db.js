@@ -153,6 +153,23 @@ export function initSchema() {
     created_at TEXT NOT NULL
   );
 
+  -- AI / external API usage, one row per provider call, attributed to an org.
+  -- Powers per-organization usage tracking (calls, tokens, estimated cost).
+  CREATE TABLE IF NOT EXISTS usage_events (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT,
+    provider TEXT NOT NULL,                       -- sarvam | openrouter | anthropic | openai | groq
+    feature TEXT NOT NULL,                        -- transcription | assistant | voice_search | voice_task | meeting_analysis
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_usage_org ON usage_events(org_id, created_at);
+
   CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
@@ -380,6 +397,8 @@ export function initSchema() {
   ensureColumn('users', 'platform_admin', 'INTEGER DEFAULT 0')
   // Per-org allowed email domains (comma-separated). NULL/empty = no restriction.
   ensureColumn('organizations', 'allowed_domains', 'TEXT')
+  // Lets the super admin grant an org's own admins access to view their usage.
+  ensureColumn('organizations', 'usage_access', 'INTEGER DEFAULT 0')
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
   ensureColumn('tasks', 'assigned_at', 'TEXT')
   ensureColumn('tasks', 'submitted_at', 'TEXT')
