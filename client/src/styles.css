@@ -126,7 +126,7 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .app { display: flex; min-height: 100vh; }
 .sidebar { width: 240px; background: var(--sidebar); color: #fff; display: flex; flex-direction: column; padding: 20px 14px; position: sticky; top: 0; height: 100vh; flex-shrink: 0; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; }
-.brand-logo { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg,#c5560f,#e07a2f); display: grid; place-items: center; font-weight: 800; color: #fff; }
+.brand-logo { width: 34px; height: 34px; border-radius: 9px; background: #fff; object-fit: cover; flex-shrink: 0; }
 .brand-name { font-weight: 800; font-size: 15px; white-space: nowrap; }
 .brand-sub { font-size: 11px; color: var(--sidebar-muted); }
 .nav { display: flex; flex-direction: column; gap: 6px; flex: 1; margin-top: 8px; }
