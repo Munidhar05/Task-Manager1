@@ -126,10 +126,13 @@ function SortMenu({ sortKey, onPick }: { sortKey: SortKey; onPick: (key: SortKey
 // Search dialog: type or speak to search tasks. On submit it sets the query and
 // closes; the filtered list is then visible behind it. Voice uses the same
 // server-side transcription as the New Task form (reliable on Android).
-function SearchDialog({ initial, onSearch, onClose }: { initial: string; onSearch: (q: string) => void; onClose: () => void }) {
+type SearchApply = { q?: string; assignee?: string; status?: string; priority?: string }
+function SearchDialog({ initial, onApply, onClose }: { initial: string; onApply: (f: SearchApply) => void; onClose: () => void }) {
   const [q, setQ] = useState(initial)
   const [listening, setListening] = useState(false)
   const [parsing, setParsing] = useState(false)
+  // Extra filters resolved from a voice query (e.g. an employee name → assignee id).
+  const [voiceFilters, setVoiceFilters] = useState<{ assignee?: string; assigneeName?: string; status?: string; priority?: string } | null>(null)
   const mrRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<BlobPart[]>([])
@@ -153,14 +156,27 @@ function SearchDialog({ initial, onSearch, onClose }: { initial: string; onSearc
       const headers: Record<string, string> = {}
       const token = getToken()
       if (token) headers.authorization = `Bearer ${token}`
-      const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
+      // /voice-search transcribes ANY language, translates to English, and resolves
+      // a spoken employee name to an assignee id so we can show all their tasks.
+      const res = await fetch(`${API_BASE}/api/tasks/voice-search`, { method: 'POST', headers, body: fd, cache: 'no-store' })
       const data = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
-      const text = String(data?.text || '').trim()
-      if (text) setQ(text)
-      else toast.info("Didn't catch that — please tap and try again.")
+      if (!res.ok) throw new Error(data?.error || `Voice search failed (${res.status})`)
+      const query = String(data?.query || '').trim()
+      const extra = {
+        assignee: data?.assignee_id || undefined,
+        assigneeName: data?.assignee_name || undefined,
+        status: data?.status || undefined,
+        priority: data?.priority || undefined,
+      }
+      const heardSomething = query || extra.assignee || extra.status || extra.priority
+      if (heardSomething) {
+        setQ(query)
+        setVoiceFilters((extra.assignee || extra.status || extra.priority) ? extra : null)
+      } else {
+        toast.info("Didn't catch that — please tap and try again.")
+      }
     } catch (err: any) {
-      toast.error(err?.message || 'Could not transcribe. Check your connection and try again.')
+      toast.error(err?.message || 'Could not search by voice. Check your connection and try again.')
     } finally { setParsing(false) }
   }
 
@@ -187,7 +203,18 @@ function SearchDialog({ initial, onSearch, onClose }: { initial: string; onSearc
     setListening(true)
   }
 
-  const submit = () => { onSearch(q.trim()); onClose() }
+  const submit = () => {
+    const f: SearchApply = { q: q.trim() }
+    // A voice query may also have resolved an employee / status / priority — apply
+    // those alongside the text so e.g. "Shabbir's blocked tasks" filters correctly.
+    if (voiceFilters) {
+      f.assignee = voiceFilters.assignee || ''
+      f.status = voiceFilters.status || ''
+      f.priority = voiceFilters.priority || ''
+    }
+    onApply(f)
+    onClose()
+  }
 
   return (
     <div className="modal-center" onClick={onClose}>
@@ -221,6 +248,15 @@ function SearchDialog({ initial, onSearch, onClose }: { initial: string; onSearc
             </button>
           )}
           {listening && <div className="muted" style={{ fontSize: 12 }}>Listening… tap Stop when done.</div>}
+          {voiceFilters && (
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
+              <span className="muted">Voice search:</span>
+              {voiceFilters.assigneeName && <span className="badge" style={{ background: '#eef2ff', color: '#4f46e5' }}>👤 {voiceFilters.assigneeName}</span>}
+              {voiceFilters.status && <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>{voiceFilters.status}</span>}
+              {voiceFilters.priority && <span className="badge" style={{ background: '#fff7ed', color: '#c2410c' }}>{voiceFilters.priority}</span>}
+              <button className="search-dialog-clear" style={{ position: 'static' }} onClick={() => setVoiceFilters(null)} title="Clear voice filters" aria-label="Clear voice filters">✕</button>
+            </div>
+          )}
           <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
             <button className="btn" onClick={onClose}>Cancel</button>
             <button className="btn btn-primary" onClick={submit}>Search</button>
@@ -647,7 +683,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {openId && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={load} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
-      {searchOpen && <SearchDialog initial={filters.q} onSearch={(q) => setFilters({ ...filters, q })} onClose={() => setSearchOpen(false)} />}
+      {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
     </>
   )
 }

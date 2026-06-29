@@ -34,7 +34,7 @@ function buildUserMsg(transcript, users) {
   return `Team members the task can be assigned to:\n${names}\n\nSPOKEN TASK:\n${transcript}`
 }
 
-function parseJson(text) {
+export function parseJson(text) {
   if (!text) return null
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
@@ -42,7 +42,7 @@ function parseJson(text) {
   try { return JSON.parse(text.slice(start, end + 1)) } catch { return null }
 }
 
-async function callOpenRouter(system, userMsg) {
+export async function callOpenRouter(system, userMsg) {
   const res = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -63,7 +63,7 @@ async function callOpenRouter(system, userMsg) {
   return data.choices?.[0]?.message?.content || ''
 }
 
-async function callClaude(system, userMsg) {
+export async function callClaude(system, userMsg) {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: {
@@ -83,7 +83,7 @@ async function callClaude(system, userMsg) {
   return (data.content || []).map((c) => c.text || '').join('')
 }
 
-async function callOpenAI(system, userMsg) {
+export async function callOpenAI(system, userMsg) {
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
