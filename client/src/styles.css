@@ -378,6 +378,60 @@ tbody tr:hover { background: #f8fafc; }
 .login-err { display: flex; align-items: center; gap: 8px; color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 600; margin-top: 12px; }
 .login-err::before { content: '⚠'; font-size: 14px; }
 
+/* ===== Voice assistant (hands-free "hey BTM") ===== */
+.va-root { position: fixed; right: 20px; bottom: 20px; z-index: 1200; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+.va-fab { width: 56px; height: 56px; border-radius: 50%; border: none; background: var(--primary, #c5560f); color: #fff; display: grid; place-items: center; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,.22); transition: transform .12s ease, background .2s; }
+.va-fab:hover { background: #a8480c; }
+.va-fab--open { background: #6b7280; }
+.va-fab--listening { background: #ef4444; animation: va-pulse 1.3s ease-out infinite; }
+.va-fab--processing, .va-fab--speaking { background: #c5560f; }
+@keyframes va-pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.5); } 70% { box-shadow: 0 0 0 16px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+
+.va-panel { width: min(360px, calc(100vw - 32px)); max-height: min(70vh, 560px); background: #fff; border: 1px solid #ece7dd; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,.18); display: flex; flex-direction: column; overflow: hidden; }
+.va-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #f1ece2; }
+.va-title { display: flex; align-items: center; gap: 8px; font-weight: 800; color: #2b2440; font-size: 14px; }
+.va-dot { width: 9px; height: 9px; border-radius: 50%; background: #cbd5e1; }
+.va-dot--listening { background: #ef4444; animation: va-blink 1s infinite; }
+.va-dot--processing { background: #f59e0b; }
+.va-dot--speaking { background: #10b981; }
+.va-dot--confirming { background: #c5560f; }
+@keyframes va-blink { 50% { opacity: .3; } }
+
+.va-log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.va-hint { color: #94a3b8; font-size: 12.5px; line-height: 1.7; text-align: center; padding: 12px 6px; }
+.va-msg { max-width: 85%; padding: 8px 11px; border-radius: 12px; font-size: 13.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.va-msg--user { align-self: flex-end; background: var(--primary, #c5560f); color: #fff; border-bottom-right-radius: 4px; }
+.va-msg--ai { align-self: flex-start; background: #f4f1ea; color: #2b2440; border-bottom-left-radius: 4px; }
+
+.va-confirm { margin: 0 12px 8px; padding: 10px 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; display: flex; flex-direction: column; gap: 8px; }
+.va-confirm-summary { font-size: 13px; font-weight: 600; color: #7c2d12; }
+
+.va-foot { display: flex; align-items: center; gap: 12px; padding: 12px; border-top: 1px solid #f1ece2; }
+.va-status { flex: 1; font-size: 12.5px; color: #64748b; }
+.va-mic { width: 46px; height: 46px; border-radius: 50%; border: none; background: #f4f1ea; color: #2b2440; display: grid; place-items: center; cursor: pointer; transition: background .2s, box-shadow .1s; flex: none; }
+.va-mic:hover { background: #ece7dd; }
+.va-mic--listening { background: #ef4444; color: #fff; }
+.va-mic--speaking { background: #10b981; color: #fff; }
+
+@media (prefers-color-scheme: dark) {
+  .va-panel { background: #1f2430; border-color: #2f3542; }
+  .va-head, .va-foot { border-color: #2f3542; }
+  .va-title { color: #e5e7eb; }
+  .va-msg--ai { background: #2a3040; color: #e5e7eb; }
+  .va-mic { background: #2a3040; color: #e5e7eb; }
+  .va-mic:hover { background: #333a4c; }
+}
+
+/* "or" divider between password login and Google sign-in */
+.login-or { display: flex; align-items: center; gap: 12px; margin: 16px 0 4px; color: #9a9488; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+.login-or::before, .login-or::after { content: ''; flex: 1; height: 1px; background: #e7e2d8; }
+/* GIS renders its own button here; center it within the card */
+.google-btn-slot { display: flex; justify-content: center; margin-top: 8px; min-height: 44px; }
+/* native (Android) Google button, styled to match the card */
+.google-btn { width: 100%; margin-top: 8px; justify-content: center; gap: 10px; background: #fff; color: #2b2440; border: 1px solid #dcd7cc; font-weight: 700; }
+.google-btn:hover:not(:disabled) { background: #faf8f4; border-color: #c9c3b6; }
+.google-btn:disabled { opacity: .6; }
+
 /* mascot sits above the card, peeking over the top edge */
 .mascot { position: absolute; top: -118px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; filter: drop-shadow(0 8px 14px rgba(0,0,0,.18)); }
 .mascot svg { display: block; }

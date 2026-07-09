@@ -7,6 +7,7 @@ import { api, userAvatarUrl } from './api'
 import { Avatar } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal from './components/ProfileModal'
+import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
 import Login from './pages/Login'
@@ -143,6 +144,8 @@ function Layout({ children }: { children: React.ReactNode }) {
         <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
       </div>
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
+      {/* Global hands-free voice assistant — available on every authenticated page. */}
+      <VoiceAssistant />
     </div>
   )
 }

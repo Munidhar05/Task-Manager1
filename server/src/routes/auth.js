@@ -1,10 +1,22 @@
 import { Router } from 'express'
+import { OAuth2Client } from 'google-auth-library'
 import { db } from '../db.js'
 import { signToken, verifyPassword, hashPassword, authRequired, platformAdminEmails } from '../auth.js'
 import { audit, id, now, genToken, appUrl, inDays, isCommonPassword } from '../util.js'
 import { sendMail } from '../mailer.js'
 
 const r = Router()
+
+// Google Sign-In: the Web OAuth client id. The same id renders the button on the
+// client (VITE_GOOGLE_CLIENT_ID) and is verified here (a token's `aud` must match).
+// Empty until configured, in which case the /google route reports it's not set up.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''
+// Extra client ids accepted on the token's `aud` — needed for native mobile, where
+// Google issues the id token under the platform (Android/iOS) client id rather than
+// the web one. Comma-separated in GOOGLE_CLIENT_IDS_EXTRA.
+const GOOGLE_AUDIENCES = [GOOGLE_CLIENT_ID, ...(process.env.GOOGLE_CLIENT_IDS_EXTRA || '')
+  .split(',').map((s) => s.trim()).filter(Boolean)].filter(Boolean)
+const googleClient = new OAuth2Client()
 
 // Every new org starts with the same four departments the seed uses, so the
 // product is immediately usable after signup.
@@ -102,6 +114,61 @@ r.post('/login', (req, res) => {
     user.platform_admin = isPlatform
   }
   audit(user.org_id, user.id, 'auth.login', 'user', user.id)
+  res.json({ token: signToken(user), user: userWithWorkspace(user) })
+})
+
+// GOOGLE SIGN-IN (login-only). The client obtains a Google ID token — from the
+// Identity Services button on the web, or the native plugin on mobile — and posts
+// it here. We verify the token with Google, then log in the EXISTING account whose
+// email matches. We deliberately never create an org/account from Google: unknown
+// emails are told to sign up or ask for an invite. On first Google login we stamp
+// the user's google_id and mark their email verified (Google already vouched for it).
+r.post('/google', async (req, res) => {
+  if (!GOOGLE_CLIENT_ID) {
+    return res.status(501).json({ error: 'Google Sign-In is not configured on the server.' })
+  }
+  const credential = String(req.body?.credential || '')
+  if (!credential) return res.status(400).json({ error: 'Missing Google credential.' })
+
+  let payload
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_AUDIENCES })
+    payload = ticket.getPayload()
+  } catch (err) {
+    console.warn('[auth] google token verify failed:', err.message)
+    return res.status(401).json({ error: 'Could not verify your Google sign-in. Please try again.' })
+  }
+
+  // Google must have confirmed the address, or a malicious token could claim any email.
+  const email = String(payload?.email || '').toLowerCase().trim()
+  const emailOk = payload?.email_verified === true || payload?.email_verified === 'true'
+  if (!email || !emailOk) {
+    return res.status(401).json({ error: 'Your Google account has no verified email address.' })
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
+  if (!user) {
+    // Login-only: no account, no auto-provisioning.
+    return res.status(404).json({ error: 'No account found for this Google email. Ask an admin for an invite, or sign up first.' })
+  }
+
+  // First-time link: stamp the Google id and trust Google's verified email.
+  if (!user.google_id) {
+    db.prepare('UPDATE users SET google_id = ? WHERE id = ?').run(payload.sub, user.id)
+    user.google_id = payload.sub
+  }
+  if (!user.email_verified) {
+    db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(user.id)
+    user.email_verified = 1
+  }
+  // Sync platform-admin status from the env allowlist, exactly like /login does.
+  const isPlatform = platformAdminEmails().includes(email) ? 1 : 0
+  if ((user.platform_admin ? 1 : 0) !== isPlatform) {
+    db.prepare('UPDATE users SET platform_admin=? WHERE id=?').run(isPlatform, user.id)
+    user.platform_admin = isPlatform
+  }
+
+  audit(user.org_id, user.id, 'auth.login_google', 'user', user.id)
   res.json({ token: signToken(user), user: userWithWorkspace(user) })
 })
 

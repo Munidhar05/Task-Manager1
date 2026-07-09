@@ -313,6 +313,13 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // this dep the list would keep showing the previous route's tasks until a refresh.
   useEffect(() => { load() }, [filters, personal])
   useEffect(() => { api.get('/users').then(setUsers) }, [])
+  // Refresh when the voice assistant (or another surface) changes tasks while
+  // this list is already mounted.
+  useEffect(() => {
+    const onChanged = () => load()
+    window.addEventListener('tasks-changed', onChanged)
+    return () => window.removeEventListener('tasks-changed', onChanged)
+  }, [filters, personal])
 
   // If navigated here with ?task=… (e.g. by clicking a notification) while already
   // on this page, open that task's drawer too.

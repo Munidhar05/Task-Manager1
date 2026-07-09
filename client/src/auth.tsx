@@ -8,6 +8,7 @@ interface AuthCtx {
   user: User | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
+  loginWithGoogle: (credential: string) => Promise<void>
   signup: (input: SignupInput) => Promise<void>
   acceptInvite: (input: AcceptInviteInput) => Promise<void>
   logout: () => void
@@ -34,6 +35,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(d.user)
     registerPush() // ask for notification permission + register this device (native only)
   }
+  // Exchange a Google ID token (from GIS on web or the native plugin) for our own
+  // session. The backend is login-only, so this fails for unknown emails.
+  const loginWithGoogle = async (credential: string) => {
+    const d = await api.post('/auth/google', { credential })
+    setToken(d.token)
+    setUser(d.user)
+    registerPush()
+  }
   // Create a new company + its first account, then log straight in.
   const signup = async (input: SignupInput) => {
     const d = await api.post('/auth/signup', input)
@@ -51,5 +60,5 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = () => { unregisterPush(); setToken(null); setUser(null) }
   const refresh = async () => { try { const d = await api.get('/auth/me'); setUser(d.user) } catch {} }
 
-  return <Ctx.Provider value={{ user, loading, login, signup, acceptInvite, logout, refresh }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ user, loading, login, loginWithGoogle, signup, acceptInvite, logout, refresh }}>{children}</Ctx.Provider>
 }

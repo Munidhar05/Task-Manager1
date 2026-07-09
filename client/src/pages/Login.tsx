@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { googleEnabled, isNativePlatform, renderGoogleButton, nativeGoogleSignIn } from '../googleAuth'
 
 // Clean line-art eye / eye-off for the password reveal toggle.
 const EyeIcon = () => (
@@ -9,9 +10,19 @@ const EyeIcon = () => (
 const EyeOffIcon = () => (
   <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.45M6.6 6.6A13.2 13.2 0 0 0 2 11s3.5 7 10 7a9.1 9.1 0 0 0 4.2-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /><line x1="2" y1="2" x2="22" y2="22" /></svg>
 )
+// Google's four-colour "G" — used only on the native (Android) button; the web
+// button is drawn by Google Identity Services itself.
+const GoogleG = () => (
+  <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+    <path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z" />
+    <path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7A21.99 21.99 0 0 0 24 46z" />
+    <path fill="#FBBC05" d="M11.69 28.18A13.2 13.2 0 0 1 11 24c0-1.45.25-2.86.69-4.18v-5.7H4.34A21.99 21.99 0 0 0 2 24c0 3.55.85 6.91 2.34 9.88l7.35-5.7z" />
+    <path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.94 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z" />
+  </svg>
+)
 
 export default function Login() {
-  const { login } = useAuth()
+  const { login, loginWithGoogle } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
@@ -20,6 +31,7 @@ export default function Login() {
   const [pwFocused, setPwFocused] = useState(false)
   const [showPw, setShowPw] = useState(false)
   const [shake, setShake] = useState(false)
+  const googleBtnRef = useRef<HTMLDivElement>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -28,6 +40,28 @@ export default function Login() {
     catch (e: any) { setErr(e.message); setShake(true); setTimeout(() => setShake(false), 500) }
     finally { setBusy(false) }
   }
+
+  // Complete a Google sign-in with the ID token from either platform.
+  const finishGoogle = async (credential: string) => {
+    setErr(''); setBusy(true)
+    try { await loginWithGoogle(credential) }
+    catch (e: any) { setErr(e.message); setShake(true); setTimeout(() => setShake(false), 500) }
+    finally { setBusy(false) }
+  }
+
+  // Native (Android) uses the plugin behind our own button; web renders Google's
+  // official button into the container below.
+  const onNativeGoogle = async () => {
+    setErr('')
+    try { const idToken = await nativeGoogleSignIn(); await finishGoogle(idToken) }
+    catch (e: any) { if (e?.message) setErr(e.message) }
+  }
+  useEffect(() => {
+    if (!googleEnabled() || isNativePlatform() || !googleBtnRef.current) return
+    let cleanup = () => {}
+    renderGoogleButton(googleBtnRef.current, finishGoogle, setErr).then((c) => { cleanup = c })
+    return () => cleanup()
+  }, [])
 
   // Mascot state: covering eyes while typing a hidden password, peeking when revealed.
   const covering = pwFocused && !showPw
@@ -95,6 +129,20 @@ export default function Login() {
           <button className="btn btn-primary login-btn" disabled={busy}>
             {busy ? <span className="spinner" /> : 'LOGIN'}
           </button>
+
+          {googleEnabled() && (
+            <>
+              <div className="login-or"><span>or</span></div>
+              {isNativePlatform() ? (
+                <button type="button" className="btn google-btn" disabled={busy} onClick={onNativeGoogle}>
+                  <GoogleG /> Continue with Google
+                </button>
+              ) : (
+                // Google Identity Services renders its official button in here.
+                <div ref={googleBtnRef} className="google-btn-slot" />
+              )}
+            </>
+          )}
 
           <div className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center', lineHeight: 1.8 }}>
             <Link to="/forgot-password" style={{ color: 'var(--primary)', fontWeight: 600 }}>Forgot password?</Link>

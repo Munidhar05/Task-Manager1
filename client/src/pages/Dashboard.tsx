@@ -144,27 +144,41 @@ function Kpi({ value, label, icon, color, blink, onClick }: { value: React.React
   )
 }
 
-type RangeKey = 'today' | 'weekly' | 'monthly' | 'custom'
+type RangeKey = 'today' | 'weekly' | 'monthly' | 'all'
+// The earliest date we query from for the "All tasks" view — effectively "since the beginning".
+const EPOCH_YMD = '2000-01-01'
 const RANGE_TABS: { key: RangeKey; label: string }[] = [
   { key: 'today', label: 'Today' },
   { key: 'weekly', label: 'Week' },
   { key: 'monthly', label: 'Month' },
-  { key: 'custom', label: 'Custom' },
+  { key: 'all', label: 'All tasks' },
 ]
 
 function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState(false)
   const [active, setActive] = useState<RangeKey>('monthly')
-  const [from, setFrom] = useState(todayYmd())
+  // "All tasks" is bounded only by an upper "till" date (defaults to today).
   const [to, setTo] = useState(todayYmd())
+  const [datePopOpen, setDatePopOpen] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const datePopRef = React.useRef<HTMLDivElement>(null)
   const d = useDrawer()
   const navigate = useNavigate()
 
+  // Close the "till date" popup when clicking anywhere outside it.
+  useEffect(() => {
+    if (!datePopOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (datePopRef.current && !datePopRef.current.contains(e.target as Node)) setDatePopOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [datePopOpen])
+
   // Resolve the selected tab into a concrete date window.
   const range: ReportRange =
-    active === 'custom' ? { from, to, label: 'Custom' }
+    active === 'all' ? { from: EPOCH_YMD, to, label: 'All tasks' }
     : active === 'today' ? presetRange('daily')
     : active === 'weekly' ? presetRange('weekly')
     : presetRange('monthly')
@@ -186,19 +200,22 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   const toolbar = (
     <div className="pbi-filter">
       <Greeting name={name} style={{ marginRight: 'auto' }} />
-      <div className="pbi-seg-wrap">
+      <div className="pbi-seg-wrap" ref={datePopRef}>
         <div className="pbi-seg">
           {RANGE_TABS.map((t) => (
-            <button key={t.key} className={'pbi-tab' + (active === t.key ? ' active' : '')} onClick={() => setActive(t.key)}>
+            <button
+              key={t.key}
+              className={'pbi-tab' + (active === t.key ? ' active' : '')}
+              onClick={() => { setActive(t.key); setDatePopOpen(t.key === 'all') }}
+            >
               {t.label}
             </button>
           ))}
         </div>
-        {active === 'custom' && (
+        {active === 'all' && datePopOpen && (
           <div className="pbi-datepop">
-            <div className="dp-title">Select date range</div>
-            <label>From<input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></label>
-            <label>To<input type="date" value={to} min={from} max={todayYmd()} onChange={(e) => setTo(e.target.value)} /></label>
+            <div className="dp-title">Show all tasks till</div>
+            <label>Till date<input type="date" value={to} max={todayYmd()} onChange={(e) => { setTo(e.target.value); setDatePopOpen(false) }} /></label>
           </div>
         )}
       </div>

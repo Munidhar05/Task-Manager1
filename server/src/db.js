@@ -400,6 +400,11 @@ export function initSchema() {
   // Lets the super admin grant an org's own admins access to view their usage.
   ensureColumn('organizations', 'usage_access', 'INTEGER DEFAULT 0')
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
+  // Google account link: the Google user id ("sub") for accounts that have signed
+  // in with Google at least once. NULL for password-only accounts. Sign-in matches
+  // on email first (login-only — we never create accounts from Google), then stamps
+  // this so the link is explicit for future logins.
+  ensureColumn('users', 'google_id', 'TEXT')
   ensureColumn('tasks', 'assigned_at', 'TEXT')
   ensureColumn('tasks', 'submitted_at', 'TEXT')
   ensureColumn('tasks', 'completed_at', 'TEXT')
