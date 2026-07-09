@@ -17,6 +17,9 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const [pendingAssignee, setPendingAssignee] = useState('')
   // A status the user has picked but not yet confirmed — applied only on "Accept".
   const [pendingStatus, setPendingStatus] = useState('')
+  // Inline edit of the task's core details (title, description, due date).
+  const [editing, setEditing] = useState(false)
+  const [editForm, setEditForm] = useState({ title: '', description: '', due_date: '' })
   // Split & share: when open, `parts` holds the rows (each = a piece + a person).
   const [showSplit, setShowSplit] = useState(false)
   const [parts, setParts] = useState<{ title: string; assignee_id: string }[]>([])
@@ -24,7 +27,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     setParts((ps) => ps.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
 
   const load = () => api.get(`/tasks/${taskId}`).then(setTask)
-  useEffect(() => { load(); api.get('/users').then(setUsers) }, [taskId])
+  useEffect(() => { setEditing(false); load(); api.get('/users').then(setUsers) }, [taskId])
   // Keep the member picker in sync whenever the task's current owner changes.
   useEffect(() => { setPendingAssignee(task?.assignee?.id || '') }, [task?.assignee?.id])
   // Reset the pending status whenever the saved status changes (incl. after Accept).
@@ -41,6 +44,24 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const setProgress = (progress: number) => mutate(() => api.patch(`/tasks/${taskId}`, { progress }))
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
+  // Open the inline editor, seeded from the current task.
+  const startEdit = () => {
+    if (!task) return
+    setEditForm({ title: task.title || '', description: task.description || '', due_date: task.due_date || '' })
+    setEditing(true)
+  }
+  // Persist the edited details. Clearing due_date_raw makes the picked date authoritative.
+  const saveEdit = async () => {
+    const title = editForm.title.trim()
+    if (!title) return
+    await mutate(() => api.patch(`/tasks/${taskId}`, {
+      title,
+      description: editForm.description.trim(),
+      due_date: editForm.due_date || null,
+      due_date_raw: null,
+    }))
+    setEditing(false)
+  }
   const openSplit = () => { setParts([{ title: task?.title || '', assignee_id: '' }]); setShowSplit(true) }
   const doSplit = async () => {
     const valid = parts.filter((p) => p.title.trim() && p.assignee_id)
@@ -77,14 +98,36 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             {task.visible_to_manager === 0 && <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>🔒 Private</span>}
           </div>
           <div className="row">
+            {isManager && !editing && <button className="btn btn-sm" disabled={busy} onClick={startEdit} title="Edit task details">✏ Edit</button>}
             {canDelete && <button className="btn btn-sm btn-danger" disabled={busy} onClick={del} title="Delete task">🗑 Delete</button>}
             <button className="btn btn-ghost" onClick={onClose}>✕</button>
           </div>
         </div>
         <div className="card-pad">
-          <h2 style={{ fontSize: 19 }}>{task.title}</h2>
-          <ConfidenceTag c={task.ownership_confidence} />
-          {task.description && task.description !== task.title && <p className="muted" style={{ marginTop: 8 }}>{task.description}</p>}
+          {editing ? (
+            <div className="grid" style={{ gap: 10 }}>
+              <div>
+                <label>Title</label>
+                <input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} autoFocus />
+              </div>
+              <div>
+                <label>Description</label>
+                <textarea rows={3} value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} placeholder="Add more detail…" />
+              </div>
+              <div className="row">
+                <button className="btn btn-primary btn-sm" disabled={busy || !editForm.title.trim()} onClick={saveEdit}>
+                  {busy ? <span className="spinner" /> : '✓ Save changes'}
+                </button>
+                <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h2 style={{ fontSize: 19 }}>{task.title}</h2>
+              <ConfidenceTag c={task.ownership_confidence} />
+              {task.description && task.description !== task.title && <p className="muted" style={{ marginTop: 8 }}>{task.description}</p>}
+            </>
+          )}
 
           {task.source_quote && (
             <div style={{ background: '#f8fafc', borderLeft: '3px solid var(--primary)', padding: '8px 12px', borderRadius: 6, margin: '12px 0', fontSize: 13 }}>
@@ -129,7 +172,9 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
             <div>
               <label>Due date</label>
-              <div>{dueLabel(task)}</div>
+              {editing
+                ? <input type="date" value={editForm.due_date} onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })} />
+                : <div>{dueLabel(task)}</div>}
             </div>
           </div>
 
