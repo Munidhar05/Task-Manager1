@@ -14,12 +14,17 @@ import { retrieve } from './ragRetrieve.js'
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+
+// Don't let a hung provider stall a voice turn (the caller is waiting to speak).
+const TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 25000
+const withTimeout = () => AbortSignal.timeout(TIMEOUT_MS)
 
 const OPEN_STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Reopened']
 const today = () => new Date().toISOString().slice(0, 10)
 const isOverdue = (t) => t.due_date && t.due_date < today() && t.status !== 'Done'
 
-export const hasLLM = () => !!(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)
+export const hasLLM = () => !!(process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)
 
 // Tasks the requesting user is allowed to see (employees: only their own).
 function scopedTasks(user) {
@@ -163,10 +168,39 @@ function parseModelJson(text) {
   } catch { return null }
 }
 
+// OpenRouter speaks the OpenAI chat API, so `messages` passes straight through.
+// Preferred first: with google/gemini-2.5-flash this answers in ~1-2 s where
+// Claude Opus took 6-9 s — a big deal when the reply is spoken aloud.
+async function callOpenRouter(system, messages, onUsage) {
+  const model = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash'
+  const res = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    signal: withTimeout(),
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost',
+      'X-Title': process.env.OPENROUTER_APP_NAME || 'SmartTask AI',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'system', content: system }, ...messages],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_tokens: 1024,
+    }),
+  })
+  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  const data = await res.json()
+  if (onUsage) onUsage({ provider: 'openrouter', model, inputTokens: data.usage?.prompt_tokens || 0, outputTokens: data.usage?.completion_tokens || 0 })
+  return data.choices?.[0]?.message?.content || ''
+}
+
 async function callClaude(system, messages, onUsage) {
   const model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8'
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
+    signal: withTimeout(),
     headers: {
       'content-type': 'application/json',
       'x-api-key': process.env.ANTHROPIC_API_KEY,
@@ -189,6 +223,7 @@ async function callOpenAI(system, messages, onUsage) {
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
+    signal: withTimeout(),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: JSON.stringify({
       model,
@@ -213,9 +248,10 @@ const toCard = (t) => ({
 // Main entry: returns { answer, tasks, engine }. Throws if no LLM is configured
 // or the provider call/parse fails — the route catches and falls back to rules.
 export async function chatAnswer(query, user, history = [], onUsage) {
+  const hasOpenRouter = !!process.env.OPENROUTER_API_KEY
   const hasClaude = !!process.env.ANTHROPIC_API_KEY
   const hasOpenAI = !!process.env.OPENAI_API_KEY
-  if (!hasClaude && !hasOpenAI) throw new Error('No LLM configured')
+  if (!hasOpenRouter && !hasClaude && !hasOpenAI) throw new Error('No LLM configured')
 
   const { context, tasks } = buildContext(user)
 
@@ -235,19 +271,20 @@ export async function chatAnswer(query, user, history = [], onUsage) {
     { role: 'user', content: `DATA SNAPSHOT:\n${context}${ragText}\n\nQUESTION: ${query}` },
   ]
 
-  // Provider chain mirrors the meeting extractor: Claude first, then OpenAI.
-  // If Claude fails (e.g. no credit) and OpenAI is configured, fall through.
-  let raw, engine
-  if (hasClaude) {
-    try { raw = await callClaude(system, messages, onUsage); engine = 'claude' }
-    catch (err) {
-      if (!hasOpenAI) throw err
-      console.warn('[assistant] Claude failed, trying OpenAI:', err.message)
-    }
+  // Provider chain: OpenRouter (fast + cheap) → Claude → OpenAI, falling through
+  // on error so one out-of-credit provider can't break the assistant.
+  const chain = [
+    hasOpenRouter && { name: 'openrouter', call: callOpenRouter },
+    hasClaude && { name: 'claude', call: callClaude },
+    hasOpenAI && { name: 'openai', call: callOpenAI },
+  ].filter(Boolean)
+
+  let raw, engine, lastErr
+  for (const p of chain) {
+    try { raw = await p.call(system, messages, onUsage); engine = p.name; if (raw) break }
+    catch (err) { lastErr = err; console.warn(`[assistant] ${p.name} failed, trying next:`, err.message) }
   }
-  if (raw === undefined && hasOpenAI) {
-    raw = await callOpenAI(system, messages, onUsage); engine = 'openai'
-  }
+  if (raw === undefined) throw lastErr || new Error('All providers failed')
 
   const parsed = parseModelJson(raw)
   if (!parsed || !parsed.answer) throw new Error('Empty model response')

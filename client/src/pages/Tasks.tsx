@@ -313,6 +313,24 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // this dep the list would keep showing the previous route's tasks until a refresh.
   useEffect(() => { load() }, [filters, personal])
   useEffect(() => { api.get('/users').then(setUsers) }, [])
+
+  // Deep-links (dashboard KPI cards, voice navigation) can arrive while this page
+  // is ALREADY mounted. The useState initializers above only run once, so the URL
+  // would change while the filters stayed stale — sync them explicitly here.
+  const spPriority = searchParams.get('priority') || ''
+  const spStatus = searchParams.get('status') || ''
+  const spAssignee = searchParams.get('assignee') || ''
+  const spView = searchParams.get('view') || ''
+  useEffect(() => {
+    setFilters((f) => (f.priority === spPriority && f.status === spStatus && f.assignee === spAssignee
+      ? f // nothing to do — don't retrigger the load effect
+      : { ...f, priority: spPriority, status: spStatus, assignee: spAssignee }))
+    // Mirror the mount-time rule: an explicit view wins, a Done deep-link means
+    // "completed", otherwise fall back to the active view.
+    setQuickView((QUICK_VIEWS as readonly string[]).includes(spView)
+      ? (spView as typeof quickView)
+      : (spStatus === 'Done' ? 'completed' : 'active'))
+  }, [spPriority, spStatus, spAssignee, spView])
   // Refresh when the voice assistant (or another surface) changes tasks while
   // this list is already mounted.
   useEffect(() => {

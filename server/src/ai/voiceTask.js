@@ -10,6 +10,10 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
+// A hung provider must not stall a voice turn — the user is waiting to be spoken to.
+const TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 25000
+const withTimeout = () => AbortSignal.timeout(TIMEOUT_MS)
+
 export const hasLLM = () => !!(process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)
 
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
@@ -46,6 +50,7 @@ export async function callOpenRouter(system, userMsg, onUsage) {
   const model = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash'
   const res = await fetch(OPENROUTER_URL, {
     method: 'POST',
+    signal: withTimeout(),
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
@@ -69,6 +74,7 @@ export async function callClaude(system, userMsg, onUsage) {
   const model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8'
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
+    signal: withTimeout(),
     headers: {
       'content-type': 'application/json',
       'x-api-key': process.env.ANTHROPIC_API_KEY,
@@ -91,6 +97,7 @@ export async function callOpenAI(system, userMsg, onUsage) {
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
+    signal: withTimeout(),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: JSON.stringify({
       model,

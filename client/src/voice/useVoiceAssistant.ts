@@ -18,7 +18,19 @@ import { startRecording, canRecord, Recording } from './recorder'
 import { speak, stopSpeaking, isTtsEnabled, setTtsEnabled } from './tts'
 
 export type VoiceState = 'idle' | 'listening' | 'processing' | 'confirming' | 'speaking' | 'error'
-export interface VoiceMsg { role: 'user' | 'ai'; text: string }
+
+// A read tool (overview / workload / grouping) returns figures the UI renders as a
+// card. `type` picks the renderer; the shape follows from the tool that produced it.
+export interface VoiceCardData {
+  type: 'overview' | 'workload' | 'group'
+  label?: string
+  title?: string
+  stats?: Record<string, number>
+  rows?: { id?: string; name?: string; label?: string; c: number }[]
+  total?: number
+}
+// A message is either spoken text or a data card rendered inline in the panel.
+export interface VoiceMsg { role: 'user' | 'ai'; text: string; card?: VoiceCardData }
 
 interface PendingAction { kind: string; task_id?: string; summary?: string; body: any }
 
@@ -67,15 +79,21 @@ export function useVoiceAssistant() {
     api.post('/assistant/command', { transcript, history: msgsRef.current.slice(-8) })
 
   // ---- execute a confirmed mutation via the existing task endpoints --------
+  // Every kind maps to an endpoint the app already exposes, so permissions and
+  // notifications behave exactly as they do from the UI.
   const execute = async (action: PendingAction) => {
     setState('processing')
     try {
-      if (action.kind === 'create_task') await api.post('/tasks', action.body)
-      else if (action.kind === 'update_status') await api.post(`/tasks/${action.task_id}/status`, action.body)
-      else await api.patch(`/tasks/${action.task_id}`, action.body) // assign / priority / due
-      const done = 'Done.'
+      switch (action.kind) {
+        case 'create_task': await api.post('/tasks', action.body); break
+        case 'set_status': await api.post(`/tasks/${action.task_id}/status`, action.body); break
+        case 'add_comment': await api.post(`/tasks/${action.task_id}/comments`, action.body); break
+        case 'delete_task': await api.del(`/tasks/${action.task_id}`); break
+        // update_task / assign_task / set_priority / set_due_date all PATCH fields
+        default: await api.patch(`/tasks/${action.task_id}`, action.body)
+      }
       push({ role: 'ai', text: `✓ ${action.summary || 'Done'}` })
-      await say(done)
+      await say('Done.')
       // Refresh whatever list is showing and surface the result.
       window.dispatchEvent(new CustomEvent('tasks-changed'))
       navigate('/tasks')
@@ -93,7 +111,8 @@ export function useVoiceAssistant() {
 
   const handleResponse = async (resp: any) => {
     const sayText = String(resp?.say || '').trim()
-    if (sayText) push({ role: 'ai', text: sayText })
+    // Attach any figures to the reply so the panel can show them, not just speak them.
+    if (sayText) push({ role: 'ai', text: sayText, card: resp?.data || undefined })
     switch (resp?.mode) {
       case 'confirm':
         if (resp.action) { setPend(resp.action); setState('confirming') }
@@ -104,6 +123,10 @@ export function useVoiceAssistant() {
         if (resp.navigate?.url) navigate(resp.navigate.url)
         break
       case 'answer':
+        // Read tools may report a number AND open the matching list.
+        await say(sayText || "I don't have anything on that.")
+        if (resp.navigate?.url) navigate(resp.navigate.url)
+        break
       case 'clarify':
       default:
         await say(sayText || "Sorry, I didn't understand.")

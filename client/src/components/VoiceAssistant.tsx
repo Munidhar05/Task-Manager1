@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useVoiceAssistant } from '../voice/useVoiceAssistant'
-import { useWakeWord, wakeWordConfigured } from '../voice/wakeword'
+import { useWakeWord, wakeWordConfigured, WakeStatus } from '../voice/wakeword'
+import VoiceCard from './VoiceCard'
 
 const MicIcon = ({ size = 24 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -30,10 +31,15 @@ const STATUS_LABEL: Record<string, string> = {
 export default function VoiceAssistant() {
   const v = useVoiceAssistant()
   const logRef = useRef<HTMLDivElement>(null)
+  const [wake, setWake] = useState<{ status: WakeStatus; detail?: string }>({ status: 'off' })
 
   // Wake word ("hey btm") — starts a session when heard. No-op until configured;
   // paused while a session is already open so it doesn't retrigger mid-conversation.
-  useWakeWord({ enabled: !v.open, onWake: v.start })
+  useWakeWord({
+    enabled: !v.open,
+    onWake: v.start,
+    onStatus: (status, detail) => setWake({ status, detail }),
+  })
 
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [v.messages, v.state])
 
@@ -60,12 +66,21 @@ export default function VoiceAssistant() {
           <div className="va-log" ref={logRef}>
             {v.messages.length === 0 && (
               <div className="va-hint">
-                {wakeWordConfigured() ? 'Say “hey BTM”, or tap the mic.' : 'Tap the mic and speak.'}<br />
+                {!wakeWordConfigured() ? 'Tap the mic and speak.'
+                  : wake.status === 'listening' ? 'Say “hey BTM”, or tap the mic.'
+                  : wake.status === 'loading' ? 'Starting wake word…'
+                  : wake.status === 'awaiting-gesture' ? 'Click anywhere to arm the wake word.'
+                  : wake.status === 'error' ? `Wake word unavailable (${wake.detail || 'error'}) — tap the mic.`
+                  : 'Tap the mic and speak.'}<br />
                 Try: “Create a high priority task for Reddy to finish the logo by Friday.”
               </div>
             )}
             {v.messages.map((m, i) => (
-              <div key={i} className={'va-msg va-msg--' + m.role}>{m.text}</div>
+              <React.Fragment key={i}>
+                <div className={'va-msg va-msg--' + m.role}>{m.text}</div>
+                {/* Read tools return figures — show them, don't just say them. */}
+                {m.card && <VoiceCard data={m.card} />}
+              </React.Fragment>
             ))}
           </div>
 
@@ -96,7 +111,13 @@ export default function VoiceAssistant() {
       <button
         className={'va-fab va-fab--' + v.state + (v.open ? ' va-fab--open' : '')}
         onClick={() => (v.open ? v.close() : v.start())}
-        title="Voice assistant"
+        title={
+          v.open ? 'Close voice assistant'
+            : wake.status === 'listening' ? 'Voice assistant — listening for “hey BTM”'
+            : wake.status === 'awaiting-gesture' ? 'Voice assistant — click to arm the wake word'
+            : wake.status === 'error' ? `Voice assistant (wake word off: ${wake.detail || 'error'})`
+            : 'Voice assistant'
+        }
         aria-label="Voice assistant"
         style={v.state === 'listening' ? { transform: `scale(${ringScale.toFixed(2)})` } : undefined}
       >
