@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
@@ -46,9 +46,20 @@ Priya: Anjali, payment gateway ka testing aaj complete karo, it's urgent.`
 export default function Meetings() {
   const { user } = useAuth()
   const nav = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [meetings, setMeetings] = useState<any[]>([])
   const [showUpload, setShowUpload] = useState(false)
   const [showLive, setShowLive] = useState(false)
+
+  // The voice assistant starts a meeting by navigating to /meetings?live=1.
+  // Consume the flag so a refresh doesn't reopen the recorder.
+  useEffect(() => {
+    if (searchParams.get('live') !== '1') return
+    setShowLive(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('live')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
   const [editing, setEditing] = useState<any | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(false)

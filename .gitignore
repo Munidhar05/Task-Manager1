@@ -1,6 +1,10 @@
 node_modules/
 server/data/
 server/.env
+# Local client config (API base, Google client id, wake-word flags).
+# Templates live in client/.env.example; client/.env.production IS committed.
+client/.env
+client/.env.local
 dist/
 *.log
 .DS_Store

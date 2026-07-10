@@ -403,6 +403,33 @@ tbody tr:hover { background: #f8fafc; }
 .va-msg--user { align-self: flex-end; background: var(--primary, #c5560f); color: #fff; border-bottom-right-radius: 4px; }
 .va-msg--ai { align-self: flex-start; background: #f4f1ea; color: #2b2440; border-bottom-left-radius: 4px; }
 
+/* Data card rendered inline in the voice panel (overview / workload / grouping) */
+.vc { align-self: stretch; background: #fff; border: 1px solid #ece7dd; border-radius: 12px; padding: 10px; margin-top: 2px; }
+.vc-head { font-size: 12px; font-weight: 800; color: #2b2440; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.vc-total { margin-left: auto; background: #f4f1ea; color: #64748b; border-radius: 20px; padding: 1px 8px; font-size: 11px; font-weight: 700; letter-spacing: 0; }
+.vc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.vc-tile { background: #faf8f4; border: 1px solid #f1ece2; border-radius: 10px; padding: 8px 6px; text-align: center; }
+.vc-tile.clickable { cursor: pointer; transition: background .15s, transform .1s; }
+.vc-tile.clickable:hover { background: #f4f1ea; transform: translateY(-1px); }
+.vc-tile-value { font-size: 19px; font-weight: 800; line-height: 1.1; color: #2b2440; }
+.vc-tile-label { font-size: 10.5px; color: #94a3b8; font-weight: 600; margin-top: 2px; }
+
+.vc-bars { display: grid; gap: 6px; }
+.vc-bar-row { display: grid; grid-template-columns: 84px 1fr 24px; align-items: center; gap: 8px; }
+.vc-bar-label { font-size: 12px; color: #2b2440; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-bar-track { height: 6px; background: #f1ece2; border-radius: 4px; overflow: hidden; }
+.vc-bar-fill { display: block; height: 100%; background: var(--primary, #c5560f); border-radius: 4px; }
+.vc-bar-val { font-size: 12px; text-align: right; color: #2b2440; }
+
+@media (prefers-color-scheme: dark) {
+  .vc { background: #232936; border-color: #2f3542; }
+  .vc-head, .vc-tile-value, .vc-bar-label, .vc-bar-val { color: #e5e7eb; }
+  .vc-tile { background: #2a3040; border-color: #333a4c; }
+  .vc-tile.clickable:hover { background: #333a4c; }
+  .vc-bar-track { background: #333a4c; }
+  .vc-total { background: #2a3040; }
+}
+
 .va-confirm { margin: 0 12px 8px; padding: 10px 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; display: flex; flex-direction: column; gap: 8px; }
 .va-confirm-summary { font-size: 13px; font-weight: 600; color: #7c2d12; }
 
