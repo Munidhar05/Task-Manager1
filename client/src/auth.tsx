@@ -29,8 +29,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setLoading(false))
   }, [])
 
+  // Clear per-login UI flags so a fresh sign-in re-shows them (e.g. the voice
+  // coachmark greets the user on every login, not just the first ever).
+  const resetPerLoginUi = () => { try { localStorage.removeItem('befach_voice_coach') } catch { /* storage off */ } }
+
   const login = async (email: string, password: string) => {
     const d = await api.post('/auth/login', { email, password })
+    resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
     registerPush() // ask for notification permission + register this device (native only)
@@ -39,6 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // session. The backend is login-only, so this fails for unknown emails.
   const loginWithGoogle = async (credential: string) => {
     const d = await api.post('/auth/google', { credential })
+    resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
     registerPush()
@@ -46,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Create a new company + its first account, then log straight in.
   const signup = async (input: SignupInput) => {
     const d = await api.post('/auth/signup', input)
+    resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
     registerPush()
@@ -53,6 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Accept an emailed invite: creates the account in the inviting org, then logs in.
   const acceptInvite = async (input: AcceptInviteInput) => {
     const d = await api.post('/invites/accept', input)
+    resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
     registerPush()

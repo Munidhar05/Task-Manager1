@@ -19,7 +19,11 @@ const ENABLED = (import.meta.env.VITE_WAKEWORD_ENABLED as string | undefined) ==
 const MEL_PATH = (import.meta.env.VITE_WAKEWORD_MELSPEC_PATH as string | undefined) || '/wakeword/melspectrogram.onnx'
 const EMB_PATH = (import.meta.env.VITE_WAKEWORD_EMBEDDING_PATH as string | undefined) || '/wakeword/embedding_model.onnx'
 const WW_PATH = (import.meta.env.VITE_WAKEWORD_MODEL_PATH as string | undefined) || '/wakeword/hey_btm.onnx'
-const THRESHOLD = Number(import.meta.env.VITE_WAKEWORD_THRESHOLD) || 0.5
+// Detection threshold. A localStorage override wins so you can TUNE LIVE — set
+//   localStorage.setItem('wakeword_threshold','0.2')  then reload (no dev-server
+// restart needed). Falls back to the env default, then 0.5.
+const lsThreshold = (() => { try { return localStorage.getItem('wakeword_threshold') } catch { return null } })()
+const THRESHOLD = Number(lsThreshold || import.meta.env.VITE_WAKEWORD_THRESHOLD) || 0.5
 // Where onnxruntime-web loads its WASM from. Defaults to a CDN pinned to the
 // installed version; set VITE_ORT_WASM_PATH to a self-hosted path for offline.
 const ORT_WASM = (import.meta.env.VITE_ORT_WASM_PATH as string | undefined) || 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/'
@@ -185,7 +189,32 @@ function ensureRunning(ctx: AudioContext, say: (s: WakeStatus, d?: string) => vo
   return cleanup
 }
 
-// Open the mic at 16 kHz and pump CHUNK-sized frames to `onFrame`. Returns a stop fn.
+// Linear resampler → 16 kHz. Passthrough when the source is already 16 kHz, so
+// this can never affect the (rare) browser that honoured the sample-rate hint.
+// A carried-over fractional read position keeps successive blocks continuous.
+function makeResampler(inRate: number) {
+  if (inRate === SR) return (b: Float32Array) => b
+  const ratio = inRate / SR
+  let pos = 0 // fractional read index into a virtual continuous input stream
+  let prevTail = new Float32Array(0)
+  return (block: Float32Array) => {
+    const buf = new Float32Array(prevTail.length + block.length)
+    buf.set(prevTail); buf.set(block, prevTail.length)
+    const out: number[] = []
+    while (pos + 1 < buf.length) {
+      const i0 = Math.floor(pos), frac = pos - i0
+      out.push(buf[i0] * (1 - frac) + buf[i0 + 1] * frac)
+      pos += ratio
+    }
+    // Keep the last sample so the next block interpolates across the seam.
+    const consumed = Math.floor(pos)
+    prevTail = buf.slice(Math.max(0, consumed))
+    pos -= consumed
+    return Float32Array.from(out)
+  }
+}
+
+// Open the mic and pump 16 kHz CHUNK-sized frames to `onFrame`. Returns a stop fn.
 async function startMicPump(onFrame: (f: Float32Array) => void, say: (s: WakeStatus, d?: string) => void): Promise<() => void> {
   const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext
   const ctx: AudioContext = new AudioCtx({ sampleRate: SR })
@@ -193,9 +222,14 @@ async function startMicPump(onFrame: (f: Float32Array) => void, say: (s: WakeSta
   const src = ctx.createMediaStreamSource(stream)
   const node = ctx.createScriptProcessor(4096, 1, 1)
   let acc = new Float32Array(0)
+  // Chrome/Firefox honour `sampleRate: 16000`; Safari & some Android WebViews do
+  // NOT and run at 48 kHz — feeding 48 kHz audio to the 16 kHz models is exactly
+  // why detection can silently never fire. Resample whatever we actually got.
+  const resample = makeResampler(ctx.sampleRate)
+  if (ctx.sampleRate !== SR) console.warn(`[wakeword] context is ${ctx.sampleRate}Hz (not ${SR}Hz) — resampling to ${SR}Hz`)
 
   node.onaudioprocess = (e) => {
-    const inp = e.inputBuffer.getChannelData(0)
+    const inp = resample(e.inputBuffer.getChannelData(0))
     const merged = new Float32Array(acc.length + inp.length)
     merged.set(acc); merged.set(inp, acc.length)
     let off = 0

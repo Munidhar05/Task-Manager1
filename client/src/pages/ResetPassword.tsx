@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import PasswordStrength from '../components/PasswordStrength'
 import { passwordStrength, isCommonPassword } from '../lib/passwordStrength'
+import { Ic } from '../ui'
 
 const EyeIcon = () => (<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
 const EyeOffIcon = () => (<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.45M6.6 6.6A13.2 13.2 0 0 0 2 11s3.5 7 10 7a9.1 9.1 0 0 0 4.2-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /><line x1="2" y1="2" x2="22" y2="22" /></svg>)
@@ -43,8 +44,8 @@ export default function ResetPassword() {
 
           {done ? (
             <>
-              <div className="muted" style={{ fontSize: 13.5, lineHeight: 1.5, background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8, padding: '12px 14px' }}>
-                ✅ Your password has been updated. You can now log in with it.
+              <div className="muted row" style={{ gap: 8, fontSize: 13.5, lineHeight: 1.5, background: 'var(--success-bg)', border: '1px solid var(--success-border)', color: 'var(--success-ink)', borderRadius: 8, padding: '12px 14px' }}>
+                <Ic name="check" size={16} /> Your password has been updated. You can now log in with it.
               </div>
               <Link to="/login" className="btn btn-primary login-btn" style={{ marginTop: 16, textAlign: 'center', textDecoration: 'none' }}>GO TO LOGIN</Link>
             </>

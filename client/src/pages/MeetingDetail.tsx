@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api, Suggestion } from '../api'
-import { PriorityBadge, StatusBadge, ConfidenceScore, Avatar, dueLabel, LANG_LABEL, defaultDueDate } from '../ui'
+import { PriorityBadge, StatusBadge, ConfidenceScore, Evidence, confidenceBand, Avatar, Ic, dueLabel, LANG_LABEL, defaultDueDate } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
+import { confirmDialog } from '../lib/confirm'
+import { useDialog } from '../lib/useDialog'
 
 // A textarea that grows to fit its content — so a long task wraps and is fully
 // readable instead of scrolling word-by-word inside a one-line input.
@@ -13,12 +15,12 @@ function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) 
   return <textarea ref={ref} rows={1} {...props} onInput={fit} style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }} />
 }
 
-const SUMMARY_SECTIONS: { key: string; label: string; icon: string }[] = [
-  { key: 'key_decisions', label: 'Key Decisions', icon: '✓' },
-  { key: 'action_items', label: 'Action Items', icon: '→' },
-  { key: 'risks', label: 'Risks', icon: '⚠' },
-  { key: 'blockers', label: 'Blockers', icon: '⛔' },
-  { key: 'follow_ups', label: 'Follow-ups', icon: '↻' },
+const SUMMARY_SECTIONS: { key: string; label: string; icon: React.ReactNode }[] = [
+  { key: 'key_decisions', label: 'Key Decisions', icon: <Ic name="check" /> },
+  { key: 'action_items', label: 'Action Items', icon: <Ic name="arrowRight" /> },
+  { key: 'risks', label: 'Risks', icon: <Ic name="warning" /> },
+  { key: 'blockers', label: 'Blockers', icon: <Ic name="block" /> },
+  { key: 'follow_ups', label: 'Follow-ups', icon: <Ic name="refresh" /> },
 ]
 
 export default function MeetingDetail() {
@@ -29,7 +31,8 @@ export default function MeetingDetail() {
   const [review, setReview] = useState(false)
   const [restoringId, setRestoringId] = useState<string | null>(null)
   const [restoreErr, setRestoreErr] = useState('')
-  const load = () => api.get('/meetings/' + id).then(setM)
+  const [loadErr, setLoadErr] = useState(false)
+  const load = () => { setLoadErr(false); return api.get('/meetings/' + id).then(setM).catch(() => setLoadErr(true)) }
   useEffect(() => { load() }, [id])
 
   // Bring a rejected suggestion back into the pending queue, then open the review
@@ -41,19 +44,38 @@ export default function MeetingDetail() {
     finally { setRestoringId(null) }
   }
 
-  if (!m) return <span className="spinner" />
+  if (loadErr) return (
+    <div className="card section" style={{ marginTop: 16 }}>
+      <div className="empty-state">
+        <div className="empty-state-icon"><Ic name="warning" size={40} /></div>
+        <div className="empty-state-title">Couldn't load this meeting</div>
+        <div className="empty-state-hint">Check your connection and try again.</div>
+        <div className="empty-state-action"><button className="btn btn-primary btn-sm" onClick={load}>Retry</button></div>
+      </div>
+    </div>
+  )
+  if (!m) return (
+    <div style={{ marginTop: 16 }}>
+      <span className="skeleton" style={{ height: 30, width: 260, display: 'block', marginBottom: 16 }} />
+      <div className="grid grid-2">
+        <div className="card section"><div className="card-pad">{Array.from({ length: 4 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div></div>
+        <div className="card section"><div className="card-pad">{Array.from({ length: 4 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div></div>
+      </div>
+    </div>
+  )
   const s = m.summary || {}
   const pending: Suggestion[] = (m.suggestions || []).filter((x: Suggestion) => x.status === 'pending')
   const rejected: Suggestion[] = (m.suggestions || []).filter((x: Suggestion) => x.status === 'rejected')
 
   return (
     <>
-      <Link to="/meetings" className="muted" style={{ fontSize: 13 }}>← All meetings</Link>
+      <Link to="/meetings" className="muted row" style={{ fontSize: 13, gap: 5, display: 'inline-flex' }}><Ic name="arrowLeft" size={14} /> All meetings</Link>
       <div className="spread" style={{ margin: '8px 0 8px' }}>
         <div>
           <h1 style={{ fontSize: 22 }}>{m.title}</h1>
-          <div className="muted row" style={{ fontSize: 13 }}>
-            {(m.meeting_date || '').slice(0, 10)} · engine: {m.engine}
+          <div className="muted row" style={{ fontSize: 13, flexWrap: 'wrap' }}>
+            {(m.meeting_date || '').slice(0, 10)}
+            {(m.detected_languages || []).length > 0 && <span>· Transcribed from</span>}
             <span className="tag-list">{(m.detected_languages || []).map((l: string) => <span key={l} className="lang-tag">{LANG_LABEL[l] || l}</span>)}</span>
           </div>
         </div>
@@ -79,7 +101,7 @@ export default function MeetingDetail() {
         <div className="grid grid-2">
           <div>
             <div className="card section">
-              <div className="card-head"><h3>✦ Executive Summary</h3></div>
+              <div className="card-head"><h3 className="row" style={{ gap: 8 }}><span style={{ color: 'var(--primary)' }}><Ic name="doc" /></span> Executive Summary</h3></div>
               <div className="card-pad">{s.executive_summary || 'No summary generated.'}</div>
             </div>
 
@@ -87,29 +109,32 @@ export default function MeetingDetail() {
             {pending.length > 0 && (
               <div className="card section">
                 <div className="card-head spread">
-                  <h3>🤖 AI Suggested Tasks — Pending Review ({pending.length})</h3>
+                  <h3 className="row" style={{ gap: 8 }}><span style={{ color: 'var(--primary)' }}><Ic name="ai" /></span> AI Suggested Tasks — Pending Review ({pending.length})</h3>
                   <button className="btn btn-primary btn-sm" onClick={() => setReview(true)}>Review &amp; Assign Tasks</button>
                 </div>
                 <div className="card-pad grid" style={{ gap: 10 }}>
-                  {pending.map((sg) => (
-                    <div key={sg.id} style={{ border: '1px solid ' + (sg.confidence < 50 ? '#f59e0b66' : '#e7ddd1'), borderRadius: 10, padding: 12, background: sg.confidence < 50 ? '#fffbeb' : '#fff' }}>
-                      <div className="spread" style={{ alignItems: 'flex-start', gap: 8 }}>
-                        <div style={{ fontWeight: 600, minWidth: 0, overflowWrap: 'anywhere' }}>{sg.title}</div>
-                        <PriorityBadge p={sg.priority} />
+                  {pending.map((sg) => {
+                    const band = confidenceBand(sg.confidence)
+                    // The card's tint keys off the SAME confidence band as the score —
+                    // no more separate <50 threshold that contradicted the chip.
+                    const flagged = band.key !== 'verified'
+                    const owner = sg.suggested_assignee_name
+                      ? <span className="row" style={{ gap: 6 }}><Avatar name={sg.suggested_assignee_name} color={sg.suggested_assignee_color || undefined} size={18} /> Owner: {sg.suggested_assignee_name}</span>
+                      : <span style={{ color: 'var(--warning-ink)' }}>{sg.suggested_assignee_raw ? `Heard “${sg.suggested_assignee_raw}” — not an attendee` : 'No owner suggested'}</span>
+                    return (
+                      <div key={sg.id} style={{ border: `1px solid ${flagged ? band.border : 'var(--border)'}`, borderRadius: 'var(--r-lg)', padding: 14, background: flagged ? band.bg : 'var(--surface)', display: 'grid', gap: 10 }}>
+                        <div className="spread" style={{ alignItems: 'flex-start', gap: 8 }}>
+                          <div style={{ fontWeight: 600, minWidth: 0, overflowWrap: 'anywhere' }}>{sg.title}</div>
+                          <PriorityBadge p={sg.priority} />
+                        </div>
+                        <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+                          <ConfidenceScore score={sg.confidence} />
+                          <span className="muted" style={{ fontSize: 12.5 }}>{dueLabel(sg)}</span>
+                        </div>
+                        <Evidence quote={sg.source_quote} reasoning={sg.assignee_reasoning} score={sg.confidence} ownerLabel={owner} />
                       </div>
-                      <div className="row" style={{ gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
-                        <span className="row" style={{ gap: 5, fontSize: 12.5 }}>
-                          {sg.suggested_assignee_name
-                            ? <><Avatar name={sg.suggested_assignee_name} color={sg.suggested_assignee_color || undefined} size={18} /> {sg.suggested_assignee_name}</>
-                            : <span style={{ color: '#b45309' }}>⚠ {sg.suggested_assignee_raw ? `“${sg.suggested_assignee_raw}” (not an attendee)` : 'No owner suggested'}</span>}
-                        </span>
-                        <ConfidenceScore score={sg.confidence} />
-                        <span className="muted" style={{ fontSize: 12 }}>{dueLabel(sg)}</span>
-                      </div>
-                      {sg.assignee_reasoning && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>💡 {sg.assignee_reasoning}</div>}
-                      {sg.source_quote && <div className="muted" style={{ fontSize: 11.5, marginTop: 4, fontStyle: 'italic' }}>“{sg.source_quote}”</div>}
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -117,7 +142,7 @@ export default function MeetingDetail() {
             {/* Rejected suggestions — retrievable for editing / reassigning */}
             {rejected.length > 0 && (
               <div className="card section">
-                <div className="card-head"><h3>✕ Rejected Suggestions ({rejected.length})</h3></div>
+                <div className="card-head"><h3>Rejected Suggestions ({rejected.length})</h3></div>
                 <div className="card-pad grid" style={{ gap: 8 }}>
                   {restoreErr && <div style={{ color: '#ef4444', fontSize: 12.5 }}>{restoreErr}</div>}
                   {rejected.map((sg) => (
@@ -129,7 +154,7 @@ export default function MeetingDetail() {
                         </div>
                       </div>
                       <button className="btn btn-sm" disabled={restoringId === sg.id} onClick={() => restore(sg.id)}>
-                        {restoringId === sg.id ? <span className="spinner" /> : '↩ Restore & edit'}
+                        {restoringId === sg.id ? <span className="spinner" /> : <span className="row" style={{ gap: 6 }}><Ic name="reply" size={14} /> Restore & edit</span>}
                       </button>
                     </div>
                   ))}
@@ -143,7 +168,9 @@ export default function MeetingDetail() {
               <table>
                 <tbody>
                   {m.tasks.map((t: any) => (
-                    <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
+                    <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}
+                      role="button" tabIndex={0} aria-label={`Open ${t.title}`}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenId(t.id) } }}>
                       <td>
                         <div style={{ fontWeight: 600 }}>{t.title}</div>
                         <div className="muted" style={{ fontSize: 11.5 }}>{t.assignee_name || t.assignee_name_raw || 'Unassigned'} · {dueLabel(t)}</div>
@@ -162,7 +189,7 @@ export default function MeetingDetail() {
               if (!items.length) return null
               return (
                 <div key={sec.key} className="card section">
-                  <div className="card-head"><h3>{sec.icon} {sec.label} ({items.length})</h3></div>
+                  <div className="card-head"><h3 className="row" style={{ gap: 8 }}>{sec.icon} {sec.label} ({items.length})</h3></div>
                   <div className="card-pad">
                     <ul style={{ margin: 0, paddingLeft: 18 }}>{items.map((it, i) => <li key={i} style={{ marginBottom: 6, fontSize: 13.5 }}>{it}</li>)}</ul>
                   </div>
@@ -254,6 +281,20 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
   const assignAllRemaining = async () => {
     const targets = rows.filter((r) => r._status === 'pending' && r.suggested_assignee_id)
     if (!targets.length) return
+    // Name the consequence BEFORE the click: how many tasks, and exactly which
+    // people get notified (with per-person counts). Bulk assignment can't be undone.
+    const byPerson = new Map<string, number>()
+    for (const t of targets) {
+      const name = participants.find((p) => p.id === t.suggested_assignee_id)?.name || 'Unassigned'
+      byPerson.set(name, (byPerson.get(name) || 0) + 1)
+    }
+    const people = [...byPerson.entries()].map(([n, c]) => `${n} (${c})`).join(', ')
+    const ok = await confirmDialog({
+      title: `Assign ${targets.length} task${targets.length > 1 ? 's' : ''} and notify ${byPerson.size} ${byPerson.size > 1 ? 'people' : 'person'}?`,
+      message: `${people}\n\nEach person is notified immediately. This can't be undone in bulk.`,
+      confirmText: 'Assign & notify',
+    })
+    if (!ok) return
     setBulkErr(''); setBulkBusy(true)
     const ids = new Set(targets.map((t) => t.id))
     setRows((rs) => rs.map((r) => (ids.has(r.id) ? { ...r, _status: 'busy', _error: '' } : r)))
@@ -278,16 +319,17 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
   const remaining = rows.length - done
   const pendingWithOwner = rows.filter((r) => r._status === 'pending' && r.suggested_assignee_id).length
   const noOwnerCount = rows.filter((r) => r._status === 'pending' && !r.suggested_assignee_id).length
+  const dialogRef = useDialog<HTMLDivElement>(onClose)
 
   return (
     <div className="modal-center" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 920, width: '94%' }}>
-        <div className="card-head spread"><h3>Review &amp; Assign Tasks</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
+      <div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Review and assign tasks" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 920, width: '94%' }}>
+        <div className="card-head spread"><h3>Review &amp; Assign Tasks</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="card-pad grid" style={{ gap: 12, maxHeight: '70vh', overflow: 'auto' }}>
           {rows.map((r, i) => {
             // Once a row is acted on, collapse it into a compact confirmation strip.
             if (r._status === 'assigned' || r._status === 'rejected' || r._status === 'merged') {
-              const label = r._status === 'assigned' ? '✓ Assigned & notified' : r._status === 'rejected' ? '✕ Rejected' : '⇉ Merged'
+              const label = r._status === 'assigned' ? 'Assigned & notified' : r._status === 'rejected' ? 'Rejected' : 'Merged'
               const color = r._status === 'assigned' ? '#10b981' : r._status === 'rejected' ? '#ef4444' : '#7a6f63'
               return (
                 <div key={r.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
@@ -295,7 +337,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
                   <span className="row" style={{ gap: 10 }}>
                     <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
                     {(r._status === 'rejected' || r._status === 'merged') && (
-                      <button className="btn btn-ghost btn-sm" onClick={() => restoreRow(i)}>↩ Restore</button>
+                      <button className="btn btn-ghost btn-sm row" style={{ gap: 6 }} onClick={() => restoreRow(i)}><Ic name="reply" size={14} /> Restore</button>
                     )}
                   </span>
                 </div>
@@ -320,14 +362,15 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
                     <div><label>Priority</label><select value={r.priority} onChange={(e) => set(i, { priority: e.target.value, due_date: defaultDueDate(e.target.value) })}>{PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select></div>
                     <div><label>Due date</label><input type="date" value={(r.due_date || '').slice(0, 10)} onChange={(e) => set(i, { due_date: e.target.value })} /></div>
                   </div>
-                  {r.assignee_reasoning && <div className="muted" style={{ fontSize: 12 }}>💡 {r.assignee_reasoning}</div>}
-                  {r.source_quote && <div className="muted" style={{ fontSize: 11.5, fontStyle: 'italic' }}>“{r.source_quote}”</div>}
-                  {r._error && <div style={{ color: '#ef4444', fontSize: 12.5 }}>{r._error}</div>}
+                  {(r.source_quote || r.assignee_reasoning) && (
+                    <Evidence quote={r.source_quote} reasoning={r.assignee_reasoning} score={r.confidence} compact />
+                  )}
+                  {r._error && <div style={{ color: 'var(--danger-ink)', fontSize: 12.5, fontWeight: 600 }}>{r._error}</div>}
                   <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                     <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => approveAssign(i)}>{busy ? <span className="spinner" /> : '✓ Approve & Assign'}</button>
                     <button className="btn btn-sm" disabled={busy} onClick={() => reject(i)}>✕ Reject</button>
                     {!r._showMerge
-                      ? <button className="btn btn-sm" disabled={busy} onClick={() => set(i, { _showMerge: true })}>⇉ Merge into…</button>
+                      ? <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => set(i, { _showMerge: true })}><Ic name="merge" size={14} /> Merge into…</button>
                       : (
                         <span className="row" style={{ gap: 4 }}>
                           <select value={r._mergeInto} onChange={(e) => set(i, { _mergeInto: e.target.value })}>

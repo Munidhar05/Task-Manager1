@@ -1,11 +1,26 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import { Ic } from '../ui'
 
 interface Notif { id: string; type: string; message: string; task_id?: string; read: number; created_at: string }
 
-const ICON: Record<string, string> = {
-  task_submitted: '📩', task_approved: '✅', task_reopened: '↩', task_assigned: '📌', task_comment: '💬', chat_message: '💬',
+// Each notification type → a line glyph + a semantic tone. Replaces the emoji
+// (📩📌💬…) which rendered differently per-OS and read informal; the tinted
+// chips are consistent and colour-code the event at a glance.
+type Tone = 'primary' | 'success' | 'warning' | 'info'
+const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone: Tone }> = {
+  task_submitted: { name: 'send', tone: 'info' },
+  task_approved: { name: 'check', tone: 'success' },
+  task_reopened: { name: 'refresh', tone: 'warning' },
+  task_assigned: { name: 'user', tone: 'primary' },
+  task_comment: { name: 'chat', tone: 'info' },
+  chat_message: { name: 'chat', tone: 'info' },
+}
+function NotifIcon({ type }: { type: string }) {
+  const cfg = NOTIF_ICON[type]
+  if (!cfg) return <span className="notif-ic" data-tone="info"><Ic name="doc" size={15} /></span>
+  return <span className="notif-ic" data-tone={cfg.tone}><Ic name={cfg.name} size={15} /></span>
 }
 
 // 3D glossy notification logo: a round brand-orange button with a white outline
@@ -159,7 +174,7 @@ export default function NotificationBell() {
               <span className="mute-toggle-label">{soundOn ? 'Sound' : 'Muted'}</span>
             </button>
           </div>
-          {items.length === 0 && <div className="empty" style={{ padding: 24 }}>You're all caught up 🎉</div>}
+          {items.length === 0 && <div className="empty" style={{ padding: 24 }}>You're all caught up</div>}
           {items.map((n) => {
             const actionable = n.type === 'chat_message' || !!n.task_id
             return (
@@ -170,13 +185,14 @@ export default function NotificationBell() {
                 role={actionable ? 'button' : undefined}
                 tabIndex={actionable ? 0 : undefined}
                 onKeyDown={actionable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNotif(n) } } : undefined}
-                style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(197,86,15,.08)', fontSize: 13, display: 'flex', gap: 8 }}
+                style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(197,86,15,.08)', fontSize: 13, display: 'flex', gap: 11, alignItems: 'flex-start' }}
               >
-                <span>{ICON[n.type] || '•'}</span>
-                <div>
-                  <div>{n.message}</div>
-                  <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{new Date(n.created_at).toLocaleString()}</div>
+                <NotifIcon type={n.type} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ lineHeight: 1.4 }}>{n.message}</div>
+                  <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{new Date(n.created_at).toLocaleString()}</div>
                 </div>
+                {!n.read && <span className="notif-unread-dot" title="Unread" />}
               </div>
             )
           })}

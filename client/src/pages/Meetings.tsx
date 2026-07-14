@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
-import { LANG_LABEL, EmptyState } from '../ui'
+import { LANG_LABEL, EmptyState, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
@@ -109,8 +109,8 @@ export default function Meetings() {
               </div>
               {isManager && (
                 <div className="row" style={{ gap: 6, marginTop: 12 }} onClick={(e) => e.stopPropagation()}>
-                  <button className="btn btn-sm" onClick={() => setEditing(m)}>✎ Edit</button>
-                  <button className="btn btn-sm btn-danger" onClick={() => del(m)}>🗑 Delete</button>
+                  <button className="btn btn-sm row" style={{ gap: 6 }} onClick={() => setEditing(m)}><Ic name="edit" size={14} /> Edit</button>
+                  <button className="btn btn-sm btn-danger row" style={{ gap: 6 }} onClick={() => del(m)}><Ic name="trash" size={14} /> Delete</button>
                 </div>
               )}
             </div>
@@ -121,13 +121,13 @@ export default function Meetings() {
         ))}
         {loaded && error && (
           <div className="card" style={{ gridColumn: '1 / -1' }}>
-            <EmptyState icon="⚠️" title="Couldn't load meetings" hint="Check your connection and try again."
+            <EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load meetings" hint="Check your connection and try again."
               action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
           </div>
         )}
         {loaded && !error && meetings.length === 0 && (
           <div className="card" style={{ gridColumn: '1 / -1' }}>
-            <EmptyState icon="🎙️" title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." />
+            <EmptyState icon={<Ic name="mic" size={40} />} title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." />
           </div>
         )}
       </div>
@@ -221,8 +221,8 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
         <div className="card-pad grid" style={{ gap: 12 }}>
           {/* source toggle */}
           <div className="row" style={{ gap: 8 }}>
-            <button className={'btn btn-sm' + (mode === 'audio' ? ' btn-primary' : '')} onClick={() => setMode('audio')}>🎵 Upload audio file</button>
-            <button className={'btn btn-sm' + (mode === 'text' ? ' btn-primary' : '')} onClick={() => setMode('text')}>📝 Paste transcript</button>
+            <button className={'btn btn-sm row' + (mode === 'audio' ? ' btn-primary' : '')} style={{ gap: 6 }} onClick={() => setMode('audio')}><Ic name="music" size={14} /> Upload audio file</button>
+            <button className={'btn btn-sm row' + (mode === 'text' ? ' btn-primary' : '')} style={{ gap: 6 }} onClick={() => setMode('text')}><Ic name="note" size={14} /> Paste transcript</button>
           </div>
 
           <div className="grid grid-3" style={{ gap: 10 }}>
@@ -243,8 +243,8 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
               <label className="audio-drop">
                 <input type="file" accept="audio/*" style={{ display: 'none' }} onChange={(e) => { setAudioFile(e.target.files?.[0] || null); setErr('') }} />
                 {audioFile
-                  ? <span>🎵 <b>{audioFile.name}</b> <span className="muted">({fileMB} MB)</span> — click to change</span>
-                  : <span className="muted">🎤 Click to choose an audio file</span>}
+                  ? <span className="row" style={{ gap: 6 }}><Ic name="music" size={14} /> <b>{audioFile.name}</b> <span className="muted">({fileMB} MB)</span> — click to change</span>
+                  : <span className="muted row" style={{ gap: 6 }}><Ic name="mic" size={14} /> Click to choose an audio file</span>}
               </label>
               <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>The recording is transcribed (any language — Telugu / Hindi / English / mixed), then the summary &amp; tasks are generated in <b>English</b>.</div>
             </div>
@@ -260,7 +260,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
             <button className="btn btn-primary" onClick={process} disabled={busy || !canSubmit}>
-              {busy ? <><span className="spinner" /> {mode === 'audio' ? 'Transcribing & analyzing…' : 'Analyzing…'}</> : '✦ Analyze & extract tasks'}
+              {busy ? <><span className="spinner" /> {mode === 'audio' ? 'Transcribing & analyzing…' : 'Analyzing…'}</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}
             </button>
           </div>
         </div>
@@ -585,7 +585,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           <div>
             <label>Recognition mode</label>
             <div className="row" style={{ gap: 8 }}>
-              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}>✦ Auto (Telugu / Hindi / English)</button>
+              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}><span className="row" style={{ gap: 6 }}><Ic name="ai" size={14} /> Auto (Telugu / Hindi / English)</span></button>
               <button className={'btn btn-sm' + (mode === 'browser' ? ' btn-primary' : '')} disabled={recording} onClick={() => setMode('browser')}>Browser captions (1 language)</button>
             </div>
             {mode === 'auto'
@@ -609,7 +609,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             <div style={{ alignSelf: 'end' }} className="muted">
               {recording
                 ? paused
-                  ? <span style={{ color: '#f59e0b', fontWeight: 700 }}>❚❚ PAUSED {mmss}</span>
+                  ? <span style={{ color: 'var(--warning)', fontWeight: 700 }}>PAUSED {mmss}</span>
                   : <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span>
                 : 'Ready'}
             </div>
@@ -617,7 +617,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
 
           {recording && paused && (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
-              ❚❚ <b>Meeting paused</b> — recording was interrupted (e.g. a phone call, or the screen turned off). Tap <b>Resume meeting</b> to continue capturing.
+<b>Meeting paused</b> — recording was interrupted (e.g. a phone call, or the screen turned off). Tap <b>Resume meeting</b> to continue capturing.
             </div>
           )}
           <div className="row" style={{ gap: 10 }}>
@@ -643,7 +643,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={close}>Cancel</button>
-            <button className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : '✦ Analyze & extract tasks'}</button>
+            <button className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}</button>
           </div>
         </div>
       </div>

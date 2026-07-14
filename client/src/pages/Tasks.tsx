@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, dueLabel, fmtDateTime, PRIORITY_COLORS } from '../ui'
+import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, PRIORITY_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
 import { pushBackHandler } from '../back'
@@ -13,7 +13,7 @@ import { useEscape } from '../lib/useEscape'
 // column. Using the given date (not the latest activity) means completing a task
 // or sending it to review never bumps it to Today or to the top of the table.
 const givenOf = (t: Task) => t.assigned_at || t.created_at || ''
-const givenLabel = (t: Task) => (t.assigned_at ? '📌 Assigned' : '🆕 Created')
+const givenLabel = (t: Task) => (t.assigned_at ? 'Assigned' : 'Created')
 
 // Mirror of the server's priority→due-date default (server/src/util.js) so the
 // New Task form SHOWS the date the task will actually get. Critical=today,
@@ -251,7 +251,7 @@ function SearchDialog({ initial, onApply, onClose }: { initial: string; onApply:
           {voiceFilters && (
             <div className="row" style={{ gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
               <span className="muted">Voice search:</span>
-              {voiceFilters.assigneeName && <span className="badge" style={{ background: '#eef2ff', color: '#4f46e5' }}>👤 {voiceFilters.assigneeName}</span>}
+              {voiceFilters.assigneeName && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)' }}><Ic name="user" size={12} /> {voiceFilters.assigneeName}</span>}
               {voiceFilters.status && <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>{voiceFilters.status}</span>}
               {voiceFilters.priority && <span className="badge" style={{ background: '#fff7ed', color: '#c2410c' }}>{voiceFilters.priority}</span>}
               <button className="search-dialog-clear" style={{ position: 'static' }} onClick={() => setVoiceFilters(null)} title="Clear voice filters" aria-label="Clear voice filters">✕</button>
@@ -579,7 +579,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           {isManager && (
             <select value={filters.assignee} onChange={(e) => setFilters({ ...filters, assignee: e.target.value })}>
               <option value="">All assignees</option>
-              <option value="unassigned">⚠ Unassigned</option>
+              <option value="unassigned">Unassigned</option>
               {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
           )}
@@ -589,8 +589,8 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       {/* Line 1: View toggle (left) + the "Active" chip. */}
       <div className="viewbar">
         <div className="seg">
-          <button className={'seg-btn' + (view === 'list' ? ' active' : '')} onClick={() => setView('list')} title="List view">☰ List</button>
-          <button className={'seg-btn' + (view === 'board' ? ' active' : '')} onClick={() => setView('board')} title="Board view">▤ Board</button>
+          <button className={'seg-btn row' + (view === 'list' ? ' active' : '')} style={{ gap: 6 }} onClick={() => setView('list')} title="List view"><Ic name="menu" size={14} /> List</button>
+          <button className={'seg-btn row' + (view === 'board' ? ' active' : '')} style={{ gap: 6 }} onClick={() => setView('board')} title="Board view"><Ic name="board" size={14} /> Board</button>
         </div>
         {view === 'list' && tasks.length > 0 && QUICK_CHIPS.filter((c) => c.key === 'active').map((c) => {
           const count = tasks.filter((t) => matchesQuick(t, c.key)).length
@@ -622,14 +622,14 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {loadError ? (
         <div className="card">
-          <EmptyState icon="⚠️" title="Couldn't load tasks" hint="Check your connection and try again."
+          <EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load tasks" hint="Check your connection and try again."
             action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
         </div>
       ) : view === 'board' ? (
         tasks.length === 0 ? (
           <div className="card">
             <EmptyState
-              icon="🎉"
+              icon={<Ic name="check" size={40} />}
               title="You're all caught up!"
               hint={isManager
                 ? 'No tasks yet. Create one to start tracking work.'
@@ -646,20 +646,20 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
             <div className="card">
               {quickView === 'completed' ? (
                 <EmptyState
-                  icon="📦"
+                  icon={<Ic name="box" size={40} />}
                   title="No completed tasks yet"
                   hint="Tasks marked Done and accepted by a manager will appear here, with their assigned and completed dates."
                 />
               ) : narrowed ? (
                 <EmptyState
-                  icon="🔍"
+                  icon={<Ic name="search" size={40} />}
                   title="No tasks match your filters"
                   hint="Try a different search term, or clear the filters to see everything."
                   action={<button className="btn btn-sm" onClick={clearFilters}>Clear filters</button>}
                 />
               ) : (
                 <EmptyState
-                  icon="🎉"
+                  icon={<Ic name="check" size={40} />}
                   title="You're all caught up!"
                   hint={isManager
                     ? 'No active tasks. Create one to start tracking work.'
@@ -840,7 +840,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread"><h3>{asPersonal ? 'New personal task' : 'New task'}</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
         <div className="card-pad grid" style={{ gap: 12 }}>
-          {asPersonal && <div className="muted" style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>🔒 Private to you — only you can see this task.</div>}
+          {asPersonal && <div className="muted row" style={{ gap: 7, fontSize: 12, background: 'var(--info-bg)', border: '1px solid var(--info-border)', color: 'var(--info-ink)', borderRadius: 8, padding: '8px 10px' }}><Ic name="lock" size={13} /> Private to you — only you can see this task.</div>}
           <div>
             <label>
               Title

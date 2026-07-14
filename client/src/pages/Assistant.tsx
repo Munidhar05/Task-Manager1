@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, dueLabel } from '../ui'
+import { PriorityBadge, StatusBadge, Ic, dueLabel } from '../ui'
 import { toast } from '../lib/toast'
 import TaskDrawer from '../components/TaskDrawer'
 
@@ -34,6 +34,11 @@ export default function Assistant() {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [openId, setOpenId] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(false)
+  // System-level problems (query failed, couldn't save) are shown as a strip
+  // OUTSIDE the conversation — never as words in the assistant's own bubble.
+  const [sysError, setSysError] = useState('')
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [lastQuery, setLastQuery] = useState('')
   const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem('smarttask_chat_sidebar_collapsed') === '1')
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -155,31 +160,41 @@ export default function Assistant() {
 
   const deleteConvo = async (cid: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    api.del(`/assistant/conversations/${cid}`).catch(() => {})
+    api.del(`/assistant/conversations/${cid}`).catch(() => setSysError("Couldn't delete that chat on the server — it may reappear on refresh."))
     const next = convos.filter((c) => c.id !== cid)
     if (!next.length) { await startNew(); setConvos((cs) => cs.filter((c) => c.id !== cid)); return }
     setConvos(next)
     if (cid === activeId) setActiveId(next[0].id)
   }
 
+  // Persist a conversation and reflect the real outcome in the save indicator —
+  // a failed write must never look like a successful one.
+  const persist = async (convId: string, title: string, msgs: Msg[]) => {
+    setSaveState('saving')
+    try { await api.put(`/assistant/conversations/${convId}`, { title, msgs }); setSaveState('saved') }
+    catch { setSaveState('error'); setSysError("Your last message couldn't be saved. Check your connection.") }
+  }
+
   const send = async (q: string) => {
     if (!q.trim() || busy || !active) return
     const conv = active
-    setInput(''); setBusy(true)
+    setInput(''); setBusy(true); setSysError(''); setLastQuery(q)
     const history = conv.msgs.slice(-8).map((m) => ({ role: m.role, text: m.text }))
     const title = conv.title === 'New chat' ? q.slice(0, 48) : conv.title
     const withUser: Msg[] = [...conv.msgs, { role: 'user', text: q }]
     patchActive((c) => ({ ...c, title, msgs: withUser, updated: Date.now() }))
-    let finalMsgs = withUser
     try {
       const r = await api.post('/assistant/query', { query: q, history })
-      finalMsgs = [...withUser, { role: 'ai', text: r.answer, tasks: r.tasks }]
+      const finalMsgs: Msg[] = [...withUser, { role: 'ai', text: r.answer, tasks: r.tasks }]
+      patchActive((c) => ({ ...c, title, msgs: finalMsgs, updated: Date.now() }))
+      setBusy(false)
+      await persist(conv.id, title, finalMsgs)
     } catch (e: any) {
-      finalMsgs = [...withUser, { role: 'ai', text: 'Error: ' + e.message }]
+      // A system/network failure is NOT the assistant speaking — surface it as a
+      // retryable system strip and keep the user's message in place.
+      setBusy(false)
+      setSysError(e?.message ? `Couldn't reach the assistant: ${e.message}` : "Couldn't reach the assistant.")
     }
-    patchActive((c) => ({ ...c, title, msgs: finalMsgs, updated: Date.now() }))
-    setBusy(false)
-    api.put(`/assistant/conversations/${conv.id}`, { title, msgs: finalMsgs }).catch(() => {})
   }
 
   if (loading) return <div className="card" style={{ display: 'grid', placeItems: 'center', height: 'calc(100vh - 160px)' }}><span className="spinner" /></div>
@@ -213,7 +228,7 @@ export default function Assistant() {
 
       <div className="card chat-pane" style={{ padding: 18 }}>
         <div className="chat">
-          <button className="btn btn-ghost btn-sm history-open-btn" title="Show history" onClick={() => setSidebar(false)}>☰ History</button>
+          <button className="btn btn-ghost btn-sm history-open-btn row" style={{ gap: 6 }} title="Show history" onClick={() => setSidebar(false)}><Ic name="menu" size={15} /> History</button>
           {/* Mobile header: history icon (opens past chats) · current title · quick New */}
           <div className="chat-mobile-bar">
             <button className="chat-list-btn" onClick={() => setNavOpen(true)} title="Chat history" aria-label="Chat history">
@@ -231,7 +246,9 @@ export default function Assistant() {
                     <table>
                       <tbody>
                         {m.tasks.map((t: any) => (
-                          <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
+                          <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}
+                            role="button" tabIndex={0} aria-label={`Open ${t.title}`}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenId(t.id) } }}>
                             <td><div style={{ fontWeight: 600, fontSize: 13 }}>{t.title}</div><div className="muted" style={{ fontSize: 11.5 }}>{t.assignee_name || 'Unassigned'} · {dueLabel(t)}</div></td>
                             <td style={{ textAlign: 'right' }}><PriorityBadge p={t.priority} /> <StatusBadge s={t.status} /></td>
                           </tr>
@@ -242,8 +259,23 @@ export default function Assistant() {
                 )}
               </div>
             ))}
-            {busy && <div className="bubble ai"><span className="spinner" /></div>}
+            {busy && (
+              <div className="bubble ai typing-bubble">
+                <span className="typing-dots"><i /><i /><i /></span>
+                <span className="typing-text" style={{ marginLeft: 8 }}>Reading your tasks…</span>
+              </div>
+            )}
           </div>
+          {sysError && (
+            <div className="sys-strip" role="alert">
+              <span className="sys-strip-ic" aria-hidden="true"><Ic name="warning" size={16} /></span>
+              <span className="sys-strip-text">{sysError}</span>
+              {lastQuery && saveState !== 'saving' && (
+                <button className="btn btn-sm" onClick={() => send(lastQuery)}>Retry</button>
+              )}
+              <button className="sys-strip-x" aria-label="Dismiss" onClick={() => setSysError('')}>✕</button>
+            </div>
+          )}
           <div>
             {suggestions.length > 0 && (
               <div className="suggestions">
@@ -265,6 +297,11 @@ export default function Assistant() {
                 </button>
               )}
               <button className="btn btn-primary" onClick={() => send(input)} disabled={busy || listening}>Send</button>
+            </div>
+            <div className={'save-state save-state--' + saveState} aria-live="polite">
+              {saveState === 'saving' && <>Saving…</>}
+              {saveState === 'saved' && <span className="row" style={{ gap: 5, justifyContent: 'flex-end' }}><Ic name="check" size={13} /> Saved · synced across your devices</span>}
+              {saveState === 'error' && <span className="row" style={{ gap: 5, justifyContent: 'flex-end' }}><Ic name="warning" size={13} /> Not saved — your last message may be lost</span>}
             </div>
           </div>
         </div>

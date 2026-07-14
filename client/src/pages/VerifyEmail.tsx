@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
+import { Ic } from '../ui'
 
 // Public page reached from the verify-email link. Confirms the token on load.
 export default function VerifyEmail() {
@@ -33,8 +34,8 @@ export default function VerifyEmail() {
           {state === 'working' && <div style={{ display: 'grid', placeItems: 'center', padding: 24 }}><span className="spinner" /></div>}
 
           {state === 'ok' && (
-            <div className="muted" style={{ fontSize: 14, lineHeight: 1.5, background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8, padding: '14px 16px' }}>
-              ✅ Your email is verified. Thank you!
+            <div className="muted row" style={{ gap: 8, fontSize: 14, lineHeight: 1.5, background: 'var(--success-bg)', border: '1px solid var(--success-border)', color: 'var(--success-ink)', borderRadius: 8, padding: '14px 16px' }}>
+              <Ic name="check" size={16} /> Your email is verified. Thank you!
             </div>
           )}
           {state === 'fail' && <div className="login-err">{msg}</div>}
