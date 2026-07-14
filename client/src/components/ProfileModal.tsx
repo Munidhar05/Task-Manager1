@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react'
 import { api, getToken, API_BASE, userAvatarUrl } from '../api'
 import { useAuth } from '../auth'
-import { Avatar, LANG_LABEL } from '../ui'
+import { Avatar, LANG_LABEL, Ic } from '../ui'
 import { WALLPAPERS, getWallpaperId, applyWallpaper } from '../lib/wallpaper'
 import { useEscape } from '../lib/useEscape'
 
@@ -87,7 +87,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           <div className="profile-id">
             <button className="avatar-edit-btn" onClick={() => fileInput.current?.click()} disabled={busy === 'photo'} title="Change profile photo">
               <Avatar name={user.name} color={user.avatar_color} size={64} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
-              <span className="avatar-edit-icon">{busy === 'photo' ? '…' : '✎'}</span>
+              <span className="avatar-edit-icon">{busy === 'photo' ? '…' : <Ic name="edit" size={10} />}</span>
             </button>
             <input ref={fileInput} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPhoto} />
             <div style={{ minWidth: 0 }}>
@@ -127,7 +127,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
                   title={w.name}
                   aria-label={w.name}
                 >
-                  {wallpaper === w.id && <span className="wallpaper-check">✓</span>}
+                  {wallpaper === w.id && <span className="wallpaper-check"><Ic name="check" size={13} /></span>}
                 </button>
               ))}
             </div>

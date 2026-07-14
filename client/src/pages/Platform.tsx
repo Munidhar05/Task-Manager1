@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
-import { Bar, EmptyState, STATUS_COLORS, fmtDateTime } from '../ui'
+import { Bar, EmptyState, Ic, STATUS_COLORS, fmtDateTime } from '../ui'
 import { toast } from '../lib/toast'
 import { confirmDialog } from '../lib/confirm'
 
@@ -65,7 +65,7 @@ export default function Platform() {
   }
 
   if (error) return (
-    <div className="card"><EmptyState icon="⚠️" title="Couldn't load the platform console" hint="Check your connection and try again."
+    <div className="card"><EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load the platform console" hint="Check your connection and try again."
       action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} /></div>
   )
   if (!orgs || !stats) return <div className="dash-skeleton"><span className="spinner" /></div>
@@ -75,7 +75,9 @@ export default function Platform() {
 
   return (
     <>
-      <div className="emp-kpis section" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      {/* auto-fit wraps the KPIs responsively (4-across on desktop → 2 on phones)
+          instead of a hardcoded 4 columns that overflow into a sideways scroll. */}
+      <div className="emp-kpis section" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
         <div className="kpi" style={{ ['--kc' as any]: '#c5560f' }}><div><div className="kpi-val">{stats.orgs}</div><div className="kpi-label">Organizations</div></div></div>
         <div className="kpi" style={{ ['--kc' as any]: '#3b82f6' }}><div><div className="kpi-val">{stats.users}</div><div className="kpi-label">Total users</div></div></div>
         <div className="kpi" style={{ ['--kc' as any]: '#10b981' }}><div><div className="kpi-val">{stats.tasks}</div><div className="kpi-label">Total tasks</div></div></div>
@@ -83,7 +85,7 @@ export default function Platform() {
       </div>
 
       <div className="toolbar">
-        <input placeholder="🔍 Search organizations…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
+        <input placeholder="Search organizations…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
         <div className="muted" style={{ marginLeft: 'auto' }}>{filtered.length} of {orgs.length} orgs</div>
       </div>
 
@@ -108,7 +110,7 @@ export default function Platform() {
                 </td>
                 <td data-label="Created">{(o.created_at || '').slice(0, 10)}</td>
                 <td data-label="Last activity" className="muted">{o.last_activity ? fmtDateTime(o.last_activity) : '—'}</td>
-                <td><button className="btn btn-sm btn-danger" onClick={() => removeOrg(o)}>🗑 Delete</button></td>
+                <td><button className="btn btn-sm btn-danger row" style={{ gap: 6 }} onClick={() => removeOrg(o)}><Ic name="trash" size={14} /> Delete</button></td>
               </tr>
             ))}
           </tbody>
@@ -154,7 +156,7 @@ function OrgDetailModal({ state, onClose, onRetry, onChanged }: {
         </div>
         <div className="card-pad grid" style={{ gap: 18 }}>
           {state.error ? (
-            <EmptyState icon="⚠️" title="Couldn't load this organization" hint="Check your connection and try again."
+            <EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load this organization" hint="Check your connection and try again."
               action={<button className="btn btn-primary btn-sm" onClick={onRetry}>Retry</button>} />
           ) : !d ? (
             <div style={{ textAlign: 'center', padding: 20 }}><span className="spinner" /></div>

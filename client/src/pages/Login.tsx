@@ -21,23 +21,31 @@ const GoogleG = () => (
   </svg>
 )
 
+// Trust markers shown on the brand panel — each states a capability the product
+// actually has (role-based access, audit logging, encryption in transit).
+const TrustIcon = ({ children }: { children: React.ReactNode }) => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+)
+const TRUST = [
+  { icon: <TrustIcon><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></TrustIcon>, label: 'Role-based access control' },
+  { icon: <TrustIcon><path d="M4 4h16v12H4z" /><path d="M4 20h16" /><path d="M8 8h8M8 12h5" /></TrustIcon>, label: 'Every action written to an audit log' },
+  { icon: <TrustIcon><rect x="3" y="11" width="18" height="10" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></TrustIcon>, label: 'Encrypted in transit · your data stays yours' },
+]
+
 export default function Login() {
   const { login, loginWithGoogle } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const [emailFocused, setEmailFocused] = useState(false)
-  const [pwFocused, setPwFocused] = useState(false)
   const [showPw, setShowPw] = useState(false)
-  const [shake, setShake] = useState(false)
   const googleBtnRef = useRef<HTMLDivElement>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setErr(''); setBusy(true)
     try { await login(email, password) }
-    catch (e: any) { setErr(e.message); setShake(true); setTimeout(() => setShake(false), 500) }
+    catch (e: any) { setErr(e.message) }
     finally { setBusy(false) }
   }
 
@@ -45,7 +53,7 @@ export default function Login() {
   const finishGoogle = async (credential: string) => {
     setErr(''); setBusy(true)
     try { await loginWithGoogle(credential) }
-    catch (e: any) { setErr(e.message); setShake(true); setTimeout(() => setShake(false), 500) }
+    catch (e: any) { setErr(e.message) }
     finally { setBusy(false) }
   }
 
@@ -63,60 +71,65 @@ export default function Login() {
     return () => cleanup()
   }, [])
 
-  // Mascot state: covering eyes while typing a hidden password, peeking when revealed.
-  const covering = pwFocused && !showPw
-  const peeking = pwFocused && showPw
-  // Pupils glance toward whatever field is active.
-  const lookY = emailFocused ? 3 : pwFocused ? -1 : 0
-  const lookX = emailFocused ? Math.min(4, email.length * 0.12) - 2 : 0
-
   return (
-    <div className="login-wrap login-wrap--panda">
-      <div className={`login-stage ${shake ? 'shake' : ''}`}>
-        <Mascot covering={covering} peeking={peeking} lookX={lookX} lookY={lookY} happy={busy} />
-        <form className="login-card login-card--panda" onSubmit={submit}>
-          <div className="brand" style={{ padding: 0, marginBottom: 14, marginTop: 26, justifyContent: 'space-between', width: '100%' }}>
-            <div>
-              <div className="brand-name" style={{ color: '#1f1a16' }}>Befach Task Manager</div>
-              <div className="muted" style={{ fontSize: 12 }}>Meeting-to-Task Platform</div>
-            </div>
-            <img src="/logo.png" alt="Befach" className="brand-logo-img" />
+    <div className="auth-wrap">
+      {/* Brand panel — the value statement and trust signals a buyer reads first. */}
+      <aside className="auth-brand">
+        <div className="auth-brand-top">
+          <img src="/logo.png" alt="Befach Task Manager" className="auth-brand-logo" />
+          <span className="auth-brand-name">Befach Task Manager</span>
+        </div>
+        <div className="auth-brand-body">
+          <h1 className="auth-headline">Turn multilingual meetings into accountable execution.</h1>
+          <p className="auth-sub">Befach listens to your meeting, extracts the decisions and tasks, resolves owners and deadlines, and routes every item through approval to execution — with the original quote behind each one.</p>
+          <ul className="auth-trust">
+            {TRUST.map((t) => (
+              <li key={t.label}><span className="auth-trust-ic">{t.icon}</span>{t.label}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="auth-brand-foot">Meetings → decisions → tasks → execution</div>
+      </aside>
+
+      {/* Sign-in panel */}
+      <main className="auth-panel">
+        <form className="auth-card" onSubmit={submit}>
+          <div className="auth-card-head">
+            <h2>Sign in</h2>
+            <p className="muted">Welcome back. Sign in to your workspace.</p>
           </div>
 
           <div className="field">
-            <label>Enter your email</label>
+            <label htmlFor="login-email">Work email</label>
             <input
+              id="login-email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              onFocus={() => setEmailFocused(true)}
-              onBlur={() => setEmailFocused(false)}
               type="email"
               name="email"
               autoComplete="username"
               inputMode="email"
-              placeholder="you@befach.com"
+              placeholder="you@company.com"
               autoFocus
             />
           </div>
 
           <div className="field">
-            <label>Enter your password</label>
+            <label htmlFor="login-password">Password</label>
             <div className="pw-row">
               <input
+                id="login-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                onFocus={() => setPwFocused(true)}
-                onBlur={() => setPwFocused(false)}
                 type={showPw ? 'text' : 'password'}
                 name="password"
                 autoComplete="current-password"
-                placeholder="Password"
+                placeholder="Enter your password"
               />
               <button
                 type="button"
                 className="pw-toggle"
                 onClick={() => setShowPw((s) => !s)}
-                tabIndex={-1}
                 aria-label={showPw ? 'Hide password' : 'Show password'}
               >
                 {showPw ? <EyeOffIcon /> : <EyeIcon />}
@@ -124,10 +137,10 @@ export default function Login() {
             </div>
           </div>
 
-          {err && <div className="login-err">{err}</div>}
+          {err && <div className="login-err" role="alert">{err}</div>}
 
           <button className="btn btn-primary login-btn" disabled={busy}>
-            {busy ? <span className="spinner" /> : 'LOGIN'}
+            {busy ? <span className="spinner" /> : 'Sign in'}
           </button>
 
           {googleEnabled() && (
@@ -144,76 +157,13 @@ export default function Login() {
             </>
           )}
 
-          <div className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center', lineHeight: 1.8 }}>
-            <Link to="/forgot-password" style={{ color: 'var(--primary)', fontWeight: 600 }}>Forgot password?</Link>
-            <br />
-            New here? <Link to="/signup" style={{ color: 'var(--primary)', fontWeight: 600 }}>Create your company</Link>
-            <br />
-            <Link to="/privacy" style={{ color: 'var(--muted)', fontWeight: 600, fontSize: 11.5 }}>Privacy Policy</Link>
+          <div className="auth-links">
+            <Link to="/forgot-password">Forgot password?</Link>
+            <span>New to Befach? <Link to="/signup">Create your workspace</Link></span>
           </div>
         </form>
-        <div className="paws-bottom">
-          <Paw /><Paw />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Paw() {
-  return (
-    <svg className="foot-paw" viewBox="0 0 60 60" width="44" height="44">
-      <ellipse cx="30" cy="38" rx="20" ry="16" fill="#2b2440" />
-      <ellipse cx="30" cy="40" rx="11" ry="9" fill="#fff" />
-      <circle cx="14" cy="22" r="6" fill="#2b2440" />
-      <circle cx="30" cy="16" r="6.5" fill="#2b2440" />
-      <circle cx="46" cy="22" r="6" fill="#2b2440" />
-    </svg>
-  )
-}
-
-function Mascot({ covering, peeking, lookX, lookY, happy }: {
-  covering: boolean; peeking: boolean; lookX: number; lookY: number; happy: boolean
-}) {
-  return (
-    <div className="mascot">
-      <svg viewBox="0 0 220 170" width="200" height="155">
-        {/* ears */}
-        <circle cx="62" cy="48" r="26" fill="#2b2440" />
-        <circle cx="158" cy="48" r="26" fill="#2b2440" />
-        <circle cx="62" cy="48" r="12" fill="#4a4068" />
-        <circle cx="158" cy="48" r="12" fill="#4a4068" />
-        {/* head */}
-        <ellipse cx="110" cy="92" rx="78" ry="70" fill="#fff" stroke="#ece8f5" strokeWidth="2" />
-        {/* cheeks (warm orange to match brand) */}
-        <circle cx="64" cy="108" r="13" fill="#f6c89a" opacity="0.85" />
-        <circle cx="156" cy="108" r="13" fill="#f6c89a" opacity="0.85" />
-        {/* eye patches */}
-        <ellipse className={`patch ${covering ? 'hidden-eyes' : ''}`} cx="82" cy="84" rx="20" ry="25" fill="#2b2440" transform="rotate(-18 82 84)" />
-        <ellipse className={`patch ${covering ? 'hidden-eyes' : ''}`} cx="138" cy="84" rx="20" ry="25" fill="#2b2440" transform="rotate(18 138 84)" />
-        {/* eye whites + pupils */}
-        <g className={`eyes ${covering ? 'closed' : ''}`}>
-          <circle cx="84" cy="86" r="9" fill="#fff" />
-          <circle cx="136" cy="86" r="9" fill="#fff" />
-          <circle cx={84 + lookX} cy={86 + lookY} r="4.6" fill="#2b2440" />
-          <circle cx={136 + lookX} cy={86 + lookY} r="4.6" fill="#2b2440" />
-          <circle cx={86 + lookX} cy={84 + lookY} r="1.5" fill="#fff" />
-          <circle cx={138 + lookX} cy={84 + lookY} r="1.5" fill="#fff" />
-        </g>
-        {/* nose + mouth */}
-        <ellipse cx="110" cy="112" rx="8" ry="5.5" fill="#2b2440" />
-        <path d={happy ? 'M96 122 Q110 138 124 122' : 'M99 124 Q110 132 121 124'} fill="none" stroke="#2b2440" strokeWidth="3" strokeLinecap="round" />
-
-        {/* paws that swing up to cover the eyes */}
-        <g className={`mpaw mpaw-left ${covering ? 'cover' : ''} ${peeking ? 'peek' : ''}`}>
-          <ellipse cx="78" cy="150" rx="22" ry="17" fill="#2b2440" />
-          <ellipse cx="78" cy="152" rx="11" ry="8" fill="#f6c89a" opacity="0.9" />
-        </g>
-        <g className={`mpaw mpaw-right ${covering ? 'cover' : ''} ${peeking ? 'peek' : ''}`}>
-          <ellipse cx="142" cy="150" rx="22" ry="17" fill="#2b2440" />
-          <ellipse cx="142" cy="152" rx="11" ry="8" fill="#f6c89a" opacity="0.9" />
-        </g>
-      </svg>
+        <Link to="/privacy" className="auth-legal">Privacy Policy</Link>
+      </main>
     </div>
   )
 }

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Task } from '../api'
 import { useAuth } from '../auth'
-import { Bar, Donut, PriorityBadge, StatusBadge, Avatar, EmptyState, dueLabel, PRIORITY_COLORS, STATUS_COLORS } from '../ui'
+import { Bar, Donut, PriorityBadge, StatusBadge, Avatar, EmptyState, Ic, dueLabel, PRIORITY_COLORS, STATUS_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import { presetRange, todayYmd, ReportRange, downloadManagerReport } from '../report'
 import { toast } from '../lib/toast'
@@ -26,7 +26,7 @@ function Greeting({ name, style }: { name: string; style?: React.CSSProperties }
   const first = (name || '').trim().split(' ')[0] || name
   return (
     <div style={style}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{part}, {first} 👋</h2>
+      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{part}, {first}</h2>
       <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>Here's your overview for today.</div>
     </div>
   )
@@ -48,7 +48,7 @@ function EmployeeDash() {
   useEffect(load, [d.tick])
   if (error) return (
     <div className="card section">
-      <EmptyState icon="⚠️" title="Couldn't load your dashboard" hint="Check your connection and try again."
+      <EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load your dashboard" hint="Check your connection and try again."
         action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
     </div>
   )
@@ -69,14 +69,14 @@ function EmployeeDash() {
         <Kpi value={c.assigned} label="Assigned" icon={KPI_ICONS.assigned} color="#c5560f" onClick={() => navigate('/tasks')} />
         <Kpi value={c.pending} label="Pending" icon={KPI_ICONS.pending} color="#3b82f6" onClick={() => navigate('/tasks?view=active')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
-        <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" blink={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
+        <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" alert={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
         <Kpi value={c.blocked} label="Blocked" icon={KPI_ICONS.blocked} color="#f59e0b" onClick={() => navigate('/tasks?status=Blocked')} />
       </div>
       <div className="grid grid-2">
         <div className="card section">
           <div className="card-head"><h3>Upcoming deadlines</h3></div>
           <div className="emp-list">
-            {data.upcoming.length === 0 && <div className="empty">No upcoming deadlines 🎉</div>}
+            {data.upcoming.length === 0 && <div className="empty">No upcoming deadlines</div>}
             {data.upcoming.map((t: Task) => (
               <div key={t.id} className="emp-list-row clickable" onClick={() => d.setOpenId(t.id)} role="button" tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
@@ -101,7 +101,7 @@ function EmployeeDash() {
                 <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#c5560f'} />
               </div>
             ))}
-            {data.needs_confirmation > 0 && <div className="emp-confirm-note">⚠ {data.needs_confirmation} task(s) need ownership confirmation.</div>}
+            {data.needs_confirmation > 0 && <div className="emp-confirm-note row" style={{ gap: 7 }}><Ic name="warning" size={14} /> {data.needs_confirmation} task(s) need ownership confirmation.</div>}
           </div>
         </div>
       </div>
@@ -123,11 +123,11 @@ const KPI_ICONS = {
   blocked: <KpiSvg><circle cx="12" cy="12" r="9" /><path d="m5.6 5.6 12.8 12.8" /></KpiSvg>,
 } as const
 
-function Kpi({ value, label, icon, color, blink, onClick }: { value: React.ReactNode; label: string; icon: React.ReactNode; color: string; blink?: boolean; onClick?: () => void }) {
+function Kpi({ value, label, icon, color, alert, onClick }: { value: React.ReactNode; label: string; icon: React.ReactNode; color: string; alert?: boolean; onClick?: () => void }) {
   const clickable = !!onClick
   return (
     <div
-      className={'kpi' + (blink ? ' blink' : '') + (clickable ? ' clickable' : '')}
+      className={'kpi' + (alert ? ' alert' : '') + (clickable ? ' clickable' : '')}
       style={{ ['--kc' as any]: color }}
       onClick={onClick}
       role={clickable ? 'button' : undefined}
@@ -157,7 +157,9 @@ const RANGE_TABS: { key: RangeKey; label: string }[] = [
 function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState(false)
-  const [active, setActive] = useState<RangeKey>('monthly')
+  // Default view is "All tasks" (everything up to today) so the manager lands on
+  // the full picture; the Today/Week/Month tabs narrow it down from there.
+  const [active, setActive] = useState<RangeKey>('all')
   // "All tasks" is bounded only by an upper "till" date (defaults to today).
   const [to, setTo] = useState(todayYmd())
   const [datePopOpen, setDatePopOpen] = useState(false)
@@ -220,14 +222,14 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
         )}
       </div>
       <button className="btn btn-primary btn-sm pbi-download" disabled={downloading} onClick={download}>
-        {downloading ? <span className="spinner" /> : '⬇'} Download report
+        {downloading ? <span className="spinner" /> : <Ic name="download" size={14} />} Download report
       </button>
     </div>
   )
 
   if (error) return (
     <div className="pbi">{toolbar}
-      <div className="card"><EmptyState icon="⚠️" title="Couldn't load the dashboard" hint="Check your connection and try again."
+      <div className="card"><EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load the dashboard" hint="Check your connection and try again."
         action={<button className="btn btn-primary btn-sm" onClick={loadDash}>Retry</button>} /></div>
     </div>
   )
@@ -240,6 +242,28 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
     </div>
   )
   const c = data.counts
+  // First-run: a brand-new workspace has no tasks yet. Show one clear next action
+  // instead of four zeros and empty charts — the first 60s should invite the core
+  // workflow (upload a meeting), not congratulate the user on an empty dashboard.
+  if (c.total === 0) return (
+    <div className="pbi" style={{ height: 'auto' }}>
+      {toolbar}
+      <div className="card section">
+        <div className="empty-state" style={{ padding: '56px 24px' }}>
+          <div className="empty-state-icon" style={{ color: 'var(--primary)' }}>
+            <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1" /><line x1="12" y1="18" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" />
+            </svg>
+          </div>
+          <div className="empty-state-title">Turn your first meeting into tracked work</div>
+          <div className="empty-state-hint">Upload a recording or paste a transcript — Befach extracts the decisions, owners, and deadlines, and you approve them into tasks. Your dashboard fills in from there.</div>
+          <div className="empty-state-action">
+            <button className="btn btn-primary" onClick={() => navigate('/meetings')}>Upload your first meeting</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
   const maxWl = Math.max(...data.workload.map((w: any) => w.open_count), 1)
   const donutData = data.by_priority.map((p: any) => ({ label: p.priority, value: p.count, color: PRIORITY_COLORS[p.priority] }))
   return (
@@ -248,7 +272,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
       <div className="pbi-kpis">
         <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#c5560f" onClick={() => navigate('/tasks')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
-        <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" blink={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
+        <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" alert={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
         <Kpi value={c.blocked} label="Blocked" icon={KPI_ICONS.blocked} color="#f59e0b" onClick={() => navigate('/tasks?status=Blocked')} />
       </div>
 
@@ -273,7 +297,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                   <span className="hbar-label">
                     <Avatar name={w.name} color={w.avatar_color} size={22} />
                     <span className="hbar-name">{w.name}</span>
-                    {overloaded && <span style={{ color: '#ef4444', fontSize: 10.5, fontWeight: 700 }}>⚠</span>}
+                    {overloaded && <span style={{ color: 'var(--danger)', display: 'inline-flex' }} title="Overloaded"><Ic name="warning" size={12} /></span>}
                   </span>
                   <span className="hbar-track">
                     <span className="hbar-fill" style={{ width: `${pct}%`, background: overloaded ? '#ef4444' : '#c5560f' }} />
@@ -350,9 +374,11 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
           <div className="pbi-scroll" style={{ padding: 0 }}>
             <table>
               <tbody>
-                {data.overdue.length === 0 && <tr><td className="muted">Nothing overdue 🎉</td></tr>}
+                {data.overdue.length === 0 && <tr><td className="muted">Nothing overdue</td></tr>}
                 {data.overdue.map((t: any) => (
-                  <tr key={t.id} className="clickable" onClick={() => d.setOpenId(t.id)}>
+                  <tr key={t.id} className="clickable" onClick={() => d.setOpenId(t.id)}
+                    role="button" tabIndex={0} aria-label={`Open ${t.title}`}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
                     <td>{t.title}</td>
                     <td className="muted">{t.assignee_name || 'Unassigned'}</td>
                     <td>{dueLabel(t)}</td>

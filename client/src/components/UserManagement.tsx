@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, User } from '../api'
 import { useAuth } from '../auth'
-import { Avatar, Badge } from '../ui'
+import { Avatar, Badge, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 
 // User-management UI for the Administration page. The manager is the org admin
@@ -80,10 +80,10 @@ export default function UserManagement() {
         <div className="muted">{users.length} users {digest && <span>· daily Cliq digest {digest.hour}:00 ({digest.mode})</span>}</div>
         <div className="row wrap" style={{ gap: 8 }}>
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={onImport} />
-          <button className="btn btn-sm" onClick={downloadTemplate}>⬇ Template</button>
-          <button className="btn btn-sm" onClick={() => fileRef.current?.click()}>⬆ Import Excel/CSV</button>
-          <button className="btn btn-sm" onClick={sendDigestNow}>✉ Send digest now</button>
-          <button className="btn btn-sm" onClick={() => setInviting(true)}>✉ Invite teammate</button>
+          <button className="btn btn-sm row" style={{ gap: 6 }} onClick={downloadTemplate}><Ic name="download" size={14} /> Template</button>
+          <button className="btn btn-sm row" style={{ gap: 6 }} onClick={() => fileRef.current?.click()}><Ic name="upload" size={14} /> Import Excel/CSV</button>
+          <button className="btn btn-sm row" style={{ gap: 6 }} onClick={sendDigestNow}><Ic name="mail" size={14} /> Send digest now</button>
+          <button className="btn btn-sm row" style={{ gap: 6 }} onClick={() => setInviting(true)}><Ic name="mail" size={14} /> Invite teammate</button>
           <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>+ Add user</button>
         </div>
       </div>
@@ -113,9 +113,9 @@ export default function UserManagement() {
                 <td data-label="">
                   {canEdit(u) && (
                     <div className="row" style={{ gap: 6 }}>
-                      <button className="btn btn-sm" onClick={() => setEditing(u)}>✎ Edit</button>
+                      <button className="btn btn-sm row" style={{ gap: 6 }} onClick={() => setEditing(u)}><Ic name="edit" size={14} /> Edit</button>
                       {u.id !== user?.id && (
-                        <button className="btn btn-sm" style={{ color: '#ef4444' }} onClick={() => remove(u)}>🗑 Remove</button>
+                        <button className="btn btn-sm row" style={{ gap: 6, color: 'var(--danger)' }} onClick={() => remove(u)}><Ic name="trash" size={14} /> Remove</button>
                       )}
                     </div>
                   )}
@@ -166,8 +166,8 @@ function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin
             <>
               <div className="muted" style={{ fontSize: 13.5, lineHeight: 1.5, background: result.emailed ? '#ecfdf5' : '#fffbeb', border: `1px solid ${result.emailed ? '#a7f3d0' : '#fde68a'}`, borderRadius: 8, padding: '12px 14px' }}>
                 {result.emailed
-                  ? '✅ Invitation emailed. They can also use the link below.'
-                  : '✉ Invitation created. Email isn’t configured, so copy this link and share it directly:'}
+                  ? 'Invitation emailed. They can also use the link below.'
+                  : 'Invitation created. Email isn’t configured, so copy this link and share it directly:'}
               </div>
               <div className="row" style={{ gap: 8 }}>
                 <input readOnly value={result.link} style={{ flex: 1 }} onFocus={(e) => e.currentTarget.select()} />
