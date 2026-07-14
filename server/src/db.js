@@ -386,6 +386,32 @@ export function initSchema() {
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  -- Employee performance: one row per user per calendar DAY they were active.
+  -- day_score (0-100) is that day's execution score; rating_after (0-1000) is the
+  -- cumulative self-correcting all-time rating AFTER applying that day. The current
+  -- all-time rating is simply the latest row's rating_after. Written by the daily
+  -- advance job (performance.js), which is idempotent per (user_id, day). Extra
+  -- columns cache the component figures so the UI can explain a score without
+  -- recomputing. See scoring.js for the maths.
+  CREATE TABLE IF NOT EXISTS performance_daily (
+    user_id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    day TEXT NOT NULL,                         -- YYYY-MM-DD (local server date)
+    day_score REAL NOT NULL,                   -- 0-100
+    rating_after REAL NOT NULL,                -- 0-1000 cumulative rating after this day
+    tasks_done INTEGER NOT NULL DEFAULT 0,     -- tasks completed that day
+    weighted REAL NOT NULL DEFAULT 0,          -- priority-weighted throughput that day
+    on_time_rate REAL,                         -- 0-1, null if no due-dated completion
+    quality_rate REAL,                         -- 0-1, null if nothing resolved
+    engagement REAL NOT NULL DEFAULT 0,        -- 0-1
+    penalty REAL NOT NULL DEFAULT 0,           -- points deducted for overdue work
+    overdue_open INTEGER NOT NULL DEFAULT 0,   -- # open past-due tasks as of that day
+    PRIMARY KEY (user_id, day),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_perf_org_day ON performance_daily(org_id, day);
+  CREATE INDEX IF NOT EXISTS idx_perf_user_day ON performance_daily(user_id, day);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
