@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, PRIORITY_COLORS } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
 import { pushBackHandler } from '../back'
@@ -267,6 +267,54 @@ function SearchDialog({ initial, onApply, onClose }: { initial: string; onApply:
   )
 }
 
+// Mobile-only Filters dialog: the same priority/status/assignee filters as the
+// desktop toolbar dropdowns (which are CSS-hidden on phones). Staged locally and
+// applied on confirm, so tapping through options doesn't fire a fetch per change.
+function FiltersDialog({ filters, users, isManager, onApply, onClose }: {
+  filters: { priority: string; status: string; assignee: string }
+  users: User[]
+  isManager: boolean
+  onApply: (f: { priority: string; status: string; assignee: string }) => void
+  onClose: () => void
+}) {
+  useEscape(onClose)
+  const [f, setF] = useState({ priority: filters.priority, status: filters.status, assignee: filters.assignee })
+  return (
+    <div className="modal-center" onClick={onClose}>
+      <div className="modal search-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Filter tasks">
+        <div className="card-head spread"><h3>Filter tasks</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
+        <div className="card-pad grid" style={{ gap: 12 }}>
+          <label>Priority
+            <select value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })}>
+              <option value="">All priorities</option>
+              {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
+            </select>
+          </label>
+          <label>Status
+            <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
+              <option value="">All statuses</option>
+              {['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened'].map((s) => <option key={s}>{s}</option>)}
+            </select>
+          </label>
+          {isManager && (
+            <label>Assignee
+              <select value={f.assignee} onChange={(e) => setF({ ...f, assignee: e.target.value })}>
+                <option value="">All assignees</option>
+                <option value="unassigned">Unassigned</option>
+                {users.filter((u) => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </label>
+          )}
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+            <button className="btn" onClick={() => { onApply({ priority: '', status: '', assignee: '' }); onClose() }}>Clear all</button>
+            <button className="btn btn-primary" onClick={() => { onApply(f); onClose() }}>Apply filters</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Tasks({ personal = false }: { personal?: boolean }) {
   const { user } = useAuth()
   // Dashboard KPI cards deep-link here, e.g. /tasks?view=completed or
@@ -289,6 +337,8 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const [view, setView] = useState<'list' | 'board'>('list')
   // Search is collapsed to just an icon by default; tapping it reveals the input.
   const [searchOpen, setSearchOpen] = useState(false)
+  // Mobile-only Filters dialog (the inline desktop dropdowns are CSS-hidden on phones).
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [quickView, setQuickView] = useState<'active' | 'overdue' | 'today' | 'completed'>(initialQuick)
   const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: searchParams.get('priority') || '', status: searchParams.get('status') || '', assignee: searchParams.get('assignee') || '' })
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'time', dir: 'desc' })
@@ -296,6 +346,10 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const toggleSort = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
 
   const [loadError, setLoadError] = useState(false)
+  // True only until the FIRST response lands. Without it, the initial fetch is
+  // indistinguishable from a genuinely empty list, so users briefly saw the
+  // "You're all caught up!" empty state before their rows popped in.
+  const [loading, setLoading] = useState(true)
   // Guard against out-of-order responses: only the latest request may apply state.
   const reqIdRef = useRef(0)
   const load = () => {
@@ -305,8 +359,8 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     Object.entries(filters).forEach(([k, v]) => v && p.set(k, v))
     if (personal) p.set('mine', '1') // My Tasks: only the current user's own tasks
     api.get('/tasks?' + p.toString())
-      .then((d) => { if (myReq === reqIdRef.current) setTasks(d) })
-      .catch(() => { if (myReq === reqIdRef.current) setLoadError(true) })
+      .then((d) => { if (myReq === reqIdRef.current) { setTasks(d); setLoading(false) } })
+      .catch(() => { if (myReq === reqIdRef.current) { setLoadError(true); setLoading(false) } })
   }
   // Re-fetch on `personal` too: /tasks and /my-tasks reuse this same component, so
   // navigating between them flips `personal` without changing `filters` — without
@@ -358,10 +412,11 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
   // Android back button: close the open task drawer / new-task modal first.
   useEffect(() => pushBackHandler(() => {
+    if (filtersOpen) { setFiltersOpen(false); return true }
     if (showNew) { setShowNew(false); return true }
     if (openId) { setOpenId(null); return true }
     return false
-  }), [showNew, openId])
+  }), [showNew, openId, filtersOpen])
 
   // In "My Tasks" (personal) mode, behave like a personal board even for managers:
   // own tasks only, no assignee column/picker, and new tasks are private.
@@ -384,7 +439,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       default: return t.status !== 'Done' // 'active'
     }
   }
-  const visibleTasks = tasks.filter((t) => matchesQuick(t, quickView))
+  const visibleTasks = useMemo(() => tasks.filter((t) => matchesQuick(t, quickView)), [tasks, quickView])
   const QUICK_CHIPS: { key: typeof quickView; label: string; danger?: boolean }[] = [
     { key: 'active', label: 'Active' },
     { key: 'overdue', label: 'Overdue', danger: true },
@@ -402,8 +457,9 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
   // Group tasks by their activity day, sort WITHIN each day by the active column,
   // and keep the day groups newest-first — so changing the sort only reorders rows
-  // inside a date, never the dates themselves.
-  const groupedByDay = (() => {
+  // inside a date, never the dates themselves. Memoized: this grouping+sort used
+  // to recompute on every keystroke-driven re-render.
+  const groupedByDay = useMemo(() => {
     const groups: Record<string, Task[]> = {}
     for (const t of visibleTasks) {
       const day = (givenOf(t) || '').slice(0, 10) || 'No date'
@@ -417,17 +473,17 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     }
     const keys = Object.keys(groups).sort((a, b) => (a === 'No date' ? 1 : b === 'No date' ? -1 : b.localeCompare(a)))
     return keys.map((day) => ({ day, items: groups[day] }))
-  })()
+  }, [visibleTasks, sort.key, sort.dir])
 
   // Priority sort is special: instead of grouping by day, mix ALL tasks across
   // every date into one flat list ordered purely by priority (Critical → High →
   // Medium → Low). Ties keep newest-activity-first. Only the priority column
   // behaves this way; every other column stays day-grouped.
-  const sortedByPriority = [...visibleTasks].sort((a, b) => {
+  const sortedByPriority = useMemo(() => [...visibleTasks].sort((a, b) => {
     const cmp = cmpAsc(a, b, 'priority')
     if (cmp !== 0) return sort.dir === 'desc' ? -cmp : cmp
     return givenOf(b).localeCompare(givenOf(a)) // tie-break: newest first
-  })
+  }), [visibleTasks, sort.dir])
 
   // Friendly heading for a day group, e.g. "Today · Wednesday, 11 June 2026".
   const dayHeading = (day: string) => {
@@ -440,20 +496,27 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     return rel ? `${rel} · ${full}` : full
   }
 
+  // Every mutation endpoint returns the updated task — patch it into the list in
+  // place instead of re-fetching everything (a full reload after each inline edit
+  // made the whole table flash and re-render). Failures fall back to a reload.
+  const patchTask = (updated: Task) => setTasks((ts) => ts.map((t) => (t.id === updated.id ? updated : t)))
+
   // Inline assign from the table row (managers only). Sets owner + flips confidence to confirmed.
   const assign = (taskId: string, userId: string) => {
     if (!userId) return
-    api.patch(`/tasks/${taskId}`, { assignee_id: userId }).then(load)
+    api.patch(`/tasks/${taskId}`, { assignee_id: userId }).then(patchTask).catch(() => load())
   }
   // Inline priority change from the report row (managers only).
-  const changePriority = (taskId: string, priority: string) => api.patch(`/tasks/${taskId}`, { priority }).then(load)
+  const changePriority = (taskId: string, priority: string) =>
+    api.patch(`/tasks/${taskId}`, { priority }).then(patchTask).catch(() => load())
   // Inline approve: a manager marks an In-Review task as Done straight from the row.
-  const markDone = (taskId: string) => api.post(`/tasks/${taskId}/approve`, { decision: 'approved' }).then(load)
+  const markDone = (taskId: string) =>
+    api.post(`/tasks/${taskId}/approve`, { decision: 'approved' }).then(patchTask).catch(() => load())
 
   // Board drag-and-drop: optimistically move the card, then persist via the status API.
   const moveStatus = (taskId: string, status: string) => {
     setTasks((ts) => ts.map((t) => (t.id === taskId ? { ...t, status } : t)))
-    api.post(`/tasks/${taskId}/status`, { status }).then(load).catch(() => load())
+    api.post(`/tasks/${taskId}/status`, { status }).then(patchTask).catch(() => load())
   }
 
   // Clickable, sortable column header. Active column shows the direction arrow; the
@@ -466,7 +529,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
   const renderRow = (t: Task) => (
     <tr key={t.id} className={'clickable ' + rowClass(t)} onClick={() => setOpenId(t.id)}>
-      <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><ConfidenceTag c={t.ownership_confidence} /></td>
+      <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><span className="row" style={{ gap: 6 }}><ConfidenceTag c={t.ownership_confidence} /><CategoryBadge c={t.category} /></span></td>
       <td data-label="Priority">
         {isManager ? (
           <select
@@ -519,10 +582,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   )
 
   // Completed archive: accepted/done tasks, newest completion first, with both dates.
-  const completedRows = [...visibleTasks].sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
+  const completedRows = useMemo(
+    () => [...visibleTasks].sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || '')),
+    [visibleTasks])
   const renderCompletedRow = (t: Task) => (
     <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
-      <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div></td>
+      <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><CategoryBadge c={t.category} /></td>
       <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
       {!personal && (
         <td data-label="Assignee">
@@ -565,6 +630,17 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               onPick={(key) => setSort({ key, dir: key === 'time' || key === 'priority' ? 'desc' : 'asc' })}
             />
           )}
+          {/* MOBILE-ONLY: the priority/status/assignee filters, in a dialog — the
+              inline desktop dropdowns below are hidden on phones, which used to
+              leave mobile with no way to filter at all. */}
+          <button className="icon-btn toolbar-filterbtn" onClick={() => setFiltersOpen(true)} title="Filter tasks" aria-label="Filter tasks">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polygon points="22 3 2 3 10 12.5 10 19 14 21 14 12.5 22 3" />
+            </svg>
+            {(Number(!!filters.priority) + Number(!!filters.status) + Number(!!filters.assignee)) > 0 && (
+              <span className="filterbtn-dot">{Number(!!filters.priority) + Number(!!filters.status) + Number(!!filters.assignee)}</span>
+            )}
+          </button>
           <button className="btn btn-primary btn-sm toolbar-newtask" onClick={() => setShowNew(true)}>+ New task</button>
         </div>
         {/* DESKTOP: the three filter dropdowns (+ sortable column headers). Hidden on
@@ -624,6 +700,11 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         <div className="card">
           <EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load tasks" hint="Check your connection and try again."
             action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
+        </div>
+      ) : loading ? (
+        /* First fetch in flight: skeleton rows, never the "all caught up" empty state. */
+        <div className="card table-card-wrap" aria-busy="true">
+          <div className="card-pad">{Array.from({ length: 6 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div>
         </div>
       ) : view === 'board' ? (
         tasks.length === 0 ? (
@@ -706,9 +787,26 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         </>
       )}
 
-      {openId && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={load} />}
+      {/* Mobile floating action button — the primary "add" action, in thumb reach.
+          Replaces the toolbar "+ New task" button on phones (hidden there via CSS). */}
+      <button className="fab-newtask" onClick={() => setShowNew(true)} aria-label={personal ? 'New personal task' : 'New task'} title={personal ? 'New personal task' : 'New task'}>
+        <Ic name="plus" size={24} />
+      </button>
+
+      {/* Drawer edits patch the single row in place when the mutation returned the
+          updated task; anything else (delete, uploads) falls back to a reload. */}
+      {openId && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
+      {filtersOpen && (
+        <FiltersDialog
+          filters={filters}
+          users={users}
+          isManager={isManager}
+          onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }}
+          onClose={() => setFiltersOpen(false)}
+        />
+      )}
     </>
   )
 }
@@ -729,10 +827,33 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
   const setPriority = (priority: string) =>
     setForm((f: any) => ({ ...f, priority, due_date: dueManual ? f.due_date : dueDateForPriority(priority) }))
   const [busy, setBusy] = useState(false)
+  // Reference files staged in the form; uploaded to the task right AFTER it's
+  // created (the task has no id until then). Images/PDFs/videos up to 50 MB.
+  const ATTACH_MAX = 50 * 1024 * 1024
+  const [files, setFiles] = useState<File[]>([])
+  const fileInput = useRef<HTMLInputElement>(null)
+  const addFiles = (list: FileList | null) => {
+    if (!list) return
+    const picked = Array.from(list)
+    const ok = picked.filter((f) => (/^(image|video)\//.test(f.type) || f.type === 'application/pdf') && f.size <= ATTACH_MAX)
+    const rejected = picked.length - ok.length
+    if (rejected) toast.error(`${rejected} file(s) skipped — only images, PDFs and videos under 50 MB are allowed.`)
+    setFiles((prev) => [...prev, ...ok])
+    if (fileInput.current) fileInput.current.value = ''
+  }
+  const removeFile = (i: number) => setFiles((prev) => prev.filter((_, idx) => idx !== i))
   const save = async () => {
     if (!form.title) return
     setBusy(true)
-    try { await api.post('/tasks', { ...form, personal: asPersonal }); onCreated() } finally { setBusy(false) }
+    try {
+      const created = await api.post('/tasks', { ...form, personal: asPersonal })
+      // Upload staged attachments to the freshly-created task (best-effort per file).
+      for (const f of files) {
+        try { await api.upload(`/tasks/${created.id}/attachments`, f) }
+        catch { toast.error(`Couldn't attach ${f.name}`) }
+      }
+      onCreated()
+    } finally { setBusy(false) }
   }
 
   // ---- Voice input: record a short clip and transcribe it SERVER-SIDE (Sarvam /
@@ -882,6 +1003,29 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
             <div><label>Priority</label><select value={form.priority} onChange={(e) => setPriority(e.target.value)}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
             {!asPersonal && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}</select></div>}
             <div><label>Due date {!dueManual && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto from priority</span>}</label><input type="date" value={form.due_date} onChange={(e) => { setDueManual(true); setForm({ ...form, due_date: e.target.value }) }} /></div>
+          </div>
+          <div><label>Category {!form.category && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto-detected if left blank</span>}</label>
+            <select value={form.category || ''} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+              <option value="">Auto-detect</option>
+              {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label>Attachments <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· reference images, PDFs or videos</span></label>
+            <input ref={fileInput} type="file" multiple accept="image/*,application/pdf,video/*" style={{ display: 'none' }} onChange={(e) => addFiles(e.target.files)} />
+            <button type="button" className="btn btn-sm row" style={{ gap: 6 }} onClick={() => fileInput.current?.click()}><Ic name="attach" size={14} /> Attach files</button>
+            {files.length > 0 && (
+              <div className="attach-stage">
+                {files.map((f, i) => (
+                  <div key={i} className="attach-chip">
+                    <Ic name={f.type.startsWith('image/') ? 'image' : f.type.startsWith('video/') ? 'video' : 'doc'} size={14} />
+                    <span className="attach-chip-name" title={f.name}>{f.name}</span>
+                    <span className="muted" style={{ fontSize: 11 }}>{fmtBytes(f.size)}</span>
+                    <button type="button" className="attach-chip-x" onClick={() => removeFile(i)} aria-label={`Remove ${f.name}`}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>

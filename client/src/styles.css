@@ -351,6 +351,10 @@ tbody tr:hover { background: var(--n-50); }
 .hbar-row.clickable:focus-visible { outline: none; background: color-mix(in srgb, var(--primary) 9%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent); }
 .hbar-label { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; }
 .hbar-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Small role chip in the workload list (managers / admins). */
+.hbar-role { flex-shrink: 0; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  padding: 1px 6px; border-radius: 999px; color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent); border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent); }
 /* Same dimensions as the Tasks-by-status bars (.bar-track): 7px tall, fully rounded. */
 .hbar-track { background: var(--n-100); border-radius: 20px; height: 7px; overflow: hidden; width: 100%; }
 .hbar-fill { display: block; height: 100%; border-radius: 20px; min-width: 2px; transition: width .5s; }
@@ -485,6 +489,20 @@ tbody tr:hover { background: var(--n-50); }
 
 /* ===== Voice assistant (hands-free "hey BTM") ===== */
 .va-root { position: fixed; right: 20px; bottom: 20px; z-index: 1200; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+
+/* Wake-word status chip (shown while the panel is closed). Confirms the app is
+   listening for the phrase and surfaces any problem instead of failing silently. */
+.va-wake-chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); font-size: 12px; color: var(--text); max-width: 260px; }
+.va-wake-chip b { font-weight: 700; }
+.va-wake-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.va-wake-chip--listening .va-wake-dot { background: #0f9d6e; animation: va-wake-blink 1.4s ease-in-out infinite; }
+.va-wake-chip--loading .va-wake-dot { background: #d98a0b; animation: va-wake-blink .8s ease-in-out infinite; }
+.va-wake-chip--awaiting-gesture .va-wake-dot { background: #2f6fd0; }
+.va-wake-chip--error { color: var(--muted); }
+.va-wake-chip--error .va-wake-dot { background: #e2483a; }
+@keyframes va-wake-blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .va-wake-chip--listening .va-wake-dot, .va-wake-chip--loading .va-wake-dot { animation: none; } }
 .va-fab { width: 56px; height: 56px; border-radius: 50%; border: none; background: var(--primary, #c5560f); color: #fff; display: grid; place-items: center; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,.22); transition: transform .12s ease, background .2s; }
 .va-fab:hover { background: #a8480c; }
 .va-fab--open { background: var(--muted); }
@@ -960,6 +978,10 @@ tbody tr:hover { background: var(--n-50); }
 .board-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .board-card-due { font-size: 12px; }
 .board-card-assignee { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+/* Per-card status select — the touch/keyboard path for moving a card
+   (HTML5 drag-and-drop never fires on touchscreens). */
+.board-card-move { width: 100%; font-size: 12px; font-weight: 600; padding: 6px 8px; border-radius: 7px; color: var(--muted); background: var(--n-50); border: 1px solid var(--border); }
+.board-card-move:hover { border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); color: var(--text); }
 
 .spinner { width: 16px; height: 16px; border: 2px solid var(--n-200); border-top-color: var(--primary); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1029,6 +1051,12 @@ tbody tr:hover { background: var(--n-50); }
 .sortmenu-item:hover { background: var(--bg); }
 .sortmenu-item.active { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-weight: 700; }
 .sortmenu-check { color: var(--primary); flex-shrink: 0; }
+
+/* Mobile-only Filters button (desktop shows the inline filter dropdowns instead).
+   The dot badge shows how many filters are currently applied. */
+.toolbar-filterbtn { display: none; position: relative; }
+@media (max-width: 720px) { .toolbar-filterbtn { display: inline-flex; } }
+.filterbtn-dot { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: #fff; font-size: 10.5px; font-weight: 800; display: grid; place-items: center; }
 
 /* Collapsible task search: an icon button that expands into an input */
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); flex-shrink: 0; transition: .15s; }
@@ -1329,5 +1357,137 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 @media (max-width: 720px) {
   .lb-card { grid-template-columns: 30px 34px 1fr auto; row-gap: 6px; }
   .lb-card .lb-winscore { display: none; }
+}
+
+/* ---- Task attachments -------------------------------------------------------- */
+/* Staged files in the New Task form (before upload) */
+.attach-stage { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.attach-chip { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--n-50); border: 1px solid var(--border); border-radius: 8px; }
+.attach-chip-name { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.attach-chip-x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 4px; border-radius: 6px; }
+.attach-chip-x:hover { background: var(--n-200); color: var(--text); }
+
+/* Uploaded attachments grid in the task drawer */
+.attach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.attach-item { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.attach-thumb { display: block; width: 100%; height: 84px; object-fit: cover; background: var(--n-100); }
+.attach-thumb img, .attach-thumb video { width: 100%; height: 84px; object-fit: cover; display: block; }
+.attach-thumb-file { display: grid; place-items: center; color: var(--muted); text-decoration: none; }
+.attach-meta { padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; }
+.attach-name { font-size: 12px; font-weight: 600; color: var(--text); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.attach-name:hover { text-decoration: underline; }
+.attach-item-x { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border: 0; border-radius: 6px; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; font-size: 12px; line-height: 1; display: grid; place-items: center; }
+.attach-item-x:hover { background: rgba(220,38,38,.9); }
+
+/* ============================================================================
+   MOBILE APP SHELL v2 — makes the phone experience read like a native app, not a
+   scaled-down website. Three moves: (1) a thumb-reach bottom tab bar + FAB,
+   (2) compact single-line task rows (kills the tall label:value reflow), and
+   (3) a flatter surface treatment (elevation only where things truly float).
+   Everything here is scoped to phone widths — desktop is untouched.
+   ============================================================================ */
+
+/* Bottom tab bar + FAB are desktop-hidden by default. */
+.bottom-nav, .fab-newtask { display: none; }
+
+@media (max-width: 720px) {
+  /* --- Bottom tab bar ------------------------------------------------------ */
+  .bottom-nav {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 35;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    -webkit-backdrop-filter: saturate(1.4) blur(10px); backdrop-filter: saturate(1.4) blur(10px);
+    border-top: 1px solid var(--border);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -4px 16px rgba(31,26,22,.07);
+  }
+  .bn-item {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px; padding: 6px 2px;
+    border: none; background: transparent; color: var(--n-500);
+    font-size: 10.5px; font-weight: 600; text-decoration: none; border-radius: 12px;
+    position: relative; transition: color .14s ease;
+  }
+  .bn-item .bn-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bn-ic { display: inline-flex; }
+  .bn-item.active { color: var(--primary); }
+  /* Soft pill behind the active tab's icon so the current section reads at a glance. */
+  .bn-item.active .bn-ic { position: relative; }
+  .bn-item.active .bn-ic::before {
+    content: ''; position: absolute; inset: -6px -14px; border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 12%, transparent); z-index: -1;
+  }
+  .bn-badge {
+    position: absolute; top: 2px; left: 50%; margin-left: 6px;
+    background: #ef4444; color: #fff; border-radius: 10px; min-width: 16px; height: 16px;
+    font-size: 10px; font-weight: 700; display: grid; place-items: center; padding: 0 4px;
+  }
+
+  /* Reserve room so page content and floating UI clear the bar. */
+  .content { padding-bottom: calc(74px + env(safe-area-inset-bottom, 0px)); }
+  .va-root { bottom: calc(140px + env(safe-area-inset-bottom, 0px)); }
+  .toast-host { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
+
+  /* --- Floating "New task" action ----------------------------------------- */
+  .fab-newtask {
+    display: grid; place-items: center; position: fixed; right: 16px; z-index: 34;
+    bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+    width: 54px; height: 54px; border-radius: 50%; border: none; color: #fff;
+    background: linear-gradient(135deg, #d4631a, var(--primary));
+    box-shadow: 0 8px 22px rgba(197,86,15,.44);
+    transition: transform .12s ease, box-shadow .2s ease;
+  }
+  .fab-newtask:active { transform: scale(.93); box-shadow: 0 4px 12px rgba(197,86,15,.4); }
+  /* The FAB replaces the inline toolbar button on phones. */
+  .toolbar-newtask { display: none; }
+
+  /* --- Flatter surfaces (less "template" candy) --------------------------- */
+  /* Elevation is reserved for things that genuinely float — menus, modals, the
+     FAB, and the one primary button. Everything resting on the page goes flat. */
+  .card, .kpi, .stat-card, .pbi-card, .task-mini, .sortmenu-btn,
+  .table-cards tr { box-shadow: none; }
+  .card, .pbi-card { border-radius: 12px; }
+  .kpi { border-radius: 12px; background: var(--surface); }   /* drop the radial wash */
+  .kpi::before { width: 3px; }
+  .btn { box-shadow: none; }
+  .btn-primary { box-shadow: 0 2px 6px rgba(197,86,15,.28); } /* keep the primary lifted */
+
+  /* --- Condensed dashboard: KPIs become one swipeable strip --------------- */
+  .pbi-kpis {
+    display: flex; grid-template-columns: none; gap: 10px; overflow-x: auto;
+    scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px; margin: 0 -16px; padding-left: 16px; padding-right: 16px;
+  }
+  .pbi-kpis::-webkit-scrollbar { display: none; }
+  .pbi-kpis > * { scroll-snap-align: start; flex: 0 0 46%; }
+  .pbi-body { gap: 12px; }
+}
+
+/* --- Compact single-line task rows (the big scrolling win) ---------------- */
+/* Replaces the tall "label : value" card reflow (defined above at 640px) with a
+   tight card: title on top, then one wrapping meta line. ~1/3 the height. */
+@media (max-width: 640px) {
+  .table-cards tr {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px;
+    padding: 12px 14px; margin-bottom: 10px; border-radius: 12px;
+  }
+  .table-cards td {
+    display: inline-flex; align-items: center; width: auto; padding: 0;
+    border: none; text-align: left; justify-content: flex-start; gap: 5px; font-size: 12.5px;
+  }
+  /* Drop the stacked field labels — badges, avatars and dates are self-describing. */
+  .table-cards td::before { display: none; }
+  .table-cards td .row { justify-content: flex-start; }
+  /* Title spans the full first line, a touch larger, no divider. */
+  .table-cards td.cell-title { display: block; flex: 1 1 100%; padding: 0; border: none; margin-bottom: 1px; }
+  .table-cards td.cell-title > div { font-size: 14.5px; line-height: 1.3; }
+  /* A bare date is ambiguous, so keep a tiny inline "Due" caption. */
+  .table-cards td[data-label="Due"]::before {
+    display: inline; content: 'Due'; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-right: 1px;
+  }
+  /* Assigned/created timestamp lives in the drawer — hide it on the row for height. */
+  .table-cards td[data-label="Time"] { display: none; }
+  /* Push the assignee to the far right of the meta line. */
+  .table-cards td[data-label="Assignee"] { margin-left: auto; }
 }
 

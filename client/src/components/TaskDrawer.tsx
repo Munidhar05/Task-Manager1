@@ -1,13 +1,17 @@
-import React, { useEffect, useState } from 'react'
-import { api, Task, User } from '../api'
+import React, { useEffect, useRef, useState } from 'react'
+import { api, Task, User, Attachment, taskAttachmentUrl } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes } from '../ui'
 import { confirmDialog } from '../lib/confirm'
+import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
 
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
-export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: string; onClose: () => void; onChange?: () => void }) {
+// onChange receives the updated task when the mutation returned one, so list pages
+// can patch that row in place instead of re-fetching everything; called with no
+// argument (→ caller should re-fetch) after deletes/uploads.
+export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void }) {
   const { user } = useAuth()
   const drawerRef = useDialog<HTMLDivElement>(onClose)
   const [task, setTask] = useState<Task | null>(null)
@@ -36,12 +40,29 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
 
   const mutate = async (fn: () => Promise<any>) => {
     setBusy(true)
-    try { const t = await fn(); if (t?.id) setTask(t); else await load(); onChange?.() }
+    try { const t = await fn(); if (t?.id) setTask(t); else await load(); onChange?.(t?.id ? t : undefined) }
     finally { setBusy(false) }
   }
   const setStatus = (status: string) => mutate(() => api.post(`/tasks/${taskId}/status`, { status }))
   const setAssignee = (assignee_id: string) => mutate(() => api.patch(`/tasks/${taskId}`, { assignee_id: assignee_id || null }))
   const setPriority = (priority: string) => mutate(() => api.patch(`/tasks/${taskId}`, { priority }))
+  const setCategory = (category: string) => mutate(() => api.patch(`/tasks/${taskId}`, { category: category || null }))
+  // Attach more reference files to an existing task (uploaded immediately).
+  const attachInput = useRef<HTMLInputElement>(null)
+  const ATTACH_MAX = 50 * 1024 * 1024
+  const uploadFiles = async (list: FileList | null) => {
+    if (!list) return
+    const picked = Array.from(list).filter((f) => (/^(image|video)\//.test(f.type) || f.type === 'application/pdf') && f.size <= ATTACH_MAX)
+    if (picked.length < list.length) toast.error('Some files were skipped — only images, PDFs and videos under 50 MB are allowed.')
+    setBusy(true)
+    try { for (const f of picked) { try { await api.upload(`/tasks/${taskId}/attachments`, f) } catch { toast.error(`Couldn't attach ${f.name}`) } } await load(); onChange?.() }
+    finally { setBusy(false); if (attachInput.current) attachInput.current.value = '' }
+  }
+  // Deleting an attachment is irreversible — confirm it like the task delete.
+  const removeAttachment = async (a: Attachment) => {
+    if (!(await confirmDialog({ title: 'Remove attachment', message: `Remove "${a.filename}"? This cannot be undone.`, confirmText: 'Remove', danger: true }))) return
+    mutate(() => api.del(`/tasks/attachments/${a.id}`))
+  }
   const setProgress = (progress: number) => mutate(() => api.patch(`/tasks/${taskId}`, { progress }))
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
@@ -68,6 +89,9 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     const valid = parts.filter((p) => p.title.trim() && p.assignee_id)
     if (!valid.length) return
     await mutate(() => api.post(`/tasks/${taskId}/split`, { parts: valid }))
+    // The response is only the parent, but the split CREATED new tasks — signal a
+    // no-payload change so list pages re-fetch instead of just patching the parent.
+    onChange?.()
     setShowSplit(false)
   }
   const del = async () => {
@@ -108,7 +132,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
       <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={task.title} onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread">
           <div className="row">
-            <PriorityBadge p={task.priority} /><StatusBadge s={task.status} />
+            <PriorityBadge p={task.priority} /><StatusBadge s={task.status} /><CategoryBadge c={task.category} />
             {task.visible_to_manager === 0 && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)', border: '1px solid var(--info-border)' }}><Ic name="lock" size={12} /> Private</span>}
           </div>
           <div className="row">
@@ -178,6 +202,15 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
                   {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
                 </select>
               ) : <PriorityBadge p={task.priority} />}
+            </div>
+            <div>
+              <label>Category</label>
+              {isManager ? (
+                <select value={task.category || ''} onChange={(e) => setCategory(e.target.value)}>
+                  <option value="">Uncategorized</option>
+                  {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              ) : (task.category ? <CategoryBadge c={task.category} /> : <div className="muted">Uncategorized</div>)}
             </div>
             <div>
               <label>Assigned by</label>
@@ -306,6 +339,41 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               {task.dependencies.map((d: any) => <div key={d.id} className="row" style={{ fontSize: 13 }}>↳ {d.title} <StatusBadge s={d.status} /></div>)}
             </div>
           )}
+
+          <div style={{ marginBottom: 14 }}>
+            <div className="spread" style={{ alignItems: 'center' }}>
+              <label style={{ margin: 0 }}>Attachments ({task.attachments?.length || 0})</label>
+              <input ref={attachInput} type="file" multiple accept="image/*,application/pdf,video/*" style={{ display: 'none' }} onChange={(e) => uploadFiles(e.target.files)} />
+              <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => attachInput.current?.click()} title="Attach images, PDFs or videos"><Ic name="attach" size={13} /> Attach</button>
+            </div>
+            {task.attachments && task.attachments.length > 0 && (
+              <div className="attach-grid" style={{ marginTop: 8 }}>
+                {task.attachments.map((a: Attachment) => {
+                  const isImg = (a.file_type || '').startsWith('image/')
+                  const isVid = (a.file_type || '').startsWith('video/')
+                  const canRemove = isManager || a.uploaded_by === user?.id
+                  return (
+                    <div key={a.id} className="attach-item">
+                      {isImg ? (
+                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb">
+                          <img src={taskAttachmentUrl(a.id)} alt={a.filename} loading="lazy" />
+                        </a>
+                      ) : isVid ? (
+                        <video className="attach-thumb" src={taskAttachmentUrl(a.id)} controls preload="metadata" />
+                      ) : (
+                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb attach-thumb-file"><Ic name="doc" size={26} /></a>
+                      )}
+                      <div className="attach-meta">
+                        <a href={taskAttachmentUrl(a.id, true)} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
+                        <span className="muted" style={{ fontSize: 11 }}>{fmtBytes(a.file_size)}</span>
+                      </div>
+                      {canRemove && <button className="attach-item-x" disabled={busy} onClick={() => removeAttachment(a)} aria-label={`Remove ${a.filename}`}>✕</button>}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
 
           <div>
             <label>Comments ({task.comments?.length || 0})</label>

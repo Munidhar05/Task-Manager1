@@ -7,6 +7,9 @@ const COLUMNS = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopen
 
 // A drag-and-drop Kanban board. Cards are grouped into one column per status;
 // dropping a card on another column moves it via onMove (which calls the status API).
+// Each card also carries a small status select — HTML5 drag-and-drop never fires
+// on touchscreens (and has no keyboard path), so without it the board would be
+// read-only on phones/tablets.
 export default function TaskBoard({ tasks, onOpen, onMove }: {
   tasks: Task[]
   onOpen: (id: string) => void
@@ -62,6 +65,15 @@ export default function TaskBoard({ tasks, onOpen, onMove }: {
                       <span>{t.assignee.name}</span>
                     </div>
                   )}
+                  <select
+                    className="board-card-move"
+                    value={t.status}
+                    aria-label={`Move "${t.title}" to another status`}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { if (e.target.value !== t.status) onMove(t.id, e.target.value) }}
+                  >
+                    {COLUMNS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
               ))}
               {items.length === 0 && <div className="board-col-empty">Drop tasks here</div>}
