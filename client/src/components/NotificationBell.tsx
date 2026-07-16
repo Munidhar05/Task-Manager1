@@ -120,15 +120,22 @@ export default function NotificationBell() {
 
   useEffect(() => {
     load()
-    const iv = setInterval(load, 15000) // poll every 15s
-    return () => clearInterval(iv)
+    // Poll every 15s, but never while the tab is hidden — a background tab (or a
+    // pocketed phone in the wrapped app) shouldn't burn network and battery.
+    // Catch up immediately when the user comes back.
+    const iv = setInterval(() => { if (!document.hidden) load() }, 15000)
+    const onVisible = () => { if (!document.hidden) load() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
 
-  // close on outside click
+  // close on outside click or Escape
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', h); document.removeEventListener('keydown', onKey) }
   }, [])
 
   const toggle = async () => {
@@ -147,7 +154,9 @@ export default function NotificationBell() {
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <button className="btn btn-ghost bell-btn" onClick={toggle} title="Notifications" style={{ position: 'relative', lineHeight: 1, padding: 6 }}>
+      <button className="btn btn-ghost bell-btn" onClick={toggle} title="Notifications"
+        aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+        aria-expanded={open} style={{ position: 'relative', lineHeight: 1, padding: 6 }}>
         <span className={vibrating ? 'bell-vibrate' : ''} style={{ display: 'inline-flex' }}><BellIcon /></span>
         {unread > 0 && (
           <span style={{ position: 'absolute', top: -2, right: -2, background: '#ef4444', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'grid', placeItems: 'center', padding: '0 4px' }}>

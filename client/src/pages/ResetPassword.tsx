@@ -61,7 +61,7 @@ export default function ResetPassword() {
                 </div>
                 <PasswordStrength password={password} />
               </div>
-              {err && <div className="login-err">{err}</div>}
+              {err && <div className="login-err" role="alert">{err}</div>}
               <button className="btn btn-primary login-btn" disabled={busy}>
                 {busy ? <span className="spinner" /> : 'UPDATE PASSWORD'}
               </button>

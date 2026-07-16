@@ -182,33 +182,53 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
   }, [])
   const audioAvailable = provider !== 'none'
 
+  // Real upload progress (0–100) while the audio file is in transit; null when idle
+  // or once the server side (transcription) has taken over.
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
+  const AUDIO_MAX = 25 * 1024 * 1024
+
   // Upload a full audio file → server transcribes it → extracts summary & tasks.
-  const uploadAudio = async (): Promise<string> => {
+  // XHR instead of fetch: fetch has no upload progress, and a 25 MB file on a slow
+  // connection looked hung behind a bare spinner.
+  const uploadAudio = (): Promise<string> => new Promise((resolve, reject) => {
     const form = new FormData()
     form.append('audio', audioFile!, audioFile!.name)
     form.append('title', title || 'Recorded Meeting')
     form.append('description', description)
     form.append('meeting_date', date)
     form.append('participant_ids', JSON.stringify(participants))
-    const res = await fetch(`${API_BASE}/api/meetings/audio`, { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.error || 'Audio processing failed')
-    return data.id
-  }
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_BASE}/api/meetings/audio`)
+    xhr.setRequestHeader('authorization', `Bearer ${getToken()}`)
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100)) }
+    xhr.onload = () => {
+      let data: any = {}
+      try { data = JSON.parse(xhr.responseText) } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data.id)
+      else reject(new Error(data.error || 'Audio processing failed'))
+    }
+    xhr.onerror = () => reject(new Error('Upload failed — check your connection and try again.'))
+    xhr.send(form)
+  })
 
   const process = async () => {
-    setErr(''); setBusy(true)
+    setErr('')
+    if (mode === 'audio') {
+      if (!audioFile) { setErr('Choose an audio file first.'); return }
+      // Catch an oversized file BEFORE spending minutes uploading it.
+      if (audioFile.size > AUDIO_MAX) { setErr(`That file is ${fileMB} MB — the limit is 25 MB. Try a compressed format like mp3 or m4a.`); return }
+    }
+    setBusy(true)
     try {
       let rid: string
       if (mode === 'audio') {
-        if (!audioFile) { setErr('Choose an audio file first.'); setBusy(false); return }
         rid = await uploadAudio()
       } else {
         const r = await api.post('/meetings', { title: title || 'Untitled Meeting', description, meeting_date: date, transcript, participant_ids: participants })
         rid = r.id
       }
       onDone(rid)
-    } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
+    } catch (e: any) { setErr(e.message) } finally { setBusy(false); setUploadPct(null) }
   }
 
   const fileMB = audioFile ? (audioFile.size / 1024 / 1024).toFixed(1) : null
@@ -217,7 +237,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="card-head spread"><h3>Upload meeting</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
+        <div className="card-head spread"><h3>Upload meeting</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="card-pad grid" style={{ gap: 12 }}>
           {/* source toggle */}
           <div className="row" style={{ gap: 8 }}>
@@ -256,11 +276,29 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
             </div>
           )}
 
-          {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
+          {err && <div style={{ color: '#ef4444', fontSize: 13 }} role="alert">{err}</div>}
+          {/* Honest progress: a real bar while bytes are in transit, then a clear
+              "server is working" line — so a slow upload never looks hung. */}
+          {busy && mode === 'audio' && (
+            <div aria-live="polite">
+              {uploadPct !== null && uploadPct < 100 ? (
+                <>
+                  <div className="bar-track"><div className="bar-fill" style={{ width: `${uploadPct}%`, background: 'var(--primary)' }} /></div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Uploading {fileMB} MB — {uploadPct}%</div>
+                </>
+              ) : (
+                <div className="muted" style={{ fontSize: 12 }}>Upload complete — transcribing and analyzing. This can take a minute or two for long recordings.</div>
+              )}
+            </div>
+          )}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
             <button className="btn btn-primary" onClick={process} disabled={busy || !canSubmit}>
-              {busy ? <><span className="spinner" /> {mode === 'audio' ? 'Transcribing & analyzing…' : 'Analyzing…'}</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}
+              {busy
+                ? <><span className="spinner" /> {mode === 'audio'
+                    ? (uploadPct !== null && uploadPct < 100 ? `Uploading… ${uploadPct}%` : 'Transcribing & analyzing…')
+                    : 'Analyzing…'}</>
+                : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}
             </button>
           </div>
         </div>

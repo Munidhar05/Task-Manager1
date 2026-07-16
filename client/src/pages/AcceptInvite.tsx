@@ -86,7 +86,7 @@ export default function AcceptInvite() {
                 </div>
                 <PasswordStrength password={password} />
               </div>
-              {err && <div className="login-err">{err}</div>}
+              {err && <div className="login-err" role="alert">{err}</div>}
               <button className="btn btn-primary login-btn" disabled={busy || !name.trim()}>
                 {busy ? <span className="spinner" /> : 'JOIN TEAM'}
               </button>

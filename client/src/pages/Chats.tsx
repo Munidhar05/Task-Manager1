@@ -140,7 +140,22 @@ export default function Chats() {
   // WhatsApp-style: do NOT auto-open a chat. The list is shown first; the user
   // taps a conversation to open it (and the back arrow returns to the list).
   useEffect(() => { if (activeId) { loadThread(activeId); setReplyTo(null); setEditing(null); setInSearch(''); setInSearchOpen(false); setShowInfo(false) } }, [activeId])
-  useEffect(() => { if (!inSearchOpen) logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [messages, busy, typingName, inSearchOpen])
+  // Auto-scroll only when the reader is already at (or near) the bottom, or the
+  // last message is their own — an incoming message must not yank someone who
+  // scrolled up to read history. Opening a thread always starts at the bottom.
+  const forceScrollRef = useRef(true)
+  useEffect(() => { forceScrollRef.current = true }, [activeId])
+  useEffect(() => {
+    const el = logRef.current
+    if (!el || inSearchOpen) return
+    const last = messages[messages.length - 1]
+    const mine = !!last && last.sender_id === user?.id
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    if (forceScrollRef.current || mine || nearBottom) {
+      el.scrollTo(0, el.scrollHeight)
+      if (messages.length) forceScrollRef.current = false
+    }
+  }, [messages, busy, typingName, inSearchOpen])
   useEffect(() => { const h = () => { setMenuId(null); setReactFor(null); setConvoMenu(null) }; document.addEventListener('click', h); return () => document.removeEventListener('click', h) }, [])
 
   // Android back button: close the top-most open layer (menu → modal → search →
@@ -212,9 +227,23 @@ export default function Chats() {
     return () => { closed = true; if (retry) clearTimeout(retry); try { wsRef.current?.close() } catch {} }
   }, [user?.id])
 
+  // Fallback refresh ONLY: the WebSocket above already pushes every change, so
+  // poll just when it's down — and never while the tab is hidden (battery/network).
+  // The old unconditional 25s wholesale refetch also flickered the thread and
+  // could momentarily drop in-flight optimistic messages.
   useEffect(() => {
-    const iv = setInterval(() => { loadConvos(); if (activeIdRef.current) loadThread(activeIdRef.current) }, 25000)
-    return () => clearInterval(iv)
+    const iv = setInterval(() => {
+      if (document.hidden) return
+      if (wsRef.current?.readyState === WebSocket.OPEN) return
+      loadConvos(); if (activeIdRef.current) loadThread(activeIdRef.current)
+    }, 25000)
+    // Catch up once when the user returns to the tab.
+    const onVisible = () => {
+      if (document.hidden) return
+      loadConvos(); if (activeIdRef.current) loadThread(activeIdRef.current)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
 
   // ---- composer actions ----
@@ -386,7 +415,7 @@ export default function Chats() {
                 {c.muted && <span title="Muted" style={{ display: 'inline-flex', opacity: .6, color: 'var(--muted)' }}><Ic name="muteBell" size={13} /></span>}
                 {c.unread > 0 && <span className={'chat-unread-badge' + (c.muted ? ' dim' : '')}>{c.unread > 9 ? '9+' : c.unread}</span>}
                 <div className="convo-menu-wrap">
-                  <button className="convo-menu-btn" title="Options" onClick={(e) => { e.stopPropagation(); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
+                  <button className="convo-menu-btn" title="Options" aria-label={`Options for ${c.name}`} onClick={(e) => { e.stopPropagation(); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
                   {convoMenu === c.id && (
                     <div className="msg-menu mine" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => setPref(c, 'pinned')}>{c.pinned ? 'Unpin' : 'Pin to top'}</button>
@@ -424,12 +453,12 @@ export default function Chats() {
                 </div>
               </div>
               <div className="row" style={{ marginLeft: 'auto', gap: 4 }}>
-                <button className="btn btn-ghost btn-sm" title="Search in chat" onClick={() => setInSearchOpen((o) => !o)}>
+                <button className="btn btn-ghost btn-sm" title="Search in chat" aria-label="Search in chat" onClick={() => setInSearchOpen((o) => !o)}>
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
                   </svg>
                 </button>
-                {active.type === 'group' && <button className="btn btn-ghost btn-sm" title="Group info" onClick={() => setShowInfo(true)}>ⓘ</button>}
+                {active.type === 'group' && <button className="btn btn-ghost btn-sm" title="Group info" aria-label="Group info" onClick={() => setShowInfo(true)}>ⓘ</button>}
               </div>
             </div>
           ) })()}
@@ -437,7 +466,7 @@ export default function Chats() {
           {inSearchOpen && (
             <div className="in-search">
               <input autoFocus placeholder="Search messages…" value={inSearch} onChange={(e) => setInSearch(e.target.value)} />
-              <button className="btn btn-ghost btn-sm" onClick={() => { setInSearch(''); setInSearchOpen(false) }}>✕</button>
+              <button className="btn btn-ghost btn-sm" aria-label="Close search" onClick={() => { setInSearch(''); setInSearchOpen(false) }}>✕</button>
             </div>
           )}
 
@@ -550,20 +579,22 @@ export default function Chats() {
               {replyTo && (
                 <div className="reply-banner">
                   <div className="reply-banner-body"><span className="reply-quote-name">Replying to {replyTo.sender_id === user!.id ? 'yourself' : senderName(replyTo.sender_id)}</span><span className="reply-quote-text row" style={{ gap: 5 }}>{replyTo.file ? <><Ic name="attach" size={12} /> {replyTo.file.name}</> : replyTo.body}</span></div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setReplyTo(null)}>✕</button>
+                  <button className="btn btn-ghost btn-sm" aria-label="Cancel reply" onClick={() => setReplyTo(null)}>✕</button>
                 </div>
               )}
               {editing && (
-                <div className="reply-banner editing"><div className="reply-banner-body"><span className="reply-quote-name">Editing message</span></div><button className="btn btn-ghost btn-sm" onClick={() => { setEditing(null); setInput('') }}>✕</button></div>
+                <div className="reply-banner editing"><div className="reply-banner-body"><span className="reply-quote-name">Editing message</span></div><button className="btn btn-ghost btn-sm" aria-label="Cancel editing" onClick={() => { setEditing(null); setInput('') }}>✕</button></div>
               )}
               <div className="chat-input">
                 <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={onPickFile} />
-                <button className="btn btn-ghost attach-btn" title="Attach a file" disabled={busy || !!editing} onClick={() => fileRef.current?.click()}>＋</button>
+                <button className="btn btn-ghost attach-btn" title="Attach a file" aria-label="Attach a file" disabled={busy || !!editing} onClick={() => fileRef.current?.click()}>＋</button>
                 <input
                   placeholder={editing ? 'Edit your message…' : 'Type a message…'}
                   value={input}
                   onChange={(e) => { setInput(e.target.value); if (!editing) sendTyping(true) }}
-                  onKeyDown={(e) => e.key === 'Enter' && send()}
+                  // isComposing guard: with Indic (Telugu/Hindi) and other IME keyboards,
+                  // Enter first COMMITS the composition — that keystroke must not send.
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) send() }}
                   onBlur={() => sendTyping(false)}
                   autoFocus
                 />

@@ -46,7 +46,7 @@ export default function ForgotPassword() {
                 <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username"
                   inputMode="email" placeholder="you@company.com" autoFocus />
               </div>
-              {err && <div className="login-err">{err}</div>}
+              {err && <div className="login-err" role="alert">{err}</div>}
               <button className="btn btn-primary login-btn" disabled={busy || !email.trim()}>
                 {busy ? <span className="spinner" /> : 'SEND RESET LINK'}
               </button>
