@@ -1,6 +1,7 @@
 // Claude-powered multilingual meeting analysis.
 // Used when ANTHROPIC_API_KEY is set; otherwise the orchestrator falls back to rules.js.
 import { detectLanguages } from './rules.js'
+import { CATEGORY_LABELS } from '../categories.js'
 
 // Only Telugu, Hindi and English are ever reported; drop anything else the model emits.
 const ALLOWED_LANGS = new Set(['en', 'hi', 'te'])
@@ -37,6 +38,7 @@ Rules for task extraction:
 - assignee_name MUST be chosen from the provided meeting attendees only. NEVER assign work to someone who is not in the attendee list, unless they are explicitly named in the transcript. Use the attendees' roles/departments as context to pick the best owner.
 - assignee_reasoning = a short sentence explaining WHY this person was chosen (e.g. "Directly addressed by name", "Owns the QA area and the task is testing").
 - confidence = an integer 0-100 reflecting how sure you are about the assignee (direct name mention => 85-95; inferred from role/context => 50-75; unclear => below 40).
+- category = which business unit / brand the task belongs to, chosen ONLY from: ${CATEGORY_LABELS.join(', ')}. Use the meeting's overall topic as context. Set null if it clearly fits none. NEVER invent a category outside this list.
 
 Accuracy rules:
 - Ignore greetings, introductions, jokes, and casual side discussions. Extract ONLY actionable work items.
@@ -61,7 +63,7 @@ Respond with ONLY a JSON object, no markdown, matching this shape:
     "title":"...","description":"...","assignee_name":"...|null","assigned_by_name":"...|null",
     "assignee_reasoning":"...","confidence":85,
     "due_date":"YYYY-MM-DD|null","due_date_raw":"...|null","priority":"High",
-    "ownership_confidence":"high|low|needs_confirmation","source_quote":"...","language":"en+te"
+    "ownership_confidence":"high|low|needs_confirmation","category":"${CATEGORY_LABELS[0]}|null","source_quote":"...","language":"en+te"
   }]
 }`
 
@@ -119,6 +121,7 @@ ${transcript}`
     due_date_raw: t.due_date_raw || null,
     priority: ['Critical', 'High', 'Medium', 'Low'].includes(t.priority) ? t.priority : 'Medium',
     ownership_confidence: t.ownership_confidence || (t.assignee_name ? 'high' : 'needs_confirmation'),
+    category: t.category || null,
     source_quote: t.source_quote || t.description || t.title,
     language: keepAllowedLangs(t.language).join('+') || detectLanguages(t.source_quote || t.title).join('+'),
   }))

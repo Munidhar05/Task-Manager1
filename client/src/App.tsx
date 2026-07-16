@@ -108,6 +108,11 @@ function Layout({ children }: { children: React.ReactNode }) {
   const base = '/' + (loc.pathname.split('/')[1] || '')
   const meta = TITLES[base] || TITLES['/']
   if (!user) return null
+  // The nav items this user can see, filtered once and shared by the sidebar
+  // (full list) and the mobile bottom bar (the first few, thumb-reachable).
+  const visibleNav = NAV.filter((n) => (n as any).platformOnly
+    ? !!user.platform_admin
+    : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly))
   return (
     <div className="app">
       <aside className={'sidebar' + (open ? ' open' : '')}>
@@ -119,9 +124,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <nav className="nav" onClick={() => setOpen(false)}>
-          {NAV.filter((n) => (n as any).platformOnly
-            ? !!user.platform_admin
-            : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly)).map((n) => (
+          {visibleNav.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
               <span className="nav-icon">{n.icon}</span>{n.label}
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
@@ -172,6 +175,25 @@ function Layout({ children }: { children: React.ReactNode }) {
         </header>
         <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
       </div>
+      {/* Mobile bottom tab bar — thumb-reachable quick nav to the core sections,
+          with a "More" button that opens the full sidebar drawer. Hidden on desktop. */}
+      <nav className="bottom-nav" aria-label="Primary">
+        {visibleNav.slice(0, 4).map((n) => (
+          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
+            <span className="bn-ic">{n.icon}</span>
+            <span className="bn-label">{n.label}</span>
+            {n.to === '/chats' && chatUnread > 0 && <span className="bn-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
+          </NavLink>
+        ))}
+        <button className="bn-item" onClick={() => setOpen(true)} aria-label="More menu">
+          <span className="bn-ic">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </span>
+          <span className="bn-label">More</span>
+        </button>
+      </nav>
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />

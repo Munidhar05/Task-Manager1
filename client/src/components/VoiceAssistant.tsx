@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useVoiceAssistant } from '../voice/useVoiceAssistant'
-import { useWakeWord, wakeWordConfigured, WakeStatus } from '../voice/wakeword'
+import { useWakeWord, wakeWordConfigured, wakeWordPhrase, WakeStatus } from '../voice/wakeword'
 import VoiceCard from './VoiceCard'
 
 const MicIcon = ({ size = 24 }: { size?: number }) => (
@@ -101,7 +101,7 @@ export default function VoiceAssistant() {
             {v.messages.length === 0 && (
               <div className="va-hint">
                 {!wakeWordConfigured() ? 'Tap the mic and speak.'
-                  : wake.status === 'listening' ? 'Say “hey BTM”, or tap the mic.'
+                  : wake.status === 'listening' ? `Say “${wakeWordPhrase()}”, or tap the mic.`
                   : wake.status === 'loading' ? 'Starting wake word…'
                   : wake.status === 'awaiting-gesture' ? 'Click anywhere to arm the wake word.'
                   : wake.status === 'error' ? `Wake word unavailable (${wake.detail || 'error'}) — tap the mic.`
@@ -149,11 +149,24 @@ export default function VoiceAssistant() {
           <button className="va-coach-x" onClick={dismissCoach} aria-label="Dismiss">✕</button>
           <span className="va-coach-badge">NEW</span>
           <div className="va-coach-title">Control the app with your voice</div>
-          <div className="va-coach-sub">Create tasks, check workload, open meetings — just talk. Tap the mic below, or say <b>“hey jarvis”</b>.</div>
+          <div className="va-coach-sub">Create tasks, check workload, open meetings — just talk. Tap the mic below{wakeWordConfigured() && <>, or say <b>“{wakeWordPhrase()}”</b></>}.</div>
           <div className="va-coach-actions">
             <button className="btn btn-primary btn-sm" onClick={() => { dismissCoach(); v.start() }}>Try it</button>
             <button className="va-coach-later" onClick={dismissCoach}>Got it</button>
           </div>
+        </div>
+      )}
+
+      {/* Wake-word status chip (only while the panel is closed + wake word on), so
+          it's visible that the app IS listening for the phrase — and diagnosable if
+          it isn't (loading / needs a click / errored). */}
+      {!v.open && wakeWordConfigured() && wake.status !== 'off' && (
+        <div className={'va-wake-chip va-wake-chip--' + wake.status} role="status">
+          <span className="va-wake-dot" />
+          {wake.status === 'listening' ? <>Listening for “<b>{wakeWordPhrase()}</b>”</>
+            : wake.status === 'loading' ? 'Starting wake word…'
+            : wake.status === 'awaiting-gesture' ? <>Tap anywhere to enable “<b>{wakeWordPhrase()}</b>”</>
+            : wake.status === 'error' ? 'Wake word off — tap the mic' : ''}
         </div>
       )}
 

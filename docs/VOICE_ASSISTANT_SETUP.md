@@ -49,18 +49,13 @@ release assets / via `openwakeword.utils.download_models()`.
 
 **Only remaining step — train `hey_btm.onnx`:**
 
-1. Open openWakeWord's automatic training notebook in Colab (it *synthesizes* the
-   training speech — you don't record anything):
-   <https://colab.research.google.com/github/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb>
-2. Set the target phrase to **`hey btm`** and run the notebook (roughly an hour,
-   mostly unattended; use a GPU runtime if offered).
-3. Download the exported **ONNX** model, rename it `hey_btm.onnx`, and put it in
-   `client/public/wakeword/`.
-4. Enable it in `client/.env` (and `client/.env.production` for builds):
-   ```
-   VITE_WAKEWORD_ENABLED=true
-   ```
-5. Rebuild the client. The assistant now shows "Say 'hey BTM', or tap the mic."
+👉 **Follow the step-by-step runbook: [HEY_BTM_TRAINING.md](HEY_BTM_TRAINING.md).**
+It has the exact Colab cells with every crash we already hit pre-patched (the
+`torchaudio.set_audio_backend` fix, the pronunciation variants, which steps to skip).
+In short: run openWakeWord's [automatic training notebook](https://colab.research.google.com/github/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb)
+(~1 hr, synthesizes its own speech), download `hey_btm.onnx` into
+`client/public/wakeword/`, remove the placeholder `VITE_WAKEWORD_MODEL_PATH` line
+from `client/.env`, and restart. `VITE_WAKEWORD_ENABLED=true` is already set.
 
 Verified model contract (so you know what the exported model must match):
 `melspectrogram` takes `[batch, samples]` → 32 mel bins; `embedding_model` takes
@@ -118,5 +113,9 @@ app. Usage is metered under the `voice_command` feature in the per-org usage sta
   plugin above; some browsers need a user interaction before speech works.
 - **"Voice control needs an AI engine configured":** set `OPENROUTER_API_KEY` (or
   Anthropic/OpenAI) on the server.
-- **Wake word never triggers:** confirm the two files are in
-  `client/public/porcupine/` and `VITE_PORCUPINE_ACCESS_KEY` is set, then rebuild.
+- **Wake word never triggers:** confirm `hey_btm.onnx` (plus the two shared models)
+  is in `client/public/wakeword/` and `VITE_WAKEWORD_ENABLED=true`, then restart the
+  dev server / rebuild. Open the browser console: if you see no `[wakeword] score …`
+  lines at all, the mic/plumbing isn't running (grant mic permission; it needs a user
+  gesture first); if scores peak below the threshold, lower `VITE_WAKEWORD_THRESHOLD`.
+  Full training + tuning steps: [HEY_BTM_TRAINING.md](HEY_BTM_TRAINING.md).

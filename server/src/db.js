@@ -435,6 +435,18 @@ export function initSchema() {
   ensureColumn('tasks', 'submitted_at', 'TEXT')
   ensureColumn('tasks', 'completed_at', 'TEXT')
   ensureColumn('tasks', 'visible_to_manager', 'INTEGER DEFAULT 1')
+  // Business-unit / brand category (DCAL, Rice, Global Shopper, 91GI, Taskmanager),
+  // auto-detected from the task text. NULL = Uncategorized. See categories.js.
+  ensureColumn('tasks', 'category', 'TEXT')
+  ensureColumn('suggested_tasks', 'category', 'TEXT')
+
+  // Task attachments: the original table only had `filename`. Enrich it to store
+  // the on-disk name, mime type, size and org (mirrors the chat_messages file
+  // model) so images/PDFs/videos attached to a task can be served + authorized.
+  ensureColumn('attachments', 'org_id', 'TEXT')
+  ensureColumn('attachments', 'stored_name', 'TEXT')   // generated name on disk (data/task_uploads)
+  ensureColumn('attachments', 'file_type', 'TEXT')     // mime type
+  ensureColumn('attachments', 'file_size', 'INTEGER')  // bytes
   ensureColumn('users', 'phone', "TEXT DEFAULT ''")
   ensureColumn('meetings', 'description', "TEXT DEFAULT ''")
 

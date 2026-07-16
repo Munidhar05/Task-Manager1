@@ -18,6 +18,7 @@ import { detectLanguages } from './rules.js'
 
 // Only these languages are ever reported — Telugu, Hindi, English. Anything else
 // the model emits (ml, ta, kn, …) is dropped so other languages never leak through.
+import { CATEGORY_LABELS } from '../categories.js'
 const ALLOWED_LANGS = new Set(['en', 'hi', 'te'])
 const keepAllowedLangs = (val) =>
   (Array.isArray(val) ? val : String(val || '').split('+'))
@@ -53,13 +54,14 @@ const TASK_RULES = `Rules for task extraction:
 - due_date_raw = the natural-language deadline phrase exactly as spoken ("by Friday", "repu", "kal", "before deployment"); null if none.
 - due_date = absolute YYYY-MM-DD resolved relative to the meeting date when possible.
 - source_quote = the exact transcript sentence (original language) that produced the task.
+- category = which business unit / brand the task belongs to, chosen ONLY from: ${CATEGORY_LABELS.join(', ')}. Use the meeting's overall topic as context. If it clearly fits none, set null. NEVER invent a category outside this list.
 - Ignore greetings, introductions, jokes, and casual side discussions. Extract ONLY actionable work items.`
 
 const TASK_SHAPE = `"tasks": [{
   "title":"... (English)","description":"... (English)","assignee_name":"...|null","assigned_by_name":"...|null",
   "assignee_reasoning":"... (English)","confidence":85,
   "due_date":"YYYY-MM-DD|null","due_date_raw":"...|null","priority":"High",
-  "ownership_confidence":"high|low|needs_confirmation","source_quote":"... (original language)","language":"en+te"
+  "ownership_confidence":"high|low|needs_confirmation","category":"${CATEGORY_LABELS[0]}|null","source_quote":"... (original language)","language":"en+te"
 }]`
 
 // One-shot prompt: full transcript -> complete analysis.
@@ -181,6 +183,7 @@ function normalizeTask(t) {
     due_date_raw: t.due_date_raw || null,
     priority: ['Critical', 'High', 'Medium', 'Low'].includes(t.priority) ? t.priority : 'Medium',
     ownership_confidence: t.ownership_confidence || (t.assignee_name ? 'high' : 'needs_confirmation'),
+    category: t.category || null, // validated/normalised later by persistMeeting
     source_quote: t.source_quote || t.description || t.title,
     language: keepAllowedLangs(t.language).join('+') || detectLanguages(t.source_quote || t.title || '').join('+'),
   }

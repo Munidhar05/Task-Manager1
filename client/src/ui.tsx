@@ -12,6 +12,21 @@ export const STATUS_COLORS: Record<string, string> = {
 }
 export const LANG_LABEL: Record<string, string> = { en: 'English', hi: 'हिन्दी', te: 'తెలుగు' }
 
+// Task categories (business units / brands). Keep in sync with server/src/categories.js.
+// The empty-string option represents "Uncategorized" (stored as null on the task).
+export const CATEGORY_COLORS: Record<string, string> = {
+  'DCAL': '#2f6fd0', '91GI': '#8b5cf6', 'Global Shopper': '#0f9d6e', 'Rice': '#d98a0b', 'Taskmanager': '#e2483a',
+}
+export const CATEGORY_OPTIONS = ['DCAL', '91GI', 'Global Shopper', 'Rice', 'Taskmanager']
+
+// Human-readable file size (e.g. 1.4 MB). Used for attachment chips.
+export function fmtBytes(n?: number | null): string {
+  if (!n || n < 0) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
 // Shared line-icon primitive — inherits currentColor and sizes to the text it
 // sits with. Replaces semantic emoji (which render differently per-OS, get read
 // aloud verbosely by screen readers, and read as informal). Emoji stay only in
@@ -66,6 +81,8 @@ const ICON_PATHS = {
   inbox: <><polyline points="22 12 16 12 14 15 10 15 8 12 2 12" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></>,
   forward: <><polyline points="15 17 20 12 15 7" /><path d="M4 18v-2a4 4 0 0 1 4-4h12" /></>,
   smile: <><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></>,
+  image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></>,
+  video: <><path d="m23 7-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" /></>,
 } as const
 
 export function Badge({ children, color, soft }: { children: React.ReactNode; color: string; soft?: boolean }) {
@@ -83,6 +100,11 @@ export function PriorityBadge({ p }: { p: string }) {
 }
 export function StatusBadge({ s }: { s: string }) {
   return <Badge color={STATUS_COLORS[s] || '#64748b'} soft>{s}</Badge>
+}
+// Category (business unit) tag. Renders nothing when the task is uncategorized.
+export function CategoryBadge({ c }: { c?: string | null }) {
+  if (!c) return null
+  return <Badge color={CATEGORY_COLORS[c] || '#64748b'} soft>{c}</Badge>
 }
 
 export function Avatar({ name, color, size = 28, src }: { name?: string; color?: string; size?: number; src?: string | null }) {

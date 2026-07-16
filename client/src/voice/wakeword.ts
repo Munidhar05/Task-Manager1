@@ -33,6 +33,12 @@ const DEBUG = (import.meta.env.VITE_WAKEWORD_DEBUG as string | undefined) === 't
 
 export const wakeWordConfigured = () => ENABLED
 
+// The spoken phrase to SHOW users. Must match whatever model is loaded — while the
+// placeholder "hey jarvis" model is active, the UI must say "hey jarvis" (telling
+// people to say "hey BTM" against the jarvis model means it never fires). Set
+// VITE_WAKEWORD_PHRASE to override; defaults to the real target phrase.
+export const wakeWordPhrase = () => (import.meta.env.VITE_WAKEWORD_PHRASE as string | undefined) || 'hey BTM'
+
 // What the detector is doing, so the UI can say so instead of failing silently.
 export type WakeStatus = 'off' | 'loading' | 'awaiting-gesture' | 'listening' | 'error'
 

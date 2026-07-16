@@ -4,6 +4,7 @@ import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify, dueDateForPriority } from '../util.js'
 import { analyzeMeetingTranscript, resolveUser, resolveUserAmong } from '../ai/extractor.js'
+import { resolveCategory, normalizeCategory } from '../categories.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 import { indexMeeting, indexTask, removeMeetingEmbeddings } from '../ai/ragIndex.js'
 import { recordUsage, estimateTokens } from '../ai/usage.js'
@@ -76,12 +77,12 @@ function createTaskFromSuggestion(s, { orgId, actorId, notifyAssignee = true }) 
   db.prepare(`INSERT INTO tasks
     (id, org_id, title, description, assignee_id, assignee_name_raw, assigned_by_id, assigned_by_name_raw,
      due_date, due_date_raw, priority, status, meeting_id, ownership_confidence, progress, approval_status, source_quote,
-     assigned_at, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     category, assigned_at, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     tid, orgId, s.title, s.description || s.title, s.suggested_assignee_id || null, s.suggested_assignee_raw || null,
     actorId, null, dueDate, s.due_date_raw || null,
     priority, 'To Do', s.meeting_id, s.suggested_assignee_id ? 'high' : 'needs_confirmation', 0, 'none',
-    s.source_quote || null, s.suggested_assignee_id ? now() : null, now(), now())
+    s.source_quote || null, s.category || null, s.suggested_assignee_id ? now() : null, now(), now())
   db.prepare("UPDATE suggested_tasks SET status='approved', created_task_id=?, updated_at=? WHERE id=?").run(tid, now(), s.id)
   if (notifyAssignee && s.suggested_assignee_id) {
     notify(orgId, s.suggested_assignee_id, 'task_assigned', `You were assigned "${s.title}"`, tid)
@@ -128,13 +129,15 @@ function persistMeeting({ orgId, userId, title, description, meetingDate, transc
     if (seen.has(key)) continue
     seen.add(key)
     const conf = Number.isFinite(t.confidence) ? Math.max(0, Math.min(100, Math.round(t.confidence))) : (assignee ? 80 : 30)
+    // Hybrid category: keyword match on the task text wins, else the AI's guess.
+    const category = resolveCategory({ text: `${t.title} ${t.description || ''} ${t.source_quote || ''}`, aiSuggested: t.category })
     db.prepare(`INSERT INTO suggested_tasks
       (id, meeting_id, org_id, title, description, suggested_assignee_id, suggested_assignee_raw, assignee_reasoning,
-       confidence, priority, due_date, due_date_raw, source_quote, status, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+       confidence, priority, due_date, due_date_raw, source_quote, category, status, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id('sug'), mid, orgId, t.title, t.description || t.title, assignee?.id || null, t.assignee_name_raw || null,
       t.assignee_reasoning || null, conf, t.priority || 'Medium', t.due_date || null, t.due_date_raw || null,
-      t.source_quote || null, 'pending', now(), now())
+      t.source_quote || null, category, 'pending', now(), now())
     suggestionCount++
   }
 
@@ -299,6 +302,7 @@ r.patch('/suggestions/:sid', requireRole('manager', 'admin'), (req, res) => {
     if (f in b) { sets.push(`${f}=?`); args.push(b[f]) }
   }
   if ('confidence' in b) { sets.push('confidence=?'); args.push(Math.max(0, Math.min(100, Math.round(Number(b.confidence) || 0)))) }
+  if ('category' in b) { sets.push('category=?'); args.push(normalizeCategory(b.category)) }
   if ('suggested_assignee_id' in b) {
     const uid = b.suggested_assignee_id || null
     if (uid && !db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(uid, req.user.org_id)) {

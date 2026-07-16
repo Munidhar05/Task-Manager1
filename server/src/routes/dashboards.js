@@ -46,11 +46,13 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
   const overdue = tasks.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done')
 
   // Workload is derived from the scoped set in JS so it honours the date range.
-  const members = db.prepare("SELECT id, name, avatar_color FROM users WHERE org_id=? AND role='employee'").all(org)
+  // Everyone in the org is included (employees, managers AND admins) so the manager
+  // can see their own load and any tasks assigned to fellow managers/admins too.
+  const members = db.prepare('SELECT id, name, avatar_color, role FROM users WHERE org_id=?').all(org)
   const workload = members.map((u) => {
     const mine = tasks.filter((t) => t.assignee_id === u.id)
     return {
-      id: u.id, name: u.name, avatar_color: u.avatar_color,
+      id: u.id, name: u.name, avatar_color: u.avatar_color, role: u.role,
       open_count: mine.filter((t) => OPEN_STATUSES.includes(t.status)).length,
       done_count: mine.filter((t) => t.status === 'Done').length,
       overdue_count: mine.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done').length,
