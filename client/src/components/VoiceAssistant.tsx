@@ -1,0 +1,180 @@
+import React, { useEffect, useRef, useState } from 'react'
+import { useVoiceAssistant } from '../voice/useVoiceAssistant'
+import { useWakeWord, wakeWordConfigured, WakeStatus } from '../voice/wakeword'
+import VoiceCard from './VoiceCard'
+
+const MicIcon = ({ size = 24 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1" /><line x1="12" y1="19" x2="12" y2="22" />
+  </svg>
+)
+// Small AI sparkle — a static accent so the control reads as an intelligent voice
+// assistant, not a plain button. Filled, so it registers at small sizes.
+const SparkleIcon = ({ size = 13 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 2l1.9 5.6L19.5 9.5 13.9 11.4 12 17l-1.9-5.6L4.5 9.5l5.6-1.9z" />
+    <path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9z" />
+  </svg>
+)
+const SpeakerIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M11 5 6 9H2v6h4l5 4z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" />
+  </svg>
+)
+const SpeakerOffIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M11 5 6 9H2v6h4l5 4z" /><line x1="22" y1="9" x2="16" y2="15" /><line x1="16" y1="9" x2="22" y2="15" />
+  </svg>
+)
+
+const STATUS_LABEL: Record<string, string> = {
+  idle: 'Tap the mic and speak',
+  listening: 'Listening…',
+  processing: 'Thinking…',
+  speaking: 'Speaking…',
+  confirming: 'Say “yes” to confirm, or “no”',
+  error: 'Something went wrong',
+}
+
+export default function VoiceAssistant() {
+  const v = useVoiceAssistant()
+  const logRef = useRef<HTMLDivElement>(null)
+  const [wake, setWake] = useState<{ status: WakeStatus; detail?: string }>({ status: 'off' })
+  // Per-login coachmark: introduces voice (the app's core feature) once each time
+  // the user logs in. The flag is set when it shows (so it doesn't re-pop as they
+  // navigate — the assistant remounts per route) and CLEARED on login (see auth.tsx),
+  // so a fresh sign-in shows it again. Dismissed by Try it / Got it / ✕, by opening
+  // the assistant, or automatically after a while.
+  const [coach, setCoach] = useState(false)
+
+  // Wake word ("hey btm") — starts a session when heard. No-op until configured;
+  // paused while a session is already open so it doesn't retrigger mid-conversation.
+  useWakeWord({
+    enabled: !v.open,
+    onWake: v.start,
+    onStatus: (status, detail) => setWake({ status, detail }),
+  })
+
+  const dismissCoach = () => {
+    setCoach(false)
+    try { localStorage.setItem('befach_voice_coach', 'seen') } catch { /* storage off */ }
+  }
+
+  // Show the coachmark shortly after login (once per login), unless already shown
+  // this session. Marking it seen the moment it appears keeps it from re-popping
+  // when the assistant remounts on navigation.
+  useEffect(() => {
+    let seen = false
+    try { seen = localStorage.getItem('befach_voice_coach') === 'seen' } catch { seen = false }
+    if (seen) return
+    const show = setTimeout(() => {
+      setCoach(true)
+      try { localStorage.setItem('befach_voice_coach', 'seen') } catch { /* storage off */ }
+    }, 1400)
+    const hide = setTimeout(() => setCoach(false), 16000) // auto-hide so it's never sticky
+    return () => { clearTimeout(show); clearTimeout(hide) }
+  }, [])
+
+  // Opening the assistant counts as "seen".
+  useEffect(() => { if (v.open) dismissCoach() }, [v.open])
+
+  useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [v.messages, v.state])
+
+  return (
+    <div className="va-root">
+      {v.open && (
+        <div className="va-panel" role="dialog" aria-label="Voice assistant">
+          <div className="va-head">
+            <div className="va-title">
+              <span className={'va-dot va-dot--' + v.state} />
+              BTM Voice
+            </div>
+            <div className="row" style={{ gap: 4 }}>
+              <button className="btn btn-ghost btn-sm" title={v.ttsOn ? 'Mute voice replies' : 'Unmute voice replies'} onClick={() => v.setTtsOn(!v.ttsOn)}>
+                {v.ttsOn ? <SpeakerIcon /> : <SpeakerOffIcon />}
+              </button>
+              <button className="btn btn-ghost btn-sm" title="Close" onClick={v.close}>✕</button>
+            </div>
+          </div>
+
+          <div className="va-log" ref={logRef}>
+            {v.messages.length === 0 && (
+              <div className="va-hint">
+                {!wakeWordConfigured() ? 'Tap the mic and speak.'
+                  : wake.status === 'listening' ? 'Say “hey BTM”, or tap the mic.'
+                  : wake.status === 'loading' ? 'Starting wake word…'
+                  : wake.status === 'awaiting-gesture' ? 'Click anywhere to arm the wake word.'
+                  : wake.status === 'error' ? `Wake word unavailable (${wake.detail || 'error'}) — tap the mic.`
+                  : 'Tap the mic and speak.'}<br />
+                Try: “Create a high priority task for Reddy to finish the logo by Friday.”
+              </div>
+            )}
+            {v.messages.map((m, i) => (
+              <React.Fragment key={i}>
+                <div className={'va-msg va-msg--' + m.role}>{m.text}</div>
+                {/* Read tools return figures — show them, don't just say them. */}
+                {m.card && <VoiceCard data={m.card} />}
+              </React.Fragment>
+            ))}
+          </div>
+
+          {v.pending && (
+            <div className="va-confirm">
+              <div className="va-confirm-summary">{v.pending.summary}</div>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="btn btn-primary btn-sm" onClick={v.confirmPending}>✓ Confirm</button>
+                <button className="btn btn-sm" onClick={v.cancelPending}>✕ Cancel</button>
+              </div>
+            </div>
+          )}
+
+          <div className="va-foot">
+            <div className="va-status">{STATUS_LABEL[v.state] || ''}</div>
+            <button
+              className={'va-mic va-mic--' + v.state}
+              onClick={v.micButton}
+              title={v.state === 'listening' ? 'Stop' : 'Speak'}
+              style={v.state === 'listening' ? { boxShadow: `0 0 0 ${Math.round(v.level * 16)}px rgba(197,86,15,.12)` } : undefined}
+            >
+              {v.state === 'processing' ? <span className="spinner" /> : <MicIcon />}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* One-time first-visit coachmark, sitting just above the pill and pointing
+          at it, so people discover voice — the product's main feature. */}
+      {!v.open && coach && (
+        <div className="va-coach" role="dialog" aria-label="Voice assistant tip">
+          <button className="va-coach-x" onClick={dismissCoach} aria-label="Dismiss">✕</button>
+          <span className="va-coach-badge">NEW</span>
+          <div className="va-coach-title">Control the app with your voice</div>
+          <div className="va-coach-sub">Create tasks, check workload, open meetings — just talk. Tap the mic below, or say <b>“hey jarvis”</b>.</div>
+          <div className="va-coach-actions">
+            <button className="btn btn-primary btn-sm" onClick={() => { dismissCoach(); v.start() }}>Try it</button>
+            <button className="va-coach-later" onClick={dismissCoach}>Got it</button>
+          </div>
+        </div>
+      )}
+
+      {/* The signature control — voice is the product's core feature, so it's a
+          LABELLED pill (not an anonymous icon) with a gentle live pulse, so users
+          notice it and know what it does. Hidden while the panel is open (the panel
+          has its own footer mic + header ✕), so there's never a second mic. */}
+      {!v.open && (
+        <button
+          className="va-fab-pill"
+          onClick={v.start}
+          title="Control the app with your voice"
+          aria-label="Open voice assistant"
+        >
+          <span className="va-fab-ic"><MicIcon size={24} /><span className="va-fab-spark"><SparkleIcon size={12} /></span></span>
+          <span className="va-fab-label">
+            <span className="va-fab-title">Ask BTM</span>
+            <span className="va-fab-sub">AI voice assistant</span>
+          </span>
+        </button>
+      )}
+    </div>
+  )
+}

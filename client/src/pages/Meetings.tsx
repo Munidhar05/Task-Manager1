@@ -1,13 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { api, getToken } from '../api'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Capacitor } from '@capacitor/core'
+import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
-import { LANG_LABEL } from '../ui'
+import { LANG_LABEL, EmptyState, Ic } from '../ui'
+import { confirmDialog } from '../lib/confirm'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
 
 // Preset meeting titles for the dropdown; "Other" lets the user type a custom one.
-const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Both Tech and Marketing']
+const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Tech and Marketing Meeting']
 
 // Meeting-title field: a dropdown of presets plus an "Other" option that reveals
 // a free-text input. An existing custom title (not in the presets) opens as "Other".
@@ -25,7 +27,7 @@ function MeetingTitleSelect({ value, onChange }: { value: string; onChange: (v: 
       <select value={selectValue} onChange={(e) => pick(e.target.value)}>
         <option value="">Select meeting type…</option>
         {MEETING_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}
-        <option value="__other__">Other (enter manually)</option>
+        <option value="__other__">Other (Enter Title)</option>
       </select>
       {isOther && (
         <input style={{ marginTop: 8 }} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Enter meeting title" autoFocus />
@@ -44,16 +46,32 @@ Priya: Anjali, payment gateway ka testing aaj complete karo, it's urgent.`
 export default function Meetings() {
   const { user } = useAuth()
   const nav = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [meetings, setMeetings] = useState<any[]>([])
   const [showUpload, setShowUpload] = useState(false)
   const [showLive, setShowLive] = useState(false)
+
+  // The voice assistant starts a meeting by navigating to /meetings?live=1.
+  // Consume the flag so a refresh doesn't reopen the recorder.
+  useEffect(() => {
+    if (searchParams.get('live') !== '1') return
+    setShowLive(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('live')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
   const [editing, setEditing] = useState<any | null>(null)
-  const load = () => api.get('/meetings').then(setMeetings)
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState(false)
+  const load = () => {
+    setError(false)
+    api.get('/meetings').then((d) => { setMeetings(d); setLoaded(true) }).catch(() => { setError(true); setLoaded(true) })
+  }
   useEffect(() => { load() }, [])
   const isManager = user?.role !== 'employee'
 
   const del = async (m: any) => {
-    if (!window.confirm(`Delete "${m.title}" and its ${m.task_count || 0} extracted task(s)? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: 'Delete meeting', message: `Delete "${m.title}" and its ${m.task_count || 0} extracted task(s)? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return
     await api.del('/meetings/' + m.id)
     load()
   }
@@ -63,7 +81,7 @@ export default function Meetings() {
       <div className="toolbar">
         <div className="muted">{meetings.length} meeting(s) processed</div>
         {isManager && (
-          <div className="row" style={{ marginLeft: 'auto', gap: 8 }}>
+          <div className="row meetings-actions" style={{ gap: 8 }}>
             <button className="btn btn-primary" onClick={() => setShowLive(true)}>● Start meeting</button>
             <button className="btn" onClick={() => setShowUpload(true)}>+ Upload meeting</button>
           </div>
@@ -91,14 +109,27 @@ export default function Meetings() {
               </div>
               {isManager && (
                 <div className="row" style={{ gap: 6, marginTop: 12 }} onClick={(e) => e.stopPropagation()}>
-                  <button className="btn btn-sm" onClick={() => setEditing(m)}>✎ Edit</button>
-                  <button className="btn btn-sm btn-danger" onClick={() => del(m)}>🗑 Delete</button>
+                  <button className="btn btn-sm row" style={{ gap: 6 }} onClick={() => setEditing(m)}><Ic name="edit" size={14} /> Edit</button>
+                  <button className="btn btn-sm btn-danger row" style={{ gap: 6 }} onClick={() => del(m)}><Ic name="trash" size={14} /> Delete</button>
                 </div>
               )}
             </div>
           </div>
         ))}
-        {meetings.length === 0 && <div className="empty">No meetings yet. Upload one to see the AI extract tasks.</div>}
+        {!loaded && Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="card"><div className="card-pad"><span className="skeleton" style={{ height: 100, borderRadius: 10 }} /></div></div>
+        ))}
+        {loaded && error && (
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load meetings" hint="Check your connection and try again."
+              action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
+          </div>
+        )}
+        {loaded && !error && meetings.length === 0 && (
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <EmptyState icon={<Ic name="mic" size={40} />} title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." />
+          </div>
+        )}
       </div>
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} onDone={(id) => { setShowUpload(false); load(); nav('/meetings/' + id) }} />}
       {showLive && <LiveMeetingModal defaultSpeaker={user?.name || 'Manager'} onClose={() => setShowLive(false)} onDone={(id) => { setShowLive(false); load(); nav('/meetings/' + id) }} />}
@@ -147,7 +178,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
 
   // Is server-side speech-to-text available? (drives the audio option)
   useEffect(() => {
-    fetch('/api/health').then((r) => r.json()).then((d) => setProvider(d.transcription || 'none')).catch(() => {})
+    fetch(`${API_BASE}/api/health`).then((r) => r.json()).then((d) => setProvider(d.transcription || 'none')).catch(() => {})
   }, [])
   const audioAvailable = provider !== 'none'
 
@@ -159,7 +190,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
     form.append('description', description)
     form.append('meeting_date', date)
     form.append('participant_ids', JSON.stringify(participants))
-    const res = await fetch('/api/meetings/audio', { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
+    const res = await fetch(`${API_BASE}/api/meetings/audio`, { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || 'Audio processing failed')
     return data.id
@@ -190,8 +221,8 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
         <div className="card-pad grid" style={{ gap: 12 }}>
           {/* source toggle */}
           <div className="row" style={{ gap: 8 }}>
-            <button className={'btn btn-sm' + (mode === 'audio' ? ' btn-primary' : '')} onClick={() => setMode('audio')}>🎵 Upload audio file</button>
-            <button className={'btn btn-sm' + (mode === 'text' ? ' btn-primary' : '')} onClick={() => setMode('text')}>📝 Paste transcript</button>
+            <button className={'btn btn-sm row' + (mode === 'audio' ? ' btn-primary' : '')} style={{ gap: 6 }} onClick={() => setMode('audio')}><Ic name="music" size={14} /> Upload audio file</button>
+            <button className={'btn btn-sm row' + (mode === 'text' ? ' btn-primary' : '')} style={{ gap: 6 }} onClick={() => setMode('text')}><Ic name="note" size={14} /> Paste transcript</button>
           </div>
 
           <div className="grid grid-3" style={{ gap: 10 }}>
@@ -199,7 +230,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
             <div><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
           </div>
           <div><label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this meeting about?" /></div>
-          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} /></div>
+          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} autoSelectAll /></div>
 
           {mode === 'audio' ? (
             <div>
@@ -212,8 +243,8 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
               <label className="audio-drop">
                 <input type="file" accept="audio/*" style={{ display: 'none' }} onChange={(e) => { setAudioFile(e.target.files?.[0] || null); setErr('') }} />
                 {audioFile
-                  ? <span>🎵 <b>{audioFile.name}</b> <span className="muted">({fileMB} MB)</span> — click to change</span>
-                  : <span className="muted">🎤 Click to choose an audio file</span>}
+                  ? <span className="row" style={{ gap: 6 }}><Ic name="music" size={14} /> <b>{audioFile.name}</b> <span className="muted">({fileMB} MB)</span> — click to change</span>
+                  : <span className="muted row" style={{ gap: 6 }}><Ic name="mic" size={14} /> Click to choose an audio file</span>}
               </label>
               <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>The recording is transcribed (any language — Telugu / Hindi / English / mixed), then the summary &amp; tasks are generated in <b>English</b>.</div>
             </div>
@@ -229,7 +260,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
             <button className="btn btn-primary" onClick={process} disabled={busy || !canSubmit}>
-              {busy ? <><span className="spinner" /> {mode === 'audio' ? 'Transcribing & analyzing…' : 'Analyzing…'}</> : '✦ Analyze & extract tasks'}
+              {busy ? <><span className="spinner" /> {mode === 'audio' ? 'Transcribing & analyzing…' : 'Analyzing…'}</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}
             </button>
           </div>
         </div>
@@ -272,6 +303,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const [provider, setProvider] = useState('none')
   const [mode, setMode] = useState<'auto' | 'browser'>('browser')
   const [recording, setRecording] = useState(false)
+  const [paused, setPaused] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
@@ -283,7 +315,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const wsRef = useRef<WebSocket | null>(null)
   const pcmRef = useRef<PcmStream | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const recordingRef = useRef(false)
+  const recordingRef = useRef(false)  // true only while actively capturing (false when paused)
+  const pausedRef = useRef(false)
   const speakerRef = useRef(speaker)
   useEffect(() => { speakerRef.current = speaker }, [speaker])
   const transcriptRef = useRef('')
@@ -295,7 +328,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
 
   // Detect whether a server transcription provider is configured; prefer it if so.
   useEffect(() => {
-    fetch('/api/health').then((r) => r.json()).then((d) => {
+    fetch(`${API_BASE}/api/health`).then((r) => r.json()).then((d) => {
       const p = d.transcription || 'none'
       setProvider(p)
       setMode(p !== 'none' ? 'auto' : 'browser')
@@ -303,10 +336,10 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   }, [])
 
   useEffect(() => {
-    if (!recording) return
+    if (!recording || paused) return
     const id = setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => clearInterval(id)
-  }, [recording])
+  }, [recording, paused])
 
   // stop & clean up on unmount
   useEffect(() => () => {
@@ -315,6 +348,29 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     try { pcmRef.current?.stop() } catch {}
     try { wsRef.current?.close() } catch {}
     streamRef.current?.getTracks().forEach((t) => t.stop())
+    keepScreenAwake(false)
+  }, [])
+
+  // Keep the device screen on while a meeting is in progress (native only) — the
+  // WebView (and thus recording) is suspended if the screen sleeps.
+  const keepScreenAwake = (on: boolean) => {
+    if (!Capacitor.isNativePlatform()) return
+    import('@capacitor-community/keep-awake')
+      .then(({ KeepAwake }) => (on ? KeepAwake.keepAwake() : KeepAwake.allowSleep()))
+      .catch(() => {})
+  }
+
+  // Treat the app being backgrounded mid-capture (incoming call, screen lock,
+  // home button) as an interruption: pause and surface a Resume button.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    let handle: { remove: () => void } | undefined
+    import('@capacitor/app').then(({ App }) => {
+      App.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive && recordingRef.current) pauseRecording()
+      }).then((h) => { handle = h })
+    }).catch(() => {})
+    return () => { handle?.remove() }
   }, [])
 
   const appendLine = (text: string) => {
@@ -322,12 +378,51 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     setTranscript((prev) => (prev ? prev.replace(/\s*$/, '') + '\n' : '') + `${speakerRef.current || 'Speaker'}: ${text.trim()}`)
   }
 
+  // Browser (Web Speech) finals only. Android doesn't honour `continuous` and
+  // re-fires the SAME utterance as growing-prefix finals across auto-restarts
+  // ("I" → "I want" → "I want to assign a task"), plus slightly different
+  // re-recognitions ("task 2" vs "task to"). Appending each one stacks dozens of
+  // near-duplicate lines and makes the AI extract the same task many times.
+  // Fix: if a new final extends, is contained by, or shares most of a common
+  // prefix with the previous SAME-speaker line, replace that line (keep the
+  // longer text) instead of adding a new one. Genuinely new sentences still
+  // append. Server (auto/sarvam) modes keep using appendLine — their chunks are
+  // distinct, not growing prefixes.
+  const commitBrowserFinal = (text: string) => {
+    const clean = text.trim()
+    if (!clean) return
+    const speaker = speakerRef.current || 'Speaker'
+    const prefix = `${speaker}: `
+    setTranscript((prev) => {
+      const lines = prev ? prev.split('\n') : []
+      const last = lines[lines.length - 1]
+      if (last && last.startsWith(prefix)) {
+        const lastText = last.slice(prefix.length).trim()
+        const shorter = Math.min(lastText.length, clean.length)
+        let common = 0
+        while (common < shorter && lastText[common] === clean[common]) common++
+        const sameUtterance =
+          clean === lastText ||
+          clean.startsWith(lastText) ||
+          lastText.startsWith(clean) ||
+          (shorter > 0 && common / shorter >= 0.7)
+        if (sameUtterance) {
+          // keep whichever capture is longer (most complete)
+          lines[lines.length - 1] = clean.length >= lastText.length ? prefix + clean : last
+          return lines.join('\n')
+        }
+      }
+      lines.push(prefix + clean)
+      return lines.join('\n')
+    })
+  }
+
   // ---- AUTO mode: server STT, any language ----
   const uploadChunk = async (blob: Blob, prompt: string): Promise<string> => {
     const form = new FormData()
     form.append('audio', blob, 'chunk.webm')
     if (prompt) form.append('prompt', prompt) // prior text → consistent names/spelling
-    const res = await fetch('/api/meetings/transcribe', { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
+    const res = await fetch(`${API_BASE}/api/meetings/transcribe`, { method: 'POST', headers: { authorization: `Bearer ${getToken()}` }, body: form })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || 'Transcription failed')
     return data.text || ''
@@ -339,6 +434,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
     catch { setErr('Microphone permission denied. Allow mic access and try again.'); return }
     streamRef.current = stream
+    // A phone call grabs the mic → the track mutes/ends; treat that as an interruption.
+    stream.getAudioTracks().forEach((t) => {
+      t.onmute = () => { if (recordingRef.current) pauseRecording() }
+      t.onended = () => { if (recordingRef.current) pauseRecording() }
+    })
     recordingRef.current = true
     setRecording(true)
     ;(async () => {
@@ -359,8 +459,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // streams transcripts back. Captions appear ~1-2s after each spoken phrase.
   const startSarvamStream = async () => {
     setErr('')
-    const wsProto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${wsProto}://${location.host}/api/meetings/live?token=${getToken()}&language=unknown`)
+    const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=${encodeURIComponent(lang)}`))
     wsRef.current = ws
     recordingRef.current = true
     setRecording(true)
@@ -393,12 +492,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     rec.interimResults = true
     rec.lang = lang
     rec.onresult = (e: any) => {
-      let fin = '', intr = ''
+      let intr = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
-        if (r.isFinal) fin += r[0].transcript; else intr += r[0].transcript
+        if (r.isFinal) commitBrowserFinal(r[0].transcript); else intr += r[0].transcript
       }
-      if (fin.trim()) appendLine(fin)
       setInterim(intr)
     }
     rec.onerror = (e: any) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { setErr('Microphone permission denied.'); stop() } }
@@ -409,18 +507,52 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     try { rec.start() } catch {}
   }
 
-  const start = () => {
-    setSeconds(0)
+  // Spin up the capture engine for the current mode (used by both start & resume).
+  const beginCapture = () => {
     if (mode === 'auto') { provider === 'sarvam' ? startSarvamStream() : startAuto() }
     else startBrowser()
   }
-  const stop = () => {
-    recordingRef.current = false
-    setRecording(false)
-    setInterim('')
+  // Tear down the active capture engine without ending the session/transcript.
+  const teardownEngines = () => {
     try { recRef.current?.stop() } catch {}
     try { pcmRef.current?.stop(); pcmRef.current = null } catch {}
     try { wsRef.current?.close(); wsRef.current = null } catch {}
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null } catch {}
+  }
+
+  const start = () => {
+    setSeconds(0)
+    setPaused(false); pausedRef.current = false
+    keepScreenAwake(true)
+    beginCapture()
+  }
+
+  // Interruption: stop capturing but keep the session + transcript; show Resume.
+  const pauseRecording = () => {
+    if (!recordingRef.current || pausedRef.current) return
+    recordingRef.current = false   // halts capture loops / auto-restart
+    pausedRef.current = true
+    setPaused(true)
+    setTranscribing(false); setInterim('')
+    teardownEngines()
+  }
+  // Resume after an interruption: spin a fresh engine (old mic/ws may be dead).
+  const resumeRecording = () => {
+    if (!pausedRef.current) return
+    pausedRef.current = false
+    setPaused(false)
+    keepScreenAwake(true)
+    beginCapture()
+  }
+
+  const stop = () => {
+    recordingRef.current = false
+    pausedRef.current = false
+    setRecording(false)
+    setPaused(false)
+    setInterim('')
+    teardownEngines()
+    keepScreenAwake(false)
   }
 
   const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -448,16 +580,16 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             <div><label>Speaker label</label><input value={speaker} onChange={(e) => setSpeaker(e.target.value)} /></div>
           </div>
           <div><label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this meeting about?" /></div>
-          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} /></div>
+          <div><label>Participants <span className="muted" style={{ fontWeight: 400 }}>(only these people can be assigned tasks)</span></label><ParticipantPicker value={participants} onChange={setParticipants} autoSelectAll /></div>
 
           <div>
             <label>Recognition mode</label>
             <div className="row" style={{ gap: 8 }}>
-              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}>✦ Auto — any language</button>
+              <button className={'btn btn-sm' + (mode === 'auto' ? ' btn-primary' : '')} disabled={recording || !autoAvailable} onClick={() => setMode('auto')}><span className="row" style={{ gap: 6 }}><Ic name="ai" size={14} /> Auto (Telugu / Hindi / English)</span></button>
               <button className={'btn btn-sm' + (mode === 'browser' ? ' btn-primary' : '')} disabled={recording} onClick={() => setMode('browser')}>Browser captions (1 language)</button>
             </div>
             {mode === 'auto'
-              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Auto-detects Telugu / Hindi / English & code-mixing via <strong>{provider}</strong>. {provider === 'sarvam' ? 'Captions stream live — each phrase appears ~1-2s after it’s spoken.' : 'Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent).'} You can also edit the transcript before analyzing.</div>
+              ? <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Transcribes the selected language (with English mixed in) via <strong>{provider}</strong> — limited to Telugu, Hindi and English so other languages never appear. {provider === 'sarvam' ? 'Captions stream live — each phrase appears ~1-2s after it’s spoken.' : 'Live captions arrive in short segments and self-correct using prior context (names/spelling stay consistent).'} You can also edit the transcript before analyzing.</div>
               : <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Pick one language; press Stop and switch to mix languages — all append to one transcript.</div>}
             {!autoAvailable && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 12.5, marginTop: 6 }}>
@@ -467,25 +599,39 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           </div>
 
           <div className="grid grid-3" style={{ gap: 10 }}>
-            {mode === 'browser' && (
-              <div>
-                <label>Speaking language</label>
-                <select value={lang} onChange={(e) => setLang(e.target.value)} disabled={recording}>
-                  {REC_LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
-              </div>
-            )}
+            <div>
+              <label>Speaking language</label>
+              <select value={lang} onChange={(e) => setLang(e.target.value)} disabled={recording}>
+                {REC_LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+              </select>
+            </div>
             <div className="muted" style={{ alignSelf: 'end', fontSize: 12 }}>Summary &amp; tasks: <b>English</b></div>
             <div style={{ alignSelf: 'end' }} className="muted">
-              {recording ? <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span> : 'Ready'}
+              {recording
+                ? paused
+                  ? <span style={{ color: 'var(--warning)', fontWeight: 700 }}>PAUSED {mmss}</span>
+                  : <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span>
+                : 'Ready'}
             </div>
           </div>
 
+          {recording && paused && (
+            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+<b>Meeting paused</b> — recording was interrupted (e.g. a phone call, or the screen turned off). Tap <b>Resume meeting</b> to continue capturing.
+            </div>
+          )}
           <div className="row" style={{ gap: 10 }}>
-            {!recording
-              ? <button className="btn btn-primary" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
-              : <button className="btn btn-danger" onClick={stop}>■ Stop</button>}
-            {recording && transcribing && <span className="spinner" />}
+            {!recording ? (
+              <button className="btn btn-primary" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
+            ) : paused ? (
+              <>
+                <button className="btn btn-primary" onClick={resumeRecording}>▶ Resume meeting</button>
+                <button className="btn btn-danger" onClick={stop}>■ Stop</button>
+              </>
+            ) : (
+              <button className="btn btn-danger" onClick={stop}>■ Stop</button>
+            )}
+            {recording && !paused && transcribing && <span className="spinner" />}
           </div>
 
           <div>
@@ -497,7 +643,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={close}>Cancel</button>
-            <button className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : '✦ Analyze & extract tasks'}</button>
+            <button className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}</button>
           </div>
         </div>
       </div>

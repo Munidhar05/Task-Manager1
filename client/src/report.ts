@@ -5,7 +5,7 @@ export interface ReportRange { from: string; to: string; label: string }
 // Builds a clean, printable manager report scoped to a date range and opens it in a
 // new window with the print dialog (the manager can Save as PDF or print).
 // Dependency-free — the report is a self-contained HTML document.
-export async function downloadManagerReport(range: ReportRange, orgName = 'Befach Task Manager') {
+export async function downloadManagerReport(range: ReportRange, orgName = 'Befach') {
   const d = await api.get(`/dashboards/report?from=${range.from}&to=${range.to}`)
   const c = d.counts
   const now = new Date().toLocaleString(undefined, {
@@ -70,11 +70,11 @@ export async function downloadManagerReport(range: ReportRange, orgName = 'Befac
     <tbody>${rows(d.completed_tasks, (t: any) => [esc(t.title), esc(t.assignee_name || 'Unassigned'), esc((t.completed_at || '').slice(0, 10) || '—')])}</tbody></table>`}
 
   <h2>Overdue tasks — as of now (${d.overdue_tasks.length})</h2>
-  ${d.overdue_tasks.length === 0 ? '<p class="sub">Nothing overdue 🎉</p>' :
+  ${d.overdue_tasks.length === 0 ? '<p class="sub">Nothing overdue</p>' :
     `<table><thead><tr><th>Task</th><th>Assignee</th><th>Due date</th></tr></thead>
     <tbody>${rows(d.overdue_tasks, (t: any) => [esc(t.title), esc(t.assignee_name || 'Unassigned'), `<span class="overdue">${esc(t.due_date || '—')}</span>`])}</tbody></table>`}
 
-  <div class="foot">Befach Task Manager · meeting-to-task command center</div>
+  <div class="foot">Befach · AI Execution Platform</div>
 </body></html>`
 
   const w = window.open('', '_blank')

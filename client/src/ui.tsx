@@ -1,13 +1,72 @@
 import React, { useEffect, useState } from 'react'
 
+// Priority/status hues. Kept as concrete values (not CSS vars) because they're
+// also passed to SVG fills, gradient stops, and color-mix in inline styles where
+// var() isn't always resolvable. They intentionally match the semantic tokens.
 export const PRIORITY_COLORS: Record<string, string> = {
-  Critical: '#ef4444', High: '#f59e0b', Medium: '#3b82f6', Low: '#94a3b8',
+  Critical: '#e2483a', High: '#d98a0b', Medium: '#2f6fd0', Low: '#a99a86',
 }
 export const STATUS_COLORS: Record<string, string> = {
-  'To Do': '#64748b', 'In Progress': '#3b82f6', 'Blocked': '#ef4444',
-  'In Review': '#a855f7', 'Done': '#10b981', 'Reopened': '#f97316',
+  'To Do': '#7a6f63', 'In Progress': '#2f6fd0', 'Blocked': '#e2483a',
+  'In Review': '#8b5cf6', 'Done': '#0f9d6e', 'Reopened': '#d9660b',
 }
 export const LANG_LABEL: Record<string, string> = { en: 'English', hi: 'हिन्दी', te: 'తెలుగు' }
+
+// Shared line-icon primitive — inherits currentColor and sizes to the text it
+// sits with. Replaces semantic emoji (which render differently per-OS, get read
+// aloud verbosely by screen readers, and read as informal). Emoji stay only in
+// user-generated content (chat reactions).
+export function Ic({ name, size = 16 }: { name: keyof typeof ICON_PATHS; size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+      style={{ flexShrink: 0, verticalAlign: '-.15em' }}>
+      {ICON_PATHS[name]}
+    </svg>
+  )
+}
+const ICON_PATHS = {
+  check: <path d="M20 6 9 17l-5-5" />,
+  arrowRight: <><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></>,
+  warning: <><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12" y2="17" /></>,
+  block: <><circle cx="12" cy="12" r="9" /><path d="m5.6 5.6 12.8 12.8" /></>,
+  refresh: <><path d="M3 2v6h6" /><path d="M3.5 12a9 9 0 1 0 2.6-6.4L3 8" /></>,
+  ai: <><path d="M12 3 13.4 8.6 19 10l-5.6 1.4L12 17l-1.4-5.6L5 10l5.6-1.4z" /><path d="M18 15l.7 2.3L21 18l-2.3.7L18 21l-.7-2.3L15 18l2.3-.7z" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  pin: <><path d="M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z" /><circle cx="12" cy="10" r="2.5" /></>,
+  send: <><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></>,
+  lock: <><rect x="3" y="11" width="18" height="10" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
+  doc: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></>,
+  chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
+  user: <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
+  close: <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>,
+  trash: <><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>,
+  edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>,
+  mail: <><rect x="2" y="4" width="20" height="16" rx="2" /><path d="m22 6-10 7L2 6" /></>,
+  attach: <path d="M21.44 11.05 12.25 20.24a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 0 1 4.24 4.24l-9.2 9.19a1 1 0 0 1-1.41-1.41l8.48-8.49" />,
+  star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />,
+  download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>,
+  upload: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></>,
+  mic: <><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /></>,
+  search: <><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></>,
+  scissors: <><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><line x1="20" y1="4" x2="8.12" y2="15.88" /><line x1="14.47" y1="14.48" x2="20" y2="20" /><line x1="8.12" y1="8.12" x2="12" y2="12" /></>,
+  arrowLeft: <><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></>,
+  reply: <><polyline points="9 17 4 12 9 7" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" /></>,
+  merge: <><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></>,
+  note: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="13" y2="17" /></>,
+  box: <><path d="M21 8v13H3V8" /><path d="M1 3h22v5H1z" /><line x1="10" y1="12" x2="14" y2="12" /></>,
+  plus: <><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></>,
+  muteBell: <><path d="M13.73 21a2 2 0 0 1-3.46 0" /><path d="M18.63 13A17.9 17.9 0 0 1 18 8" /><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14" /><path d="M18 8a6 6 0 0 0-9.33-5" /><line x1="1" y1="1" x2="23" y2="23" /></>,
+  menu: <><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" /></>,
+  sort: <><path d="M11 5h10" /><path d="M11 9h7" /><path d="M11 13h4" /><path d="m3 8 3-3 3 3" /><path d="M6 5v14" /></>,
+  arrowUp: <><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></>,
+  arrowDown: <><line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" /></>,
+  music: <><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></>,
+  board: <><rect x="3" y="3" width="6" height="18" rx="1" /><rect x="11" y="3" width="6" height="12" rx="1" /><rect x="19" y="3" width="2" height="7" rx="1" /></>,
+  inbox: <><polyline points="22 12 16 12 14 15 10 15 8 12 2 12" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></>,
+  forward: <><polyline points="15 17 20 12 15 7" /><path d="M4 18v-2a4 4 0 0 1 4-4h12" /></>,
+  smile: <><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></>,
+} as const
 
 export function Badge({ children, color, soft }: { children: React.ReactNode; color: string; soft?: boolean }) {
   return (
@@ -42,22 +101,93 @@ export function Avatar({ name, color, size = 28, src }: { name?: string; color?:
 }
 
 export function ConfidenceTag({ c }: { c: string }) {
-  if (c === 'needs_confirmation') return <Badge color="#f59e0b" soft>⚠ Needs confirmation</Badge>
-  if (c === 'low') return <Badge color="#f97316" soft>⚠ Low confidence</Badge>
+  if (c === 'needs_confirmation') return <Badge color="var(--warning)" soft>Needs confirmation</Badge>
+  if (c === 'low') return <Badge color="var(--warning)" soft>Review recommended</Badge>
   return null
 }
 
-// Numeric AI confidence score (0-100): green ≥70, amber 40-69, red <40.
+// ---------------------------------------------------------------------------
+// AI confidence — ONE definition used everywhere. A raw percentage means nothing
+// on its own ("82% of what?"), so every surface pairs the number with a named
+// band and the drivers behind it. Bands: Verified ≥70 · Review recommended 40–69
+// · Needs confirmation <40. This is the single source of truth — MeetingDetail,
+// the review modal, and the task drawer all key off confidenceBand().
+// ---------------------------------------------------------------------------
+export type ConfBand = { key: 'verified' | 'review' | 'confirm'; label: string; color: string; bg: string; border: string; ink: string }
+export function confidenceBand(score: number): ConfBand {
+  const n = clampPct(score)
+  if (n >= 70) return { key: 'verified', label: 'Verified', color: 'var(--success)', bg: 'var(--success-bg)', border: 'var(--success-border)', ink: 'var(--success-ink)' }
+  if (n >= 40) return { key: 'review', label: 'Review recommended', color: 'var(--warning)', bg: 'var(--warning-bg)', border: 'var(--warning-border)', ink: 'var(--warning-ink)' }
+  return { key: 'confirm', label: 'Needs confirmation', color: 'var(--danger)', bg: 'var(--danger-bg)', border: 'var(--danger-border)', ink: 'var(--danger-ink)' }
+}
+function clampPct(score: number) { return Math.max(0, Math.min(100, Math.round(score || 0))) }
+
+// Compact confidence chip: named band + score. Use inline in dense rows.
 export function ConfidenceScore({ score }: { score: number }) {
-  const n = Math.max(0, Math.min(100, Math.round(score || 0)))
-  const color = n >= 70 ? '#10b981' : n >= 40 ? '#f59e0b' : '#ef4444'
+  const n = clampPct(score)
+  const b = confidenceBand(n)
   return (
-    <span title={`AI confidence ${n}%`} className="row" style={{ gap: 6, fontSize: 12, fontWeight: 600, color }}>
-      <span style={{ width: 54, height: 6, borderRadius: 3, background: color + '22', display: 'inline-block', overflow: 'hidden' }}>
-        <span style={{ display: 'block', width: n + '%', height: '100%', background: color }} />
+    <span title={`AI confidence ${n}% — ${b.label}`} className="conf-chip" style={{ color: b.ink, background: b.bg, borderColor: b.border }}>
+      <span className="conf-chip-track" style={{ background: `color-mix(in srgb, ${b.color} 22%, transparent)` }}>
+        <span className="conf-chip-fill" style={{ width: n + '%', background: b.color }} />
       </span>
-      {n}%
+      <span className="conf-chip-label">{b.label}</span>
+      <span className="conf-chip-pct">{n}%</span>
     </span>
+  )
+}
+
+// Full Evidence block — the audit trail behind an AI suggestion, rendered as a
+// first-class panel (not a 11.5px grey footnote). Shows the original quote, why
+// the owner was chosen, and a named confidence band. Reused by MeetingDetail,
+// the review modal, and the task drawer so the evidence looks identical everywhere.
+export function Evidence({ quote, quoteLang, reasoning, score, ownerLabel, compact }: {
+  quote?: string | null; quoteLang?: string | null; reasoning?: string | null
+  score?: number; ownerLabel?: React.ReactNode; compact?: boolean
+}) {
+  const hasQuote = !!(quote && quote.trim())
+  const hasReason = !!(reasoning && reasoning.trim())
+  if (!hasQuote && !hasReason && score == null) return null
+  return (
+    <div className={'evidence' + (compact ? ' evidence-compact' : '')}>
+      <div className="evidence-label">Evidence</div>
+      {hasQuote && (
+        <blockquote className="evidence-quote">
+          <span className="evidence-quote-mark" aria-hidden="true">“</span>{quote}”
+          <span className="evidence-quote-src">From the meeting{quoteLang ? ` · ${LANG_LABEL[quoteLang] || quoteLang} → English` : ' · original language'}</span>
+        </blockquote>
+      )}
+      {(ownerLabel || hasReason) && (
+        <div className="evidence-reason">
+          {ownerLabel && <div className="evidence-owner">{ownerLabel}</div>}
+          {hasReason && <div className="evidence-why">{reasoning}</div>}
+        </div>
+      )}
+      {score != null && (
+        <div className="evidence-conf">
+          <div className="evidence-conf-head">
+            <span>Confidence</span>
+            <span className="evidence-conf-band" style={{ color: confidenceBand(score).ink }}>{confidenceBand(score).label} · {clampPct(score)}%</span>
+          </div>
+          <div className="evidence-conf-track">
+            <span className="evidence-conf-fill" style={{ width: clampPct(score) + '%', background: confidenceBand(score).color }} />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Friendly full-area placeholder for empty lists/views — a big icon, a title,
+// an optional hint line, and an optional call-to-action (e.g. a "New task" button).
+export function EmptyState({ icon, title, hint, action }: { icon?: React.ReactNode; title: string; hint?: string; action?: React.ReactNode }) {
+  return (
+    <div className="empty-state">
+      {icon != null && <div className="empty-state-icon">{icon}</div>}
+      <div className="empty-state-title">{title}</div>
+      {hint && <div className="empty-state-hint">{hint}</div>}
+      {action && <div className="empty-state-action">{action}</div>}
+    </div>
   )
 }
 
@@ -79,8 +209,10 @@ export function Bar({ value, max, color }: { value: number; max: number; color: 
 }
 
 // Power BI–style donut: SVG ring split into colored segments with the total in the center.
-export function Donut({ data, size = 150, thickness = 24 }:
-  { data: { label: string; value: number; color: string }[]; size?: number; thickness?: number }) {
+// Pass onSegmentClick to make each colored segment a clickable link (e.g. drill into
+// that priority's tasks). Zero-value slices are skipped so they're not clickable.
+export function Donut({ data, size = 150, thickness = 24, onSegmentClick }:
+  { data: { label: string; value: number; color: string }[]; size?: number; thickness?: number; onSegmentClick?: (label: string) => void }) {
   const total = data.reduce((s, d) => s + d.value, 0)
   const r = (size - thickness) / 2
   const circ = 2 * Math.PI * r
@@ -89,22 +221,26 @@ export function Donut({ data, size = 150, thickness = 24 }:
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       <g transform={`rotate(-90 ${cx} ${cx})`}>
-        <circle cx={cx} cy={cx} r={r} fill="none" stroke="#eef2f7" strokeWidth={thickness} />
+        <circle cx={cx} cy={cx} r={r} fill="none" stroke="var(--n-200)" strokeWidth={thickness} />
         {total > 0 && data.map((d, i) => {
           const len = (d.value / total) * circ
+          const clickable = !!onSegmentClick && d.value > 0
           const seg = (
             <circle key={i} cx={cx} cy={cx} r={r} fill="none" stroke={d.color} strokeWidth={thickness}
               strokeDasharray={`${len} ${circ - len}`} strokeDashoffset={-offset}
-              style={{ transition: 'stroke-dasharray .5s' }} />
+              onClick={clickable ? () => onSegmentClick!(d.label) : undefined}
+              style={{ transition: 'stroke-dasharray .5s', cursor: clickable ? 'pointer' : undefined }}>
+              {clickable && <title>{`Open ${d.label} tasks (${d.value})`}</title>}
+            </circle>
           )
           offset += len
           return seg
         })}
       </g>
       <text x={cx} y={cx} textAnchor="middle" dominantBaseline="central"
-        fontSize={size * 0.26} fontWeight={800} fill="#1f1a16">{total}</text>
+        fontSize={size * 0.26} fontWeight={800} fill="var(--text)">{total}</text>
       <text x={cx} y={cx + size * 0.18} textAnchor="middle" dominantBaseline="central"
-        fontSize={size * 0.09} fill="#7a6f63" letterSpacing=".05em">OPEN</text>
+        fontSize={size * 0.09} fill="var(--muted)" letterSpacing=".05em">OPEN</text>
     </svg>
   )
 }
@@ -134,6 +270,6 @@ export function dueLabel(t: { due_date?: string | null; due_date_raw?: string | 
     const overdue = t.due_date < today
     return <span style={{ color: overdue ? '#ef4444' : 'inherit', fontWeight: overdue ? 600 : 400 }}>{t.due_date}{overdue ? ' (overdue)' : ''}</span>
   }
-  if (t.due_date_raw) return <span style={{ fontStyle: 'italic', color: '#94a3b8' }}>“{t.due_date_raw}”</span>
-  return <span style={{ color: '#cbd5e1' }}>—</span>
+  if (t.due_date_raw) return <span style={{ fontStyle: 'italic', color: 'var(--muted)' }}>“{t.due_date_raw}”</span>
+  return <span style={{ color: 'var(--n-400)' }}>—</span>
 }

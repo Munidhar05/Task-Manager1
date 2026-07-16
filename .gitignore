@@ -1,6 +1,26 @@
 node_modules/
 server/data/
 server/.env
+# Local client config (API base, Google client id, wake-word flags).
+# Templates live in client/.env.example; client/.env.production IS committed.
+client/.env
+client/.env.local
 dist/
 *.log
 .DS_Store
+*.apk
+*.aab
+client/tsconfig.tsbuildinfo
+
+# Android (Capacitor) generated build artifacts & machine-specific config
+client/android/.gradle/
+client/android/build/
+client/android/app/build/
+client/android/capacitor-cordova-android-plugins/build/
+client/android/.idea/
+client/android/local.properties
+
+# Android release signing — NEVER commit these (losing them = can't update the app)
+client/android/keystore.properties
+*.jks
+*.keystore

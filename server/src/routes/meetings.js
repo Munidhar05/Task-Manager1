@@ -6,10 +6,27 @@ import { id, now, audit, notify, dueDateForPriority } from '../util.js'
 import { analyzeMeetingTranscript, resolveUser, resolveUserAmong } from '../ai/extractor.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 import { indexMeeting, indexTask, removeMeetingEmbeddings } from '../ai/ragIndex.js'
+import { recordUsage, estimateTokens } from '../ai/usage.js'
 
 const r = Router()
 r.use(authRequired)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } })
+
+// Map an analysis engine name to the provider whose key it billed against.
+const ENGINE_PROVIDER = { openrouter: 'openrouter', claude: 'anthropic', openai: 'openai' }
+const STT_PROVIDER = (process.env.TRANSCRIPTION_PROVIDER || 'sarvam').toLowerCase()
+
+// Record an estimated usage event for a meeting LLM analysis (token-exact data
+// isn't available from the multi-call analyzer, so we approximate from text).
+function recordAnalysisUsage(req, transcript, analysis) {
+  const provider = ENGINE_PROVIDER[analysis?.engine]
+  if (!provider) return // rule-based / offline — no API key was used
+  recordUsage({
+    orgId: req.user.org_id, userId: req.user.id, provider, feature: 'meeting_analysis',
+    inputTokens: estimateTokens(transcript),
+    outputTokens: estimateTokens(JSON.stringify(analysis || {})),
+  })
+}
 
 // The app is scoped to these three languages. Any other detected code (the AI
 // sometimes over-guesses related Indian languages like mr/pa/gu/bn/ml) is dropped
@@ -208,6 +225,7 @@ r.post('/', requireRole('manager', 'admin'), async (req, res) => {
     const analysis = await analyzeMeetingTranscript(transcript, {
       meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: summary_language || 'en',
     })
+    recordAnalysisUsage(req, transcript, analysis)
     const { mid, suggestionCount } = persistMeeting(
       { orgId: req.user.org_id, userId: req.user.id, title: title || 'Untitled Meeting', description, meetingDate, transcript, sourceType: 'transcript', participantIds },
       analysis)
@@ -224,6 +242,7 @@ r.post('/transcribe', requireRole('manager', 'admin'), upload.single('audio'), a
   if (!req.file) return res.status(400).json({ error: 'audio file required (field "audio")' })
   try {
     const { text, language } = await transcribeAudio(req.file.buffer, req.file.originalname || 'chunk.webm', req.file.mimetype || 'audio/webm', { prompt: req.body.prompt })
+    recordUsage({ orgId: req.user.org_id, userId: req.user.id, provider: STT_PROVIDER, feature: 'transcription' })
     res.json({ text, language })
   } catch (err) {
     console.error('[transcribe]', err.message)
@@ -240,6 +259,7 @@ r.post('/audio', requireRole('manager', 'admin'), upload.single('audio'), async 
     // still uses the configured provider (Sarvam streaming).
     const uploadProvider = process.env.OPENAI_API_KEY ? 'openai' : undefined
     const { text } = await transcribeAudio(req.file.buffer, req.file.originalname || 'meeting.webm', req.file.mimetype || 'audio/webm', { provider: uploadProvider })
+    recordUsage({ orgId: req.user.org_id, userId: req.user.id, provider: uploadProvider || STT_PROVIDER, feature: 'transcription' })
     if (!text.trim()) return res.status(422).json({ error: 'Transcription returned no text.' })
     const meetingDate = (req.body.meeting_date || now()).slice(0, 10)
     const participantIds = (() => {
@@ -250,6 +270,7 @@ r.post('/audio', requireRole('manager', 'admin'), upload.single('audio'), async 
     const analysis = await analyzeMeetingTranscript(text, {
       meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: req.body.summary_language || 'en',
     })
+    recordAnalysisUsage(req, text, analysis)
     const { mid, suggestionCount } = persistMeeting(
       { orgId: req.user.org_id, userId: req.user.id, title: req.body.title || 'Recorded Meeting', description: req.body.description, meetingDate, transcript: text, sourceType: 'audio', audioFilename: req.file.originalname, participantIds },
       analysis)
@@ -298,6 +319,15 @@ r.post('/suggestions/:sid/reject', requireRole('manager', 'admin'), (req, res) =
   if (!s) return res.status(404).json({ error: 'Not found' })
   db.prepare("UPDATE suggested_tasks SET status='rejected', updated_at=? WHERE id=?").run(now(), s.id)
   res.json({ ok: true })
+})
+
+// RESTORE a previously rejected (or merged) suggestion back to the pending queue,
+// so a manager can edit it and assign it after all. Returns the refreshed row.
+r.post('/suggestions/:sid/restore', requireRole('manager', 'admin'), (req, res) => {
+  const s = getSuggestion(req.params.sid, req.user.org_id)
+  if (!s) return res.status(404).json({ error: 'Not found' })
+  db.prepare("UPDATE suggested_tasks SET status='pending', merged_into=NULL, updated_at=? WHERE id=?").run(now(), s.id)
+  res.json(db.prepare('SELECT * FROM suggested_tasks WHERE id=?').get(s.id))
 })
 
 // MERGE a duplicate suggestion into another (the duplicate is dropped).

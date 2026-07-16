@@ -1,22 +1,38 @@
 import React, { useEffect, useState } from 'react'
 import { api, Task, User } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, dueLabel, fmtDateTime } from '../ui'
+import { PriorityBadge, StatusBadge, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime } from '../ui'
+import { confirmDialog } from '../lib/confirm'
+import { useDialog } from '../lib/useDialog'
 
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
 export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: string; onClose: () => void; onChange?: () => void }) {
   const { user } = useAuth()
+  const drawerRef = useDialog<HTMLDivElement>(onClose)
   const [task, setTask] = useState<Task | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [pendingAssignee, setPendingAssignee] = useState('')
+  // A status the user has picked but not yet confirmed — applied only on "Accept".
+  const [pendingStatus, setPendingStatus] = useState('')
+  // Inline edit of the task's core details (title, description, due date).
+  const [editing, setEditing] = useState(false)
+  const [editForm, setEditForm] = useState({ title: '', description: '', due_date: '' })
+  // Split & share: when open, `parts` holds the rows (each = a piece + a person).
+  const [showSplit, setShowSplit] = useState(false)
+  const [parts, setParts] = useState<{ title: string; assignee_id: string }[]>([])
+  const updatePart = (i: number, patch: Partial<{ title: string; assignee_id: string }>) =>
+    setParts((ps) => ps.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
 
-  const load = () => api.get(`/tasks/${taskId}`).then(setTask)
-  useEffect(() => { load(); api.get('/users').then(setUsers) }, [taskId])
+  const [loadErr, setLoadErr] = useState(false)
+  const load = () => { setLoadErr(false); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
+  useEffect(() => { setEditing(false); load(); api.get('/users').then(setUsers).catch(() => {}) }, [taskId])
   // Keep the member picker in sync whenever the task's current owner changes.
   useEffect(() => { setPendingAssignee(task?.assignee?.id || '') }, [task?.assignee?.id])
+  // Reset the pending status whenever the saved status changes (incl. after Accept).
+  useEffect(() => { setPendingStatus(task?.status || '') }, [task?.status])
 
   const mutate = async (fn: () => Promise<any>) => {
     setBusy(true)
@@ -29,42 +45,107 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const setProgress = (progress: number) => mutate(() => api.patch(`/tasks/${taskId}`, { progress }))
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
+  // Open the inline editor, seeded from the current task.
+  const startEdit = () => {
+    if (!task) return
+    setEditForm({ title: task.title || '', description: task.description || '', due_date: task.due_date || '' })
+    setEditing(true)
+  }
+  // Persist the edited details. Clearing due_date_raw makes the picked date authoritative.
+  const saveEdit = async () => {
+    const title = editForm.title.trim()
+    if (!title) return
+    await mutate(() => api.patch(`/tasks/${taskId}`, {
+      title,
+      description: editForm.description.trim(),
+      due_date: editForm.due_date || null,
+      due_date_raw: null,
+    }))
+    setEditing(false)
+  }
+  const openSplit = () => { setParts([{ title: task?.title || '', assignee_id: '' }]); setShowSplit(true) }
+  const doSplit = async () => {
+    const valid = parts.filter((p) => p.title.trim() && p.assignee_id)
+    if (!valid.length) return
+    await mutate(() => api.post(`/tasks/${taskId}/split`, { parts: valid }))
+    setShowSplit(false)
+  }
   const del = async () => {
-    if (!window.confirm('Delete this task? This cannot be undone.')) return
+    if (!(await confirmDialog({ title: 'Delete task', message: 'Delete this task? This cannot be undone.', confirmText: 'Delete', danger: true }))) return
     setBusy(true)
     try { await api.del(`/tasks/${taskId}`); onChange?.(); onClose() }
     finally { setBusy(false) }
   }
 
+  if (loadErr) return (
+    <div className="overlay" onClick={onClose}>
+      <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Task" onClick={(e) => e.stopPropagation()}>
+        <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>Task</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
+        <div className="empty-state">
+          <div className="empty-state-icon"><Ic name="warning" size={40} /></div>
+          <div className="empty-state-title">Couldn't load this task</div>
+          <div className="empty-state-hint">Check your connection and try again.</div>
+          <div className="empty-state-action"><button className="btn btn-primary btn-sm" onClick={load}>Retry</button></div>
+        </div>
+      </div>
+    </div>
+  )
   if (!task) return (
-    <div className="overlay" onClick={onClose}><div className="drawer" onClick={(e) => e.stopPropagation()}><div className="card-pad"><span className="spinner" /></div></div></div>
+    <div className="overlay" onClick={onClose}><div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Loading task" onClick={(e) => e.stopPropagation()}><div className="card-pad" style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div></div></div>
   )
   const isManager = user?.role !== 'employee'
   // Managers can delete anything; an employee can delete only their own private draft.
   const canDelete = isManager || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
+  // The task owner (or a manager) can split a top-level task into shared parts.
+  const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
+  const subs = task.subtasks || []
+  const subDone = subs.filter((s: any) => s.status === 'Done').length
+  const subPct = subs.length ? Math.round((subDone / subs.length) * 100) : 0
+  const lookupUser = (uid?: string | null) => users.find((u) => u.id === uid)
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="drawer" onClick={(e) => e.stopPropagation()}>
+      <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={task.title} onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread">
           <div className="row">
             <PriorityBadge p={task.priority} /><StatusBadge s={task.status} />
-            {task.visible_to_manager === 0 && <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>🔒 Private</span>}
+            {task.visible_to_manager === 0 && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)', border: '1px solid var(--info-border)' }}><Ic name="lock" size={12} /> Private</span>}
           </div>
           <div className="row">
-            {canDelete && <button className="btn btn-sm btn-danger" disabled={busy} onClick={del} title="Delete task">🗑 Delete</button>}
+            {isManager && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
+            {canDelete && <button className="btn btn-sm btn-danger row" style={{ gap: 6 }} disabled={busy} onClick={del} title="Delete task"><Ic name="trash" size={14} /> Delete</button>}
             <button className="btn btn-ghost" onClick={onClose}>✕</button>
           </div>
         </div>
         <div className="card-pad">
-          <h2 style={{ fontSize: 19 }}>{task.title}</h2>
-          <ConfidenceTag c={task.ownership_confidence} />
-          {task.description && task.description !== task.title && <p className="muted" style={{ marginTop: 8 }}>{task.description}</p>}
+          {editing ? (
+            <div className="grid" style={{ gap: 10 }}>
+              <div>
+                <label htmlFor="task-edit-title">Title</label>
+                <input id="task-edit-title" value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} autoFocus />
+              </div>
+              <div>
+                <label htmlFor="task-edit-desc">Description</label>
+                <textarea id="task-edit-desc" rows={3} value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} placeholder="Add more detail…" />
+              </div>
+              <div className="row">
+                <button className="btn btn-primary btn-sm" disabled={busy || !editForm.title.trim()} onClick={saveEdit}>
+                  {busy ? <span className="spinner" /> : '✓ Save changes'}
+                </button>
+                <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h2 style={{ fontSize: 19 }}>{task.title}</h2>
+              <ConfidenceTag c={task.ownership_confidence} />
+              {task.description && task.description !== task.title && <p className="muted" style={{ marginTop: 8 }}>{task.description}</p>}
+            </>
+          )}
 
-          {task.source_quote && (
-            <div style={{ background: '#f8fafc', borderLeft: '3px solid var(--primary)', padding: '8px 12px', borderRadius: 6, margin: '12px 0', fontSize: 13 }}>
-              <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 2 }}>FROM MEETING (original language)</div>
-              “{task.source_quote}”
+          {(task.source_quote || (task as any).assignee_reasoning) && (
+            <div style={{ margin: '12px 0' }}>
+              <Evidence quote={task.source_quote} reasoning={(task as any).assignee_reasoning} />
             </div>
           )}
 
@@ -104,50 +185,71 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
             <div>
               <label>Due date</label>
-              <div>{dueLabel(task)}</div>
+              {editing
+                ? <input type="date" value={editForm.due_date} onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })} />
+                : <div>{dueLabel(task)}</div>}
             </div>
           </div>
 
           <div style={{ margin: '16px 0' }}>
             <label>Timeline</label>
             <div style={{ fontSize: 13, display: 'grid', gap: 6 }}>
-              <div className="spread"><span className="muted">🆕 Created</span><span>{fmtDateTime(task.created_at)}</span></div>
-              <div className="spread"><span className="muted">📌 Assigned</span><span>{fmtDateTime(task.assigned_at)}</span></div>
-              {task.submitted_at && <div className="spread"><span className="muted">📩 Submitted</span><span>{fmtDateTime(task.submitted_at)}</span></div>}
-              <div className="spread"><span className="muted">✅ Completed</span><span style={{ color: task.completed_at ? '#047857' : 'inherit' }}>{fmtDateTime(task.completed_at)}</span></div>
+              <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="doc" size={14} /> Created</span><span>{fmtDateTime(task.created_at)}</span></div>
+              <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="pin" size={14} /> Assigned</span><span>{fmtDateTime(task.assigned_at)}</span></div>
+              {task.submitted_at && <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="send" size={14} /> Submitted</span><span>{fmtDateTime(task.submitted_at)}</span></div>}
+              <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="check" size={14} /> Completed</span><span style={{ color: task.completed_at ? 'var(--success-ink)' : 'inherit' }}>{fmtDateTime(task.completed_at)}</span></div>
             </div>
           </div>
 
           <div style={{ margin: '14px 0' }}>
-            <label>Progress — {task.progress}%</label>
-            <input type="range" min={0} max={100} step={10} value={task.progress} onChange={(e) => setProgress(Number(e.target.value))} />
+            <label htmlFor="task-progress">Progress — {task.progress}%</label>
+            <input id="task-progress" type="range" min={0} max={100} step={10} value={task.progress}
+              aria-valuetext={`${task.progress} percent`} onChange={(e) => setProgress(Number(e.target.value))} />
           </div>
 
           <div style={{ margin: '16px 0' }}>
             <label>Status</label>
             {isManager ? (
-              <div className="row wrap">
-                {STATUSES.map((s) => (
-                  <button key={s} className={'btn btn-sm' + (task.status === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setStatus(s)}>{s}</button>
-                ))}
-              </div>
+              <>
+                <div className="row wrap">
+                  {STATUSES.map((s) => (
+                    <button key={s} className={'btn btn-sm' + (pendingStatus === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setPendingStatus(s)}>{s}</button>
+                  ))}
+                </div>
+                {pendingStatus !== task.status && (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setStatus(pendingStatus)}>
+                      {busy ? <span className="spinner" /> : `✓ Accept change → ${pendingStatus}`}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingStatus(task.status)}>Cancel</button>
+                  </div>
+                )}
+              </>
             ) : task.status === 'Done' ? (
               <div className="card-pad" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, color: '#047857' }}>
                 ✓ Completed — approved by your manager.
               </div>
             ) : task.approval_status === 'pending' ? (
-              <div className="card-pad" style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10 }}>
-                <strong>🕓 Submitted for review</strong>
+              <div className="card-pad" style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 10 }}>
+                <strong className="row" style={{ gap: 7 }}><Ic name="clock" size={15} /> Submitted for review</strong>
                 <p className="muted" style={{ margin: '4px 0 10px' }}>Waiting for your manager to approve. You'll get it back if changes are needed.</p>
-                <button className="btn btn-sm" disabled={busy} onClick={() => setStatus('In Progress')}>↩ Withdraw &amp; keep working</button>
+                <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => setStatus('In Progress')}><Ic name="reply" size={14} /> Withdraw &amp; keep working</button>
               </div>
             ) : (
               <>
                 <div className="row wrap">
                   {['To Do', 'In Progress', 'Blocked'].map((s) => (
-                    <button key={s} className={'btn btn-sm' + (task.status === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setStatus(s)}>{s}</button>
+                    <button key={s} className={'btn btn-sm' + (pendingStatus === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setPendingStatus(s)}>{s}</button>
                   ))}
                 </div>
+                {pendingStatus !== task.status && ['To Do', 'In Progress', 'Blocked'].includes(pendingStatus) && (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setStatus(pendingStatus)}>
+                      {busy ? <span className="spinner" /> : `✓ Accept change → ${pendingStatus}`}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingStatus(task.status)}>Cancel</button>
+                  </div>
+                )}
                 <button className="btn btn-primary" style={{ marginTop: 10, width: '100%' }} disabled={busy} onClick={() => setStatus('In Review')}>
                   {busy ? <span className="spinner" /> : '✓ Submit as complete'}
                 </button>
@@ -156,13 +258,44 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             )}
           </div>
 
+          {!task.parent_task_id && (subs.length > 0 || canSplit) && (
+            <div style={{ margin: '16px 0' }}>
+              <div className="spread">
+                <label style={{ margin: 0 }}>Shared parts{subs.length ? ` — ${subDone}/${subs.length} done` : ''}</label>
+                {canSplit && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={openSplit}><Ic name="scissors" size={14} /> Split &amp; share</button>}
+              </div>
+              {subs.length > 0 ? (
+                <>
+                  <div className="bar-track" style={{ margin: '8px 0' }}><div className="bar-fill" style={{ width: subPct + '%', background: '#10b981' }} /></div>
+                  <div style={{ display: 'grid', gap: 2 }}>
+                    {subs.map((s: any) => {
+                      const u = lookupUser(s.assignee_id)
+                      return (
+                        <div key={s.id} className="spread" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid #f1f5f9' }}>
+                          <span className="row" style={{ gap: 6 }}>{s.status === 'Done' ? <Ic name="check" size={13} /> : <span style={{ color: 'var(--muted)' }}>•</span>} {s.title}</span>
+                          <span className="row" style={{ gap: 6 }}>
+                            {u && <Avatar name={u.name} color={u.avatar_color} size={18} />}
+                            <span className="muted">{u?.name || '—'}</span>
+                            <StatusBadge s={s.status} />
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : (
+                <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>Break this task into parts and share them with colleagues. You stay responsible — it completes automatically when all parts are done.</p>
+              )}
+            </div>
+          )}
+
           {isManager && task.approval_status === 'pending' && (
             <div className="card-pad" style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, marginBottom: 16 }}>
               <strong>Approval requested</strong>
               <p className="muted" style={{ margin: '4px 0 10px' }}>This task is in review and awaiting your approval.</p>
               <div className="row">
                 <button className="btn btn-primary btn-sm" onClick={() => approve('approved')}>✓ Approve & close</button>
-                <button className="btn btn-sm btn-danger" onClick={() => approve('rejected')}>Reopen</button>
+                <button className="btn btn-sm btn-danger" onClick={() => approve('rejected')} title="Send back to the owner to keep working">Send back for changes</button>
               </div>
             </div>
           )}
@@ -186,11 +319,37 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               </div>
             ))}
             <div className="row" style={{ marginTop: 10 }}>
-              <input placeholder="Add a comment…" value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addComment()} />
+              <input aria-label="Add a comment" placeholder="Add a comment…" value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addComment()} />
               <button className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>
             </div>
           </div>
         </div>
+
+        {showSplit && (
+          <div className="modal-center" onClick={() => setShowSplit(false)}>
+            <div className="modal" role="dialog" aria-modal="true" aria-label="Split and share task" onClick={(e) => e.stopPropagation()}>
+              <div className="card-head spread"><h3 style={{ fontSize: 16 }}>Split &amp; share</h3><button className="btn btn-ghost" onClick={() => setShowSplit(false)} aria-label="Close">✕</button></div>
+              <div className="card-pad grid" style={{ gap: 10 }}>
+                <p className="muted" style={{ fontSize: 12 }}>Add each part and pick who does it. Parts inherit this task's due date &amp; priority. You stay responsible — it completes when all parts are done.</p>
+                {parts.map((p, i) => (
+                  <div className="row split-part" key={i} style={{ gap: 8 }}>
+                    <input className="split-part-title" placeholder={`Part ${i + 1} — what needs doing`} value={p.title} onChange={(e) => updatePart(i, { title: e.target.value })} autoFocus={i === 0} />
+                    <select className="split-part-who" value={p.assignee_id} onChange={(e) => updatePart(i, { assignee_id: e.target.value })}>
+                      <option value="">Who…</option>
+                      {users.filter((u) => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}
+                    </select>
+                    {parts.length > 1 && <button className="btn btn-ghost btn-sm" title="Remove" onClick={() => setParts((ps) => ps.filter((_, idx) => idx !== i))}>✕</button>}
+                  </div>
+                ))}
+                <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setParts((ps) => [...ps, { title: '', assignee_id: '' }])}>+ Add another part</button>
+                <div className="row" style={{ justifyContent: 'flex-end' }}>
+                  <button className="btn" onClick={() => setShowSplit(false)}>Cancel</button>
+                  <button className="btn btn-primary row" style={{ gap: 6 }} disabled={busy || !parts.some((p) => p.title.trim() && p.assignee_id)} onClick={doSplit}>{busy ? <span className="spinner" /> : <><Ic name="send" size={14} /> Share parts</>}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

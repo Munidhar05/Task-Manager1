@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { api, getToken, userAvatarUrl, groupAvatarUrl } from '../api'
+import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
-import { Avatar } from '../ui'
+import { Avatar, EmptyState, Ic } from '../ui'
+import { pushBackHandler } from '../back'
+import { toast } from '../lib/toast'
+import { confirmDialog } from '../lib/confirm'
 
 interface Member { id: string; name: string; avatar_color?: string; avatar_file?: string | null; role: string }
 interface Conversation {
@@ -86,7 +89,6 @@ export default function Chats() {
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [navOpen, setNavOpen] = useState(false)
   const [menuId, setMenuId] = useState<string | null>(null)
   const [reactFor, setReactFor] = useState<string | null>(null)
   const [typingName, setTypingName] = useState<string | null>(null)
@@ -135,10 +137,24 @@ export default function Chats() {
     return () => { cancel = true }
   }, [user?.id])
 
-  useEffect(() => { if (!activeId && convos.length) setActiveId(convos[0].id) }, [convos, activeId])
+  // WhatsApp-style: do NOT auto-open a chat. The list is shown first; the user
+  // taps a conversation to open it (and the back arrow returns to the list).
   useEffect(() => { if (activeId) { loadThread(activeId); setReplyTo(null); setEditing(null); setInSearch(''); setInSearchOpen(false); setShowInfo(false) } }, [activeId])
   useEffect(() => { if (!inSearchOpen) logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [messages, busy, typingName, inSearchOpen])
   useEffect(() => { const h = () => { setMenuId(null); setReactFor(null); setConvoMenu(null) }; document.addEventListener('click', h); return () => document.removeEventListener('click', h) }, [])
+
+  // Android back button: close the top-most open layer (menu → modal → search →
+  // conversation list) instead of leaving Chats / quitting the app.
+  useEffect(() => pushBackHandler(() => {
+    if (menuId || reactFor || convoMenu) { setMenuId(null); setReactFor(null); setConvoMenu(null); return true }
+    if (forwardMsg) { setForwardMsg(null); return true }
+    if (showStarred) { setShowStarred(false); return true }
+    if (showInfo) { setShowInfo(false); return true }
+    if (showNew) { setShowNew(false); return true }
+    if (inSearchOpen) { setInSearchOpen(false); setInSearch(''); return true }
+    if (activeId) { setActiveId(''); return true } // open chat → back to the list
+    return false
+  }), [menuId, reactFor, convoMenu, forwardMsg, showStarred, showInfo, showNew, inSearchOpen, activeId])
 
   // WebSocket: messages, edits, reactions, deletes, reads, typing, membership changes.
   useEffect(() => {
@@ -146,8 +162,7 @@ export default function Chats() {
     let retry: ReturnType<typeof setTimeout> | null = null
     let closed = false
     const connect = () => {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${proto}://${location.host}/api/chat/ws?token=${getToken()}`)
+      const ws = new WebSocket(wsUrl(`/api/chat/ws?token=${getToken()}`))
       wsRef.current = ws
       ws.onmessage = (ev) => {
         let d: any
@@ -218,20 +233,20 @@ export default function Chats() {
     if (editing) return saveEdit()
     setInput(''); setBusy(true); sendTyping(false)
     const rep = replyTo
-    const optimistic: Msg = { id: 'tmp_' + Date.now(), conversation_id: active.id, sender_id: user!.id, body, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, reply: rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? '📎 ' + rep.file.name : rep.body } : null, reply_to: rep?.id || null }
+    const optimistic: Msg = { id: 'tmp_' + Date.now(), conversation_id: active.id, sender_id: user!.id, body, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, reply: rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body } : null, reply_to: rep?.id || null }
     setMessages((m) => [...m, optimistic]); setReplyTo(null)
     try {
       const saved = await api.post(`/chat/conversations/${active.id}/messages`, { body, replyTo: rep?.id })
       mergeIncoming(saved); loadConvos()
     } catch (e: any) {
-      setMessages((m) => m.filter((x) => x.id !== optimistic.id)); setInput(body); alert('Could not send: ' + e.message)
+      setMessages((m) => m.filter((x) => x.id !== optimistic.id)); setInput(body); toast.error('Could not send: ' + e.message)
     } finally { setBusy(false) }
   }
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; e.target.value = ''
     if (!file || !active || busy) return
-    if (file.size > MAX_FILE) { alert('File too large (max 15 MB)'); return }
+    if (file.size > MAX_FILE) { toast.error('File too large (max 15 MB)'); return }
     const caption = input.trim(); const rep = replyTo
     setInput(''); setBusy(true); setReplyTo(null)
     const tmpId = 'tmp_' + Date.now()
@@ -241,12 +256,12 @@ export default function Chats() {
       if (caption) form.append('body', caption)
       if (rep) form.append('replyTo', rep.id)
       const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`/api/chat/conversations/${active.id}/upload`, { method: 'POST', headers, body: form })
+      const res = await fetch(`${API_BASE}/api/chat/conversations/${active.id}/upload`, { method: 'POST', headers, body: form })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Upload failed')
       setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x))); loadConvos()
     } catch (err: any) {
-      setMessages((m) => m.filter((x) => x.id !== tmpId)); alert('Could not send file: ' + err.message)
+      setMessages((m) => m.filter((x) => x.id !== tmpId)); toast.error('Could not send file: ' + err.message)
     } finally { setBusy(false) }
   }
 
@@ -258,7 +273,7 @@ export default function Chats() {
       await api.patch(`/chat/message/${editing.id}`, { body })
       setMessages((p) => p.map((m) => (m.id === editing.id ? { ...m, body, edited_at: new Date().toISOString() } : m)))
       setEditing(null); setInput('')
-    } catch (e: any) { alert('Could not edit: ' + e.message) } finally { setBusy(false) }
+    } catch (e: any) { toast.error('Could not edit: ' + e.message) } finally { setBusy(false) }
   }
 
   // ---- message actions ----
@@ -275,11 +290,11 @@ export default function Chats() {
   const del = async (m: Msg) => {
     setMenuId(null)
     const mine = m.sender_id === user!.id
-    if (!window.confirm(mine ? 'Delete this message for everyone?' : 'Remove this message for you?')) return
+    if (!(await confirmDialog({ message: mine ? 'Delete this message for everyone?' : 'Remove this message for you?', confirmText: mine ? 'Delete' : 'Remove', danger: true }))) return
     const snap = messages
     if (mine) setMessages((p) => p.map((x) => (x.id === m.id ? { ...x, deleted: true, body: '', file: null, reactions: [] } : x)))
     else setMessages((p) => p.filter((x) => x.id !== m.id))
-    try { await api.del(`/chat/message/${m.id}`); loadConvos() } catch (e: any) { setMessages(snap); alert('Could not delete: ' + e.message) }
+    try { await api.del(`/chat/message/${m.id}`); loadConvos() } catch (e: any) { setMessages(snap); toast.error('Could not delete: ' + e.message) }
   }
   const copy = async (m: Msg) => {
     setMenuId(null)
@@ -291,7 +306,7 @@ export default function Chats() {
     const url = m.file ? `${location.origin}${fileUrl(m)}` : undefined
     const shareData: any = m.file ? { title: m.file.name, url } : { text: m.body }
     if (navigator.share) { try { await navigator.share(shareData) } catch {} }
-    else { try { await navigator.clipboard.writeText(url || m.body); alert('Link copied to clipboard') } catch {} }
+    else { try { await navigator.clipboard.writeText(url || m.body); toast.success('Link copied to clipboard') } catch {} }
   }
   const download = (m: Msg) => {
     setMenuId(null)
@@ -310,9 +325,9 @@ export default function Chats() {
 
   const clearChat = async (c: Conversation) => {
     setConvoMenu(null)
-    if (!window.confirm('Clear all messages in this chat? This only clears them for you.')) return
+    if (!(await confirmDialog({ title: 'Clear chat', message: 'Clear all messages in this chat? This only clears them for you.', confirmText: 'Clear' }))) return
     try { await api.post(`/chat/conversations/${c.id}/clear`); if (c.id === activeId) setMessages([]); loadConvos() }
-    catch (e: any) { alert('Could not clear: ' + e.message) }
+    catch (e: any) { toast.error('Could not clear: ' + e.message) }
   }
 
   const senderName = (uid: string) => (active?.members.find((mm) => mm.id === uid)?.name) || (uid === user?.id ? 'You' : 'Unknown')
@@ -338,27 +353,27 @@ export default function Chats() {
   if (loading) return <div className="card" style={{ display: 'grid', placeItems: 'center', height: 'calc(100vh - 160px)' }}><span className="spinner" /></div>
 
   return (
-    <div className={'assistant-layout' + (navOpen ? ' nav-open' : '')}>
+    <div className={'assistant-layout chat-layout' + (activeId ? ' chat-open' : '')}>
       {/* ---- sidebar: conversations ---- */}
       <aside className="chat-history">
         <div className="chat-history-head">
           <span className="ch-title">Chats</span>
           <div className="row" style={{ gap: 4 }}>
-            <button className="btn btn-ghost btn-sm" onClick={() => setShowStarred(true)} title="Starred messages">⭐</button>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)} title="New chat / group">＋ New</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowStarred(true)} title="Starred messages" aria-label="Starred messages"><Ic name="star" size={16} /></button>
+            <button className="btn btn-primary btn-sm row" style={{ gap: 5 }} onClick={() => setShowNew(true)} title="New chat / group"><Ic name="plus" size={15} /> New</button>
           </div>
         </div>
         <input className="chat-contact-search" placeholder="Search chats…" value={search} onChange={(e) => setSearch(e.target.value)} />
         <div className="convo-list">
           {filteredConvos.length === 0 && <div className="empty" style={{ padding: 16, fontSize: 13 }}>No chats yet</div>}
           {filteredConvos.map((c) => (
-            <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '')} onClick={() => { setActiveId(c.id); setNavOpen(false) }}>
+            <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '')} onClick={() => setActiveId(c.id)}>
               {c.type === 'group'
                 ? <GroupAvatar conv={c} size={38} />
                 : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
               <div className="convo-meta" style={{ minWidth: 0, flex: 1 }}>
                 <div className="row spread" style={{ gap: 6 }}>
-                  <div className="convo-title" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.pinned && <span title="Pinned">📌 </span>}{c.name}</div>
+                  <div className="convo-title row" style={{ gap: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.pinned && <span title="Pinned" style={{ display: 'inline-flex', color: 'var(--muted)' }}><Ic name="pin" size={12} /></span>}{c.name}</div>
                   {c.last_at && <span className="convo-time" style={{ flexShrink: 0 }}>{relTime(c.last_at)}</span>}
                 </div>
                 <div className="chat-contact-preview">
@@ -368,7 +383,7 @@ export default function Chats() {
                 </div>
               </div>
               <div className="convo-trailing">
-                {c.muted && <span title="Muted" style={{ fontSize: 12, opacity: .6 }}>🔇</span>}
+                {c.muted && <span title="Muted" style={{ display: 'inline-flex', opacity: .6, color: 'var(--muted)' }}><Ic name="muteBell" size={13} /></span>}
                 {c.unread > 0 && <span className={'chat-unread-badge' + (c.muted ? ' dim' : '')}>{c.unread > 9 ? '9+' : c.unread}</span>}
                 <div className="convo-menu-wrap">
                   <button className="convo-menu-btn" title="Options" onClick={(e) => { e.stopPropagation(); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
@@ -389,13 +404,12 @@ export default function Chats() {
       {/* ---- conversation pane ---- */}
       <div className="card chat-pane" style={{ padding: 18 }}>
         <div className="chat">
-          <div className="chat-mobile-bar">
-            <button className="btn btn-ghost btn-sm" onClick={() => setNavOpen((o) => !o)}>☰ Chats</button>
-            <span className="convo-current">{active?.name}</span>
-          </div>
-
           {active && (() => { const otherOnline = active.type === 'direct' && !!active.other_user_id && online.has(active.other_user_id); return (
             <div className="chat-peer-head">
+              {/* Mobile-only: back to the conversation list (WhatsApp-style). */}
+              <button className="chat-list-btn" onClick={() => setActiveId('')} title="Back to chats" aria-label="Back to chats">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+              </button>
               {active.type === 'group'
                 ? <GroupAvatar conv={active} size={36} />
                 : <PresenceAvatar name={active.name} color={active.avatar_color} size={36} online={otherOnline} src={active.avatar_file && active.other_user_id ? userAvatarUrl(active.other_user_id, active.avatar_file) : undefined} />}
@@ -428,8 +442,19 @@ export default function Chats() {
           )}
 
           <div className="chat-log" ref={logRef}>
-            {!active && <div className="empty" style={{ margin: 'auto' }}>Select a chat or start a new one</div>}
-            {active && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}>{inSearch ? 'No matching messages' : <>No messages yet.<br />Say hello 👋</>}</div>}
+            {!active && (
+              <div style={{ margin: 'auto' }}>
+                <EmptyState
+                  icon={<Ic name="chat" size={40} />}
+                  title={convos.length ? 'Select a conversation' : 'No conversations yet'}
+                  hint={convos.length
+                    ? 'Choose a chat from the list to read and reply to messages.'
+                    : 'Start a new chat with a teammate or create a group to begin messaging.'}
+                  action={!convos.length ? <button className="btn btn-primary btn-sm row" style={{ gap: 5 }} onClick={() => setShowNew(true)}><Ic name="plus" size={15} /> New chat</button> : undefined}
+                />
+              </div>
+            )}
+            {active && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}>{inSearch ? 'No matching messages' : <>No messages yet.<br />Say hello</>}</div>}
             {logItems.map((it, idx) => {
               if ('sep' in it) return <div key={'sep' + idx} className="date-sep"><span>{it.sep}</span></div>
               if ('unread' in it) return <div key={'unread' + idx} className="unread-sep"><span>Unread messages</span></div>
@@ -447,31 +472,31 @@ export default function Chats() {
                     <div className="msg-body">
                       {showSender && <div className="msg-sender" style={{ color: senderColor(m.sender_id) }}>{senderName(m.sender_id)}</div>}
                       {m.deleted ? (
-                        <div className="bubble deleted">🚫 This message was deleted<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
+                        <div className="bubble deleted row" style={{ gap: 6 }}><Ic name="block" size={13} /> This message was deleted<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
                       ) : (
                         <div className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '')}>
-                          {m.forwarded && <div className="forwarded-tag">↪ Forwarded</div>}
+                          {m.forwarded && <div className="forwarded-tag row" style={{ gap: 5 }}><Ic name="forward" size={12} /> Forwarded</div>}
                           {m.reply && (
                             <div className="reply-quote"><span className="reply-quote-name">{m.reply.sender_id === user!.id ? 'You' : m.reply.sender_name}</span><span className="reply-quote-text">{m.reply.text}</span></div>
                           )}
                           {m.file && (isImage && !m.uploading
                             ? <a href={fileUrl(m)} target="_blank" rel="noreferrer"><img className="chat-image" src={fileUrl(m)} alt={m.file.name} /></a>
                             : <div className="chat-file">
-                                <span className="chat-file-icon">{m.uploading ? '⏳' : '📎'}</span>
+                                <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <Ic name="attach" size={18} />}</span>
                                 <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? 'Sending…' : fmtSize(m.file?.size)}</span></span>
-                                {!m.uploading && <button className="chat-file-dl" title="Download" onClick={() => download(m)}>⬇</button>}
+                                {!m.uploading && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
                               </div>)}
                           {m.body && <span className="bubble-text">{m.body}</span>}
                           {!m.file && (
                             <span className="bubble-foot-spacer" aria-hidden="true">
-                              {m.starred && <span>⭐</span>}
+                              {m.starred && <span><Ic name="star" size={11} /></span>}
                               {m.edited_at && <span className="edited-tag">edited</span>}
                               <span>{fmtTime(m.created_at)}</span>
                               {mine && <span className="ticks">{m.seen ? '✓✓' : '✓'}</span>}
                             </span>
                           )}
                           <span className="bubble-foot">
-                            {m.starred && <span title="Starred">⭐</span>}
+                            {m.starred && <span title="Starred" style={{ display: 'inline-flex' }}><Ic name="star" size={11} /></span>}
                             {m.edited_at && <span className="edited-tag">edited</span>}
                             <span className="bubble-time">{fmtTime(m.created_at)}</span>
                             {mine && <span className="ticks" title={m.seen ? 'Seen' : 'Sent'}>{m.seen ? '✓✓' : '✓'}</span>}
@@ -488,8 +513,8 @@ export default function Chats() {
                     </div>
                     {!isTemp && !m.deleted && (
                       <div className="msg-tools">
-                        <button className="msg-tool-btn" title="React" onClick={(e) => { e.stopPropagation(); setReactFor(reactFor === m.id ? null : m.id); setMenuId(null) }}>😊</button>
-                        <button className="msg-tool-btn" title="Reply" onClick={(e) => { e.stopPropagation(); startReply(m) }}>↩</button>
+                        <button className="msg-tool-btn" title="React" aria-label="React" onClick={(e) => { e.stopPropagation(); setReactFor(reactFor === m.id ? null : m.id); setMenuId(null) }}><Ic name="smile" size={16} /></button>
+                        <button className="msg-tool-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); startReply(m) }}><Ic name="reply" size={16} /></button>
                         <div className="msg-menu-wrap">
                           <button className="msg-tool-btn" title="More" onClick={(e) => { e.stopPropagation(); setMenuId(menuId === m.id ? null : m.id); setReactFor(null) }}>⋯</button>
                           {menuId === m.id && (
@@ -524,7 +549,7 @@ export default function Chats() {
             <div className="composer">
               {replyTo && (
                 <div className="reply-banner">
-                  <div className="reply-banner-body"><span className="reply-quote-name">Replying to {replyTo.sender_id === user!.id ? 'yourself' : senderName(replyTo.sender_id)}</span><span className="reply-quote-text">{replyTo.file ? '📎 ' + replyTo.file.name : replyTo.body}</span></div>
+                  <div className="reply-banner-body"><span className="reply-quote-name">Replying to {replyTo.sender_id === user!.id ? 'yourself' : senderName(replyTo.sender_id)}</span><span className="reply-quote-text row" style={{ gap: 5 }}>{replyTo.file ? <><Ic name="attach" size={12} /> {replyTo.file.name}</> : replyTo.body}</span></div>
                   <button className="btn btn-ghost btn-sm" onClick={() => setReplyTo(null)}>✕</button>
                 </div>
               )}
@@ -567,13 +592,13 @@ function ForwardModal({ message, convos, onClose, onDone }: { message: Msg; conv
   const go = async () => {
     if (!sel.size) return
     setBusy(true)
-    try { await api.post(`/chat/message/${message.id}/forward`, { conversationIds: [...sel] }); onDone() } catch (e: any) { alert(e.message); setBusy(false) }
+    try { await api.post(`/chat/message/${message.id}/forward`, { conversationIds: [...sel] }); onDone() } catch (e: any) { toast.error(e.message); setBusy(false) }
   }
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>Forward to…</h3><button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button></div>
-        <div className="fwd-preview">{message.file ? '📎 ' + message.file.name : message.body}</div>
+        <div className="fwd-preview row" style={{ gap: 5 }}>{message.file ? <><Ic name="attach" size={13} /> {message.file.name}</> : message.body}</div>
         <input className="chat-contact-search" placeholder="Search chats…" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="modal-list">
           {list.map((c) => (
@@ -599,12 +624,12 @@ function StarredModal({ onClose, onOpen }: { onClose: () => void; onOpen: (convI
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>⭐ Starred messages</h3><button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button></div>
+        <div className="card-head spread"><h3 className="row" style={{ margin: 0, fontSize: 16, gap: 7 }}><Ic name="star" size={16} /> Starred messages</h3><button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="modal-list">
           {loaded && items.length === 0 && <div className="empty" style={{ padding: 20 }}>No starred messages yet</div>}
           {items.map((m) => (
             <div key={m.id} className="starred-item" onClick={() => onOpen(m.conversation_id)}>
-              <div className="starred-body">{m.file ? '📎 ' + m.file.name : m.body}</div>
+              <div className="starred-body row" style={{ gap: 6 }}>{m.file ? <><Ic name="attach" size={13} /> {m.file.name}</> : m.body}</div>
               <div className="muted" style={{ fontSize: 11 }}>{fmtTime(m.created_at)}</div>
             </div>
           ))}
@@ -628,12 +653,12 @@ function NewChatModal({ user, convos, onClose, onOpen }: { user: OrgUser; convos
 
   const startDirect = async (uid: string) => {
     setBusy(true)
-    try { const c = await api.post('/chat/conversations', { type: 'direct', userId: uid }); onOpen(c.id) } catch (e: any) { alert(e.message); setBusy(false) }
+    try { const c = await api.post('/chat/conversations', { type: 'direct', userId: uid }); onOpen(c.id) } catch (e: any) { toast.error(e.message); setBusy(false) }
   }
   const createGroup = async () => {
     if (!groupName.trim() || sel.size === 0) return
     setBusy(true)
-    try { const c = await api.post('/chat/conversations', { type: 'group', name: groupName.trim(), memberIds: [...sel] }); onOpen(c.id) } catch (e: any) { alert(e.message); setBusy(false) }
+    try { const c = await api.post('/chat/conversations', { type: 'group', name: groupName.trim(), memberIds: [...sel] }); onOpen(c.id) } catch (e: any) { toast.error(e.message); setBusy(false) }
   }
 
   return (
@@ -675,21 +700,21 @@ function GroupInfo({ conv, user, onClose, onChanged, onLeft }: { conv: Conversat
   const uploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; e.target.value = ''
     if (!file) return
-    if (!file.type.startsWith('image/')) { alert('Please choose an image'); return }
+    if (!file.type.startsWith('image/')) { toast.error('Please choose an image'); return }
     try {
       const form = new FormData(); form.append('file', file)
       const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`/api/chat/conversations/${conv.id}/avatar`, { method: 'POST', headers, body: form })
+      const res = await fetch(`${API_BASE}/api/chat/conversations/${conv.id}/avatar`, { method: 'POST', headers, body: form })
       if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
       onChanged()
-    } catch (err: any) { alert('Could not set photo: ' + err.message) }
+    } catch (err: any) { toast.error('Could not set photo: ' + err.message) }
   }
 
-  const rename = async () => { if (!name.trim() || name === conv.name) return; try { await api.patch(`/chat/conversations/${conv.id}`, { name: name.trim() }); onChanged() } catch (e: any) { alert(e.message) } }
-  const addMembers = async () => { if (!sel.size) return; try { await api.post(`/chat/conversations/${conv.id}/members`, { userIds: [...sel] }); setAdding(false); setSel(new Set()); onChanged() } catch (e: any) { alert(e.message) } }
-  const remove = async (uid: string) => { if (!window.confirm('Remove this member?')) return; try { await api.del(`/chat/conversations/${conv.id}/members/${uid}`); onChanged() } catch (e: any) { alert(e.message) } }
-  const leave = async () => { if (!window.confirm('Leave this group?')) return; try { await api.del(`/chat/conversations/${conv.id}/members/${user.id}`); onLeft() } catch (e: any) { alert(e.message) } }
-  const deleteGroup = async () => { if (!window.confirm(`Delete "${conv.name}" for everyone? This cannot be undone.`)) return; try { await api.del(`/chat/conversations/${conv.id}`); onLeft() } catch (e: any) { alert(e.message) } }
+  const rename = async () => { if (!name.trim() || name === conv.name) return; try { await api.patch(`/chat/conversations/${conv.id}`, { name: name.trim() }); onChanged() } catch (e: any) { toast.error(e.message) } }
+  const addMembers = async () => { if (!sel.size) return; try { await api.post(`/chat/conversations/${conv.id}/members`, { userIds: [...sel] }); setAdding(false); setSel(new Set()); onChanged() } catch (e: any) { toast.error(e.message) } }
+  const remove = async (uid: string) => { if (!(await confirmDialog({ message: 'Remove this member?', confirmText: 'Remove', danger: true }))) return; try { await api.del(`/chat/conversations/${conv.id}/members/${uid}`); onChanged() } catch (e: any) { toast.error(e.message) } }
+  const leave = async () => { if (!(await confirmDialog({ title: 'Leave group', message: 'Leave this group?', confirmText: 'Leave', danger: true }))) return; try { await api.del(`/chat/conversations/${conv.id}/members/${user.id}`); onLeft() } catch (e: any) { toast.error(e.message) } }
+  const deleteGroup = async () => { if (!(await confirmDialog({ title: 'Delete group', message: `Delete "${conv.name}" for everyone? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return; try { await api.del(`/chat/conversations/${conv.id}`); onLeft() } catch (e: any) { toast.error(e.message) } }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -699,7 +724,7 @@ function GroupInfo({ conv, user, onClose, onChanged, onLeft }: { conv: Conversat
           <input ref={photoInput} type="file" accept="image/*" style={{ display: 'none' }} onChange={uploadPhoto} />
           <button className="avatar-edit-btn" disabled={!isAdmin} title={isAdmin ? 'Change group photo' : ''} onClick={() => isAdmin && photoInput.current?.click()}>
             <GroupAvatar conv={conv} size={72} />
-            {isAdmin && <span className="avatar-edit-icon">✎</span>}
+            {isAdmin && <span className="avatar-edit-icon"><Ic name="edit" size={10} /></span>}
           </button>
         </div>
         <div className="row" style={{ gap: 8, marginBottom: 12 }}>

@@ -1,10 +1,15 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import path from 'node:path'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import './restore.js' // MUST come before db.js — restores real data before the DB is opened
 import { initSchema, db } from './db.js'
 import { ensureSeed } from './seed.js'
 
 import authRoutes from './routes/auth.js'
+import inviteRoutes from './routes/invites.js'
 import userRoutes from './routes/users.js'
 import meetingRoutes from './routes/meetings.js'
 import taskRoutes from './routes/tasks.js'
@@ -13,6 +18,9 @@ import assistantRoutes from './routes/assistant.js'
 import notificationRoutes from './routes/notifications.js'
 import digestRoutes from './routes/digest.js'
 import chatRoutes from './routes/chat.js'
+import platformRoutes from './routes/platform.js'
+import usageRoutes from './routes/usage.js'
+import scoreRoutes from './routes/scores.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -51,6 +59,7 @@ app.get('/api/health', (req, res) => {
 })
 
 app.use('/api/auth', authRoutes)
+app.use('/api/invites', inviteRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/meetings', meetingRoutes)
 app.use('/api/tasks', taskRoutes)
@@ -59,6 +68,27 @@ app.use('/api/assistant', assistantRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/digest', digestRoutes)
 app.use('/api/chat', chatRoutes)
+app.use('/api/platform', platformRoutes)
+app.use('/api/usage', usageRoutes)
+app.use('/api/scores', scoreRoutes)
+
+// --- Serve the built web client (client/dist) from this SAME service ----------
+// So one URL hosts BOTH the website (for people without the Android app) AND the
+// API. On Render the client build sits at ../../client/dist relative to this file
+// (server/src). Built by render.yaml's buildCommand. Skipped gracefully when the
+// build isn't present (e.g. API-only local dev with the Vite dev server).
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const clientDist = path.resolve(__dirname, '../../client/dist')
+if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+  app.use(express.static(clientDist))
+  // SPA fallback: any non-/api GET returns index.html so client-side routes
+  // (BrowserRouter) survive a refresh or deep link. Unknown /api/* paths are
+  // excluded so they still get a proper JSON 404 instead of the HTML shell.
+  app.get(/^(?!\/api\/).*/, (req, res) => res.sendFile(path.join(clientDist, 'index.html')))
+  console.log(`  Web client: serving ${clientDist}`)
+} else {
+  console.log('  Web client: not built (API-only). Build client/ to serve the website here.')
+}
 
 app.use((err, req, res, next) => {
   console.error('[error]', err)

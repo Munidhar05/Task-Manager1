@@ -1,12 +1,25 @@
 import { Router } from 'express'
+import multer from 'multer'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../util.js'
 import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
+import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
+import { interpretVoiceSearch } from '../ai/voiceSearch.js'
+import { recordUsage } from '../ai/usage.js'
+
+// The configured speech-to-text provider, for usage attribution.
+const STT_PROVIDER = (process.env.TRANSCRIPTION_PROVIDER || 'sarvam').toLowerCase()
+import { parseDueDate } from '../ai/dates.js'
+import { transcribeAudio } from '../ai/transcribe.js'
 
 const r = Router()
 r.use(authRequired)
+
+// Voice dictation for the "Speak" button records ONE short audio clip (≤ ~30s)
+// per task, so a 10 MB cap is plenty and keeps abuse small.
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
 
 const VALID_STATUS = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
@@ -20,6 +33,28 @@ function hydrate(t) {
   const deps = db.prepare(`SELECT d.depends_on_task_id AS id, t2.title, t2.status FROM task_dependencies d JOIN tasks t2 ON t2.id=d.depends_on_task_id WHERE d.task_id=?`).all(t.id)
   const attachments = db.prepare('SELECT * FROM attachments WHERE task_id=?').all(t.id)
   return { ...t, assignee, assignedBy, project, subtasks, comments, dependencies: deps, attachments }
+}
+
+// Roll a split parent's status up from its children: once every shared part is
+// Done the parent auto-completes; if a part is later reopened, the parent reopens
+// too — so the owner stays accountable and the roll-up stays honest.
+function syncParentStatus(parentId) {
+  if (!parentId) return
+  const parent = db.prepare('SELECT * FROM tasks WHERE id=?').get(parentId)
+  if (!parent) return
+  const kids = db.prepare('SELECT status FROM tasks WHERE parent_task_id=?').all(parentId)
+  if (!kids.length) return
+  const allDone = kids.every((k) => k.status === 'Done')
+  if (allDone && parent.status !== 'Done') {
+    db.prepare('UPDATE tasks SET status=?, progress=100, completed_at=?, updated_at=? WHERE id=?')
+      .run('Done', now(), now(), parentId)
+    notify(parent.org_id, parent.assignee_id, 'task_approved', `All parts of "${parent.title}" are done — task completed`, parentId)
+    indexTask(parentId)
+  } else if (!allDone && parent.status === 'Done') {
+    db.prepare('UPDATE tasks SET status=?, progress=?, completed_at=NULL, updated_at=? WHERE id=?')
+      .run('Reopened', Math.min(parent.progress ?? 0, 80), now(), parentId)
+    indexTask(parentId)
+  }
 }
 
 // LIST with filters: ?status=&priority=&assignee=&project=&meeting=&mine=1&q=
@@ -42,7 +77,12 @@ r.get('/', (req, res) => {
   if (project) { sql += ' AND t.project_id=?'; args.push(project) }
   if (meeting) { sql += ' AND t.meeting_id=?'; args.push(meeting) }
   if (confidence) { sql += ' AND t.ownership_confidence=?'; args.push(confidence) }
-  if (q) { sql += ' AND (t.title LIKE ? OR t.description LIKE ?)'; args.push(`%${q}%`, `%${q}%`) }
+  // Match the query against the title, description, OR the assignee's name — so
+  // searching (or saying) a person's name surfaces all of their tasks.
+  if (q) {
+    sql += ' AND (t.title LIKE ? OR t.description LIKE ? OR t.assignee_id IN (SELECT id FROM users WHERE org_id=? AND name LIKE ?))'
+    args.push(`%${q}%`, `%${q}%`, req.user.org_id, `%${q}%`)
+  }
   sql += " ORDER BY CASE t.priority WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, t.due_date IS NULL, t.due_date"
   const rows = db.prepare(sql).all(...args)
   res.json(rows.map(hydrate))
@@ -54,18 +94,130 @@ r.get('/:id', (req, res) => {
   res.json(hydrate(t))
 })
 
+// TRANSCRIBE a single dictated audio clip -> text. Powers the "Speak" button on
+// the New Task modal for EVERYONE (employees included) — unlike the meetings
+// transcriber, which is manager/admin only. Uses the same Sarvam/Whisper pipeline,
+// which is far more reliable on Android and for Telugu/Hindi/English code-mixing
+// than the browser's SpeechRecognition.
+r.post('/transcribe', audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'audio file required (field "audio")' })
+  try {
+    const { text, language } = await transcribeAudio(
+      req.file.buffer,
+      req.file.originalname || 'task.webm',
+      req.file.mimetype || 'audio/webm',
+    )
+    recordUsage({ orgId: req.user.org_id, userId: req.user.id, provider: STT_PROVIDER, feature: 'transcription' })
+    res.json({ text: text || '', language: language || null })
+  } catch (err) {
+    console.error('[tasks] transcribe failed:', err.message)
+    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+  }
+})
+
+// VOICE SEARCH: transcribe a spoken query (any language), translate it to English,
+// and split it into structured filters the list endpoint understands. Saying a
+// person's name returns ALL of that employee's tasks; topic words search title/desc.
+r.post('/voice-search', audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'audio file required (field "audio")' })
+  try {
+    const { text } = await transcribeAudio(
+      req.file.buffer,
+      req.file.originalname || 'search.webm',
+      req.file.mimetype || 'audio/webm',
+    )
+    recordUsage({ orgId: req.user.org_id, userId: req.user.id, provider: STT_PROVIDER, feature: 'transcription' })
+    const transcript = String(text || '').trim()
+    // Default (no LLM / interpret failed): fall back to the raw transcript as the query.
+    let interp = { query: transcript, person: null, status: null, priority: null }
+    if (transcript && hasLLM()) {
+      try {
+        const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(req.user.org_id)
+        interp = await interpretVoiceSearch(transcript, {
+          users,
+          onUsage: (u) => recordUsage({ orgId: req.user.org_id, userId: req.user.id, feature: 'voice_search', ...u }),
+        })
+      } catch (e) { console.warn('[tasks] voice-search interpret failed, using transcript:', e.message) }
+    }
+    // Resolve a named person to an assignee id (handles aliases / first-name-only).
+    let assignee_id = null, assignee_name = null
+    if (interp.person) {
+      const u = resolveUser(req.user.org_id, interp.person)
+      if (u) { assignee_id = u.id; assignee_name = u.name }
+    }
+    res.json({
+      transcript,
+      // When we matched a person but found no topic words, leave query empty so the
+      // assignee filter alone returns every task for that employee.
+      query: interp.query || (assignee_id ? '' : transcript),
+      assignee_id,
+      assignee_name,
+      status: interp.status || null,
+      priority: interp.priority || null,
+    })
+  } catch (err) {
+    console.error('[tasks] voice-search failed:', err.message)
+    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+  }
+})
+
+// PARSE a dictated sentence into draft task fields (title/description/assignee/
+// priority). Used by the "Speak" button on the New Task modal. Falls back to
+// using the raw transcript as the title when no LLM is configured or the call
+// fails, so voice always produces *something*.
+r.post('/parse-voice', async (req, res) => {
+  const transcript = String(req.body?.transcript || '').trim()
+  if (!transcript) return res.status(400).json({ error: 'transcript required' })
+
+  const fallback = () => res.json({
+    title: transcript, description: '', assignee_id: null, assignee_name: null,
+    priority: 'Medium', due_date_raw: null, engine: 'none',
+  })
+
+  if (!hasLLM()) return fallback()
+  try {
+    const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(req.user.org_id)
+    const parsed = await parseSpokenTask(transcript, {
+      users,
+      onUsage: (u) => recordUsage({ orgId: req.user.org_id, userId: req.user.id, feature: 'voice_task', ...u }),
+    })
+    // Resolve the spoken name to a real org user (null if no confident match).
+    const match = parsed.assignee_name ? resolveUser(req.user.org_id, parsed.assignee_name) : null
+    // Resolve a spoken deadline ("by Friday", "tomorrow", "repu", "kal") to an
+    // absolute YYYY-MM-DD, anchored to today. Try the AI's extracted phrase first,
+    // then fall back to scanning the whole transcript.
+    const today = new Date().toISOString().slice(0, 10)
+    const due = parseDueDate(parsed.due_date_raw || '', today).date || parseDueDate(transcript, today).date
+    res.json({
+      title: parsed.title,
+      description: parsed.description,
+      assignee_id: match?.id || null,
+      assignee_name: match?.name || parsed.assignee_name || null,
+      priority: parsed.priority,
+      due_date: due || null,
+      due_date_raw: parsed.due_date_raw,
+      engine: 'llm',
+    })
+  } catch (err) {
+    console.warn('[tasks] voice parse failed, using raw transcript:', err.message)
+    fallback()
+  }
+})
+
 // CREATE
 r.post('/', (req, res) => {
   const b = req.body || {}
   if (!b.title) return res.status(400).json({ error: 'title required' })
-  const isEmployee = req.user.role === 'employee'
-  // An employee's new task is a PRIVATE self-task: owned by them, hidden from the
-  // manager until they submit it. Managers/admins create normal, visible tasks.
-  const assignee = isEmployee
+  // A personal task (b.personal — a private to-do / My Tasks) is owned by the
+  // creator and hidden from everyone else. Otherwise ANYONE may assign the task
+  // to ANYONE in the org (employee→employee, employee→manager, …) or leave it
+  // unassigned.
+  const personal = !!b.personal
+  const assignee = personal
     ? { id: req.user.id }
     : (b.assignee_id ? db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(b.assignee_id, req.user.org_id) : null)
-  const visible = isEmployee ? 0 : 1
-  const confidence = isEmployee ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
+  const visible = personal ? 0 : 1
+  const confidence = personal ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
   const priority = b.priority || 'Medium'
   // Auto-fill the due date from priority when the caller didn't supply one.
   const dueDate = b.due_date || dueDateForPriority(priority)
@@ -81,6 +233,10 @@ r.post('/', (req, res) => {
     confidence, b.parent_task_id || null,
     0, 'none', b.source_quote || null, assignee ? now() : null, visible, now(), now())
   audit(req.user.org_id, req.user.id, 'task.create', 'task', tid, b.title)
+  // Notify the assignee when someone assigns them a task (not their own).
+  if (assignee && assignee.id !== req.user.id) {
+    notify(req.user.org_id, assignee.id, 'task_assigned', `${req.user.name} assigned you "${b.title}"`, tid)
+  }
   indexTask(tid) // fire-and-forget RAG indexing
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(tid)))
 })
@@ -120,6 +276,7 @@ r.patch('/:id', (req, res) => {
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id=?`).run(...args)
   audit(req.user.org_id, req.user.id, 'task.update', 'task', t.id, b)
   if (newlyAssigned) notify(t.org_id, newlyAssigned, 'task_assigned', `${req.user.name} assigned you "${t.title}"`, t.id)
+  if (t.parent_task_id && 'status' in b) syncParentStatus(t.parent_task_id)
   indexTask(t.id) // re-index on edit (title/desc/assignee/status may have changed)
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
@@ -145,8 +302,53 @@ r.post('/:id/status', (req, res) => {
   if (status === 'In Review') {
     notifyManagers(t.org_id, 'task_submitted', `${req.user.name} submitted "${t.title}" for approval`, t.id, req.user.id)
   }
+  if (t.parent_task_id) syncParentStatus(t.parent_task_id) // a shared part changed → re-roll the parent
   indexTask(t.id) // status change updates the embedded metadata
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+})
+
+// SPLIT — the task owner (or a manager) distributes parts of a task to peers as
+// child tasks. Each part becomes a visible subtask assigned to a colleague, who
+// is notified. The split always surfaces the parent to managers (visibility).
+r.post('/:id/split', (req, res) => {
+  const parent = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!parent) return res.status(404).json({ error: 'Not found' })
+  const isManager = req.user.role === 'manager' || req.user.role === 'admin'
+  if (!isManager && parent.assignee_id !== req.user.id) {
+    return res.status(403).json({ error: 'Only the task owner can split this task.' })
+  }
+  if (parent.parent_task_id) return res.status(400).json({ error: 'A shared part cannot be split again.' })
+
+  const parts = (Array.isArray(req.body?.parts) ? req.body.parts : [])
+    .map((p) => ({ title: String(p?.title || '').trim(), assignee_id: p?.assignee_id || null }))
+    .filter((p) => p.title && p.assignee_id)
+  if (!parts.length) return res.status(400).json({ error: 'Add at least one part with a title and a person.' })
+
+  for (const p of parts) {
+    const assignee = db.prepare('SELECT id, name FROM users WHERE id=? AND org_id=?').get(p.assignee_id, req.user.org_id)
+    if (!assignee) continue
+    const cid = id('task')
+    db.prepare(`INSERT INTO tasks
+      (id, org_id, title, description, assignee_id, assigned_by_id, due_date, due_date_raw, priority, status,
+       project_id, department_id, meeting_id, ownership_confidence, parent_task_id, progress, approval_status, source_quote,
+       assigned_at, visible_to_manager, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      cid, parent.org_id, p.title, '', assignee.id, req.user.id,
+      parent.due_date, parent.due_date_raw, parent.priority, 'To Do',
+      parent.project_id, parent.department_id, parent.meeting_id,
+      'high', parent.id, 0, 'none', null, now(), 1, now(), now())
+    audit(parent.org_id, req.user.id, 'task.split', 'task', cid, p.title)
+    indexTask(cid)
+    if (assignee.id !== req.user.id) {
+      notify(parent.org_id, assignee.id, 'task_assigned', `${req.user.name} shared a part of "${parent.title}" with you: ${p.title}`, cid)
+    }
+  }
+  // Splitting makes the parent (and its parts) visible to managers for oversight.
+  if (!parent.visible_to_manager) {
+    db.prepare('UPDATE tasks SET visible_to_manager=1, updated_at=? WHERE id=?').run(now(), parent.id)
+    indexTask(parent.id)
+  }
+  res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(parent.id)))
 })
 
 // APPROVAL workflow (managers/admins)

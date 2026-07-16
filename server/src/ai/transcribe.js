@@ -26,7 +26,10 @@ async function sarvam(buffer, filename, mimetype) {
   const form = new FormData()
   form.append('file', new Blob([buffer], { type: mimetype }), filename)
   form.append('model', process.env.SARVAM_MODEL || 'saarika:v2.5')
-  form.append('language_code', 'unknown') // auto-detect language (incl. code-mixed Indian languages)
+  // Lock the recognized language so audio is never mis-transcribed into other
+  // Indian languages (Malayalam/Tamil/…). Default English; override per deployment
+  // with SARVAM_LANGUAGE (e.g. te-IN, hi-IN). "unknown" re-enables full auto-detect.
+  form.append('language_code', process.env.SARVAM_LANGUAGE || 'en-IN')
   const res = await fetch('https://api.sarvam.ai/speech-to-text', {
     method: 'POST',
     headers: { 'api-subscription-key': key },

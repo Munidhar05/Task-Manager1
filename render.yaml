@@ -1,0 +1,80 @@
+# Render Blueprint — backend (Express + SQLite + WebSockets) for SmartTask AI.
+# Render reads this file automatically when you create a "Blueprint" from the repo.
+# The persistent disk keeps the SQLite database + uploaded files across restarts
+# and redeploys (this is why a paid `starter` plan is required — free has no disk).
+services:
+  - type: web
+    name: smarttask-api
+    runtime: node
+    rootDir: server            # build + start run inside server/
+    plan: starter              # ~$7/mo — required for the persistent disk below
+    region: singapore          # closest Render region to India
+    # Build the API (compiles better-sqlite3 native module) AND the web client,
+    # so this one service serves both the website and the API. --include=dev is
+    # required because the client build needs vite/tsc (devDependencies).
+    buildCommand: npm install && cd ../client && npm install --include=dev && npm run build
+    startCommand: npm start    # node src/index.js (also serves ../client/dist)
+    healthCheckPath: /api/health
+    autoDeploy: true           # redeploy on every push to the connected branch
+    disk:
+      name: data
+      # Absolute path to server/data inside Render's checkout. The app writes the
+      # DB (smarttask.db), chat_uploads/ and avatars/ here — all on this disk.
+      mountPath: /opt/render/project/src/server/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        # Must satisfy Vite 8's engine requirement (^20.19.0 || >=22.12.0) or the
+        # client `vite build` crashes and the whole deploy fails. Same Node 20 ABI
+        # as before, so better-sqlite3's prebuilt binary still applies.
+        value: 20.19.0
+      # JWT signing key — Render generates a strong value once and keeps it stable.
+      - key: JWT_SECRET
+        generateValue: true
+      # --- Secrets you paste in the Render dashboard (sync:false = not in repo) ---
+      # Only fill the ones you actually use; the app falls back gracefully.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: TRANSCRIPTION_PROVIDER
+        sync: false
+      - key: OPENAI_TRANSCRIBE_MODEL
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: SARVAM_LANGUAGE
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CLIQ_WEBHOOK_URL
+        sync: false
+      - key: DIGEST_HOUR
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      # Base URL used to build links inside emails (verify / reset / invite). MUST
+      # be the public app origin or those links point at localhost. The backend
+      # serves the web client at the same origin, so this is the service URL.
+      - key: APP_URL
+        sync: false
+      # Comma-separated emails granted PLATFORM (super) admin — these accounts can
+      # oversee ALL organizations. Synced on login; leave blank for none.
+      - key: PLATFORM_ADMIN_EMAILS
+        sync: false

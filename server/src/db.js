@@ -153,6 +153,23 @@ export function initSchema() {
     created_at TEXT NOT NULL
   );
 
+  -- AI / external API usage, one row per provider call, attributed to an org.
+  -- Powers per-organization usage tracking (calls, tokens, estimated cost).
+  CREATE TABLE IF NOT EXISTS usage_events (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT,
+    provider TEXT NOT NULL,                       -- sarvam | openrouter | anthropic | openai | groq
+    feature TEXT NOT NULL,                        -- transcription | assistant | voice_search | voice_task | meeting_analysis
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_usage_org ON usage_events(org_id, created_at);
+
   CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
@@ -165,6 +182,17 @@ export function initSchema() {
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read);
+
+  -- FCM device tokens for native push (one row per device; pushes target a user's rows).
+  CREATE TABLE IF NOT EXISTS device_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL DEFAULT 'android',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_devtok_user ON device_tokens(user_id);
 
   CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
@@ -320,9 +348,89 @@ export function initSchema() {
     FOREIGN KEY (suggested_assignee_id) REFERENCES users(id)
   );
   CREATE INDEX IF NOT EXISTS idx_suggested_meeting ON suggested_tasks(meeting_id, status);
+
+  -- Team invitations: a manager invites a teammate by email; the invitee follows
+  -- a tokenized link to set their own password and join the org with the given role.
+  CREATE TABLE IF NOT EXISTS invites (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL,
+    department_id TEXT,
+    token TEXT NOT NULL UNIQUE,
+    invited_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | accepted | revoked
+    created_at TEXT NOT NULL,
+    accepted_at TEXT,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (org_id) REFERENCES organizations(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_invites_org ON invites(org_id, status);
+
+  -- Single-use, expiring tokens for "forgot password".
+  CREATE TABLE IF NOT EXISTS password_resets (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  -- Single-use, expiring tokens that confirm a user owns their email address.
+  CREATE TABLE IF NOT EXISTS email_verifications (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  -- Employee performance: one row per user per calendar DAY they were active.
+  -- day_score (0-100) is that day's execution score; rating_after (0-1000) is the
+  -- cumulative self-correcting all-time rating AFTER applying that day. The current
+  -- all-time rating is simply the latest row's rating_after. Written by the daily
+  -- advance job (performance.js), which is idempotent per (user_id, day). Extra
+  -- columns cache the component figures so the UI can explain a score without
+  -- recomputing. See scoring.js for the maths.
+  CREATE TABLE IF NOT EXISTS performance_daily (
+    user_id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    day TEXT NOT NULL,                         -- YYYY-MM-DD (local server date)
+    day_score REAL NOT NULL,                   -- 0-100
+    rating_after REAL NOT NULL,                -- 0-1000 cumulative rating after this day
+    tasks_done INTEGER NOT NULL DEFAULT 0,     -- tasks completed that day
+    weighted REAL NOT NULL DEFAULT 0,          -- priority-weighted throughput that day
+    on_time_rate REAL,                         -- 0-1, null if no due-dated completion
+    quality_rate REAL,                         -- 0-1, null if nothing resolved
+    engagement REAL NOT NULL DEFAULT 0,        -- 0-1
+    penalty REAL NOT NULL DEFAULT 0,           -- points deducted for overdue work
+    overdue_open INTEGER NOT NULL DEFAULT 0,   -- # open past-due tasks as of that day
+    PRIMARY KEY (user_id, day),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_perf_org_day ON performance_daily(org_id, day);
+  CREATE INDEX IF NOT EXISTS idx_perf_user_day ON performance_daily(user_id, day);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
+  // Marks a workspace as a solo/personal account (org of one) vs a team company.
+  // Existing orgs default to 0 (company) — no change to the org structure.
+  ensureColumn('organizations', 'is_personal', 'INTEGER DEFAULT 0')
+  // Platform (super) admin — can oversee ALL organizations. Granted via the
+  // PLATFORM_ADMIN_EMAILS env var (synced on login). Default 0 for everyone.
+  ensureColumn('users', 'platform_admin', 'INTEGER DEFAULT 0')
+  // Per-org allowed email domains (comma-separated). NULL/empty = no restriction.
+  ensureColumn('organizations', 'allowed_domains', 'TEXT')
+  // Lets the super admin grant an org's own admins access to view their usage.
+  ensureColumn('organizations', 'usage_access', 'INTEGER DEFAULT 0')
+  ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
+  // Google account link: the Google user id ("sub") for accounts that have signed
+  // in with Google at least once. NULL for password-only accounts. Sign-in matches
+  // on email first (login-only — we never create accounts from Google), then stamps
+  // this so the link is explicit for future logins.
+  ensureColumn('users', 'google_id', 'TEXT')
   ensureColumn('tasks', 'assigned_at', 'TEXT')
   ensureColumn('tasks', 'submitted_at', 'TEXT')
   ensureColumn('tasks', 'completed_at', 'TEXT')

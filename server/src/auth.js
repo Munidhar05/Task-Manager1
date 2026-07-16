@@ -3,6 +3,9 @@ import bcrypt from 'bcryptjs'
 import { db } from './db.js'
 
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me'
+// How long a login stays valid. Long-lived so users aren't logged out mid-use;
+// override with JWT_EXPIRES_IN (e.g. '12h', '7d', '30d').
+const EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d'
 
 export const hashPassword = (pw) => bcrypt.hashSync(pw, 10)
 export const verifyPassword = (pw, hash) => bcrypt.compareSync(pw, hash)
@@ -11,7 +14,7 @@ export function signToken(user) {
   return jwt.sign(
     { sub: user.id, role: user.role, org_id: user.org_id, name: user.name },
     SECRET,
-    { expiresIn: '12h' }
+    { expiresIn: EXPIRES_IN }
   )
 }
 
@@ -50,4 +53,20 @@ export function requireRole(...roles) {
     }
     next()
   }
+}
+
+// Platform-admin gate: only a flagged super-admin may access cross-org routes.
+// This is the single, deliberate exception to per-org isolation.
+export function requirePlatformAdmin(req, res, next) {
+  if (!req.user || !req.user.platform_admin) {
+    return res.status(403).json({ error: 'Platform admin access required' })
+  }
+  next()
+}
+
+// Emails designated as platform admins via env (comma-separated). The operator
+// controls this on the server, so super-admins can't be self-granted in the app.
+export function platformAdminEmails() {
+  return (process.env.PLATFORM_ADMIN_EMAILS || '')
+    .toLowerCase().split(',').map((s) => s.trim()).filter(Boolean)
 }
