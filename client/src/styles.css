@@ -307,6 +307,15 @@ tbody tr:hover { background: var(--n-50); }
 .pbi-datepop label { display: flex; flex-direction: column; gap: 5px; margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 .pbi-datepop input { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; color: var(--text); background: var(--surface); }
 .pbi-datepop input:focus { outline: none; border-color: var(--primary); }
+/* AI-suggestion banner (dashboard) — matches the template's suggestions card. */
+.ai-suggest { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px 16px; box-shadow: var(--e-1); cursor: pointer; transition: transform .15s, box-shadow .15s, border-color .15s; }
+.ai-suggest:hover { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); transform: translateY(-1px); box-shadow: var(--e-2); }
+.ai-suggest-ic { width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0; display: grid; place-items: center; color: var(--primary); background: linear-gradient(150deg, color-mix(in srgb, var(--primary) 20%, #fff), color-mix(in srgb, var(--primary) 8%, #fff)); }
+.ai-suggest-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ai-suggest-title { font-weight: 700; font-size: 14.5px; color: var(--text); }
+.ai-suggest-sub { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+.ai-suggest-go { margin-left: auto; color: var(--n-400); font-size: 22px; font-weight: 700; line-height: 1; flex-shrink: 0; }
+
 .pbi-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; flex-shrink: 0; }
 .kpi { position: relative; border-radius: 16px; padding: 15px 16px 15px 19px; border: 1px solid var(--border);
   background:

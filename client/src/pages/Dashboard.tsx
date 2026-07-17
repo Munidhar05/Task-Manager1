@@ -32,6 +32,27 @@ function Greeting({ name, style }: { name: string; style?: React.CSSProperties }
   )
 }
 
+// AI-suggestion banner — mirrors the template's "AI suggestions" card. Surfaces the
+// real overdue count and deep-links to the overdue view. Hidden when nothing's overdue.
+function AiSuggestBanner({ overdue, onGo }: { overdue: number; onGo: () => void }) {
+  if (!overdue) return null
+  return (
+    <button className="ai-suggest section" onClick={onGo}>
+      <span className="ai-suggest-ic">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2.5 14 8.2l5.7 2-5.7 2L12 19.9l-2-5.7-5.7-2L10 8.2z" />
+          <path d="M19 13.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z" />
+        </svg>
+      </span>
+      <span className="ai-suggest-body">
+        <span className="ai-suggest-title">You have {overdue} overdue task{overdue === 1 ? '' : 's'}</span>
+        <span className="ai-suggest-sub">Tap to review and reschedule them.</span>
+      </span>
+      <span className="ai-suggest-go" aria-hidden="true">›</span>
+    </button>
+  )
+}
+
 function useDrawer() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -67,6 +88,7 @@ function EmployeeDash() {
   const maxStatus = Math.max(...data.by_status.map((x: any) => x.count), 1)
   return (
     <>
+      <AiSuggestBanner overdue={c.overdue} onGo={() => navigate('/tasks?view=overdue')} />
       <div className="emp-kpis section">
         <Kpi value={c.assigned} label="Assigned" icon={KPI_ICONS.assigned} color="#f2622e" onClick={() => navigate('/tasks')} />
         <Kpi value={c.pending} label="Pending" icon={KPI_ICONS.pending} color="#3b82f6" onClick={() => navigate('/tasks?view=active')} />
@@ -276,6 +298,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   return (
     <div className="pbi" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
       {toolbar}
+      <AiSuggestBanner overdue={c.overdue} onGo={() => navigate('/tasks?view=overdue')} />
       <div className="pbi-kpis">
         <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#f2622e" onClick={() => navigate('/tasks')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
