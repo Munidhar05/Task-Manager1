@@ -1524,7 +1524,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
      shuffling the layout. */
   .table-cards.table-tasks tbody tr:not(.day-group-row) {
     display: grid; align-items: center; column-gap: 8px; row-gap: 8px;
-    grid-template-columns: auto 1fr minmax(0, max-content);
+    grid-template-columns: auto 1fr auto;
     grid-template-areas:
       "title  title  title"
       "prio   status ."
@@ -1535,8 +1535,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   .table-cards.table-tasks tbody tr td[data-label="Status"] { grid-area: status; justify-self: start; }
   .table-cards.table-tasks tbody tr td[data-label="Assignee"] { grid-area: assign; justify-self: start; min-width: 0; max-width: 100%; overflow: hidden; }
   .table-cards.table-tasks tbody tr td[data-label="Due"] {
-    grid-area: due; justify-self: end; text-align: right; min-width: 0;
-    font-size: 12px; white-space: normal;
+    grid-area: due; justify-self: end; display: block; text-align: center;
+    white-space: nowrap; font-size: 12px; min-width: 0;
   }
   .table-cards.table-tasks tbody tr td[data-label="Time"] { display: none; }
   /* The red date already signals overdue on the card, so drop the "(overdue)" word
