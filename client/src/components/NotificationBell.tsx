@@ -30,7 +30,7 @@ const BellIcon = ({ size = 33 }: { size?: number }) => (
     <defs>
       <linearGradient id="nb-circ" x1="20" y1="2" x2="20" y2="38" gradientUnits="userSpaceOnUse">
         <stop offset="0" stopColor="#e8853c" />
-        <stop offset=".5" stopColor="#c5560f" />
+        <stop offset=".5" stopColor="#f2622e" />
         <stop offset="1" stopColor="#a3450b" />
       </linearGradient>
     </defs>

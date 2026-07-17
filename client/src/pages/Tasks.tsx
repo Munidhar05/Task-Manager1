@@ -538,7 +538,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
             onChange={(e) => { e.stopPropagation(); changePriority(t.id, e.target.value) }}
             style={{ width: 'auto', padding: '4px 8px', fontSize: 12.5, fontWeight: 700, color: PRIORITY_COLORS[t.priority], borderColor: (PRIORITY_COLORS[t.priority] || '#cbd5e1') + '88' }}
           >
-            {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p} value={p} style={{ color: '#1f1a16' }}>{p}</option>)}
+            {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p} value={p} style={{ color: '#16191d' }}>{p}</option>)}
           </select>
         ) : <PriorityBadge p={t.priority} />}
       </td>

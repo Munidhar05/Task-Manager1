@@ -68,7 +68,7 @@ function EmployeeDash() {
   return (
     <>
       <div className="emp-kpis section">
-        <Kpi value={c.assigned} label="Assigned" icon={KPI_ICONS.assigned} color="#c5560f" onClick={() => navigate('/tasks')} />
+        <Kpi value={c.assigned} label="Assigned" icon={KPI_ICONS.assigned} color="#f2622e" onClick={() => navigate('/tasks')} />
         <Kpi value={c.pending} label="Pending" icon={KPI_ICONS.pending} color="#3b82f6" onClick={() => navigate('/tasks?view=active')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
         <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" alert={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
@@ -100,7 +100,7 @@ function EmployeeDash() {
                   </span>
                   <strong>{s.count}</strong>
                 </div>
-                <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#c5560f'} />
+                <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#f2622e'} />
               </div>
             ))}
             {data.needs_confirmation > 0 && <div className="emp-confirm-note row" style={{ gap: 7 }}><Ic name="warning" size={14} /> {data.needs_confirmation} task(s) need ownership confirmation.</div>}
@@ -277,7 +277,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
     <div className="pbi" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
       {toolbar}
       <div className="pbi-kpis">
-        <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#c5560f" onClick={() => navigate('/tasks')} />
+        <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#f2622e" onClick={() => navigate('/tasks')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
         <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" alert={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
         <Kpi value={c.blocked} label="Blocked" icon={KPI_ICONS.blocked} color="#f59e0b" onClick={() => navigate('/tasks?status=Blocked')} />
@@ -312,7 +312,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                     {overloaded && <span style={{ color: 'var(--danger)', display: 'inline-flex' }} title="Overloaded"><Ic name="warning" size={12} /></span>}
                   </span>
                   <span className="hbar-track">
-                    <span className="hbar-fill" style={{ width: `${pct}%`, background: overloaded ? '#ef4444' : '#c5560f' }} />
+                    <span className="hbar-fill" style={{ width: `${pct}%`, background: overloaded ? '#ef4444' : '#f2622e' }} />
                   </span>
                   <span className="hbar-val">{w.open_count}</span>
                 </div>

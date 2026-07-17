@@ -116,7 +116,7 @@ export function Avatar({ name, color, size = 28, src }: { name?: string; color?:
       style={{ width: size, height: size, objectFit: 'cover' }} />
   }
   return (
-    <span className="avatar" style={{ background: color || '#c5560f', width: size, height: size, fontSize: size * 0.4 }}>
+    <span className="avatar" style={{ background: color || '#f2622e', width: size, height: size, fontSize: size * 0.4 }}>
       {initials}
     </span>
   )

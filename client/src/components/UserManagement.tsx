@@ -108,7 +108,7 @@ export default function UserManagement() {
                 <td className="cell-title"><span className="row"><Avatar name={u.name} color={u.avatar_color} size={26} /> {u.name}</span></td>
                 <td className="muted" data-label="Email">{u.email}</td>
                 <td className="muted" data-label="Phone">{u.phone || '—'}</td>
-                <td data-label="Role"><Badge color="#c5560f" soft>{u.role}</Badge></td>
+                <td data-label="Role"><Badge color="#f2622e" soft>{u.role}</Badge></td>
                 <td data-label="Department">{deptName(u.department_id)}</td>
                 <td data-label="">
                   {canEdit(u) && (

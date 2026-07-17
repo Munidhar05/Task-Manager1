@@ -78,7 +78,7 @@ export default function Platform() {
       {/* auto-fit wraps the KPIs responsively (4-across on desktop → 2 on phones)
           instead of a hardcoded 4 columns that overflow into a sideways scroll. */}
       <div className="emp-kpis section" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-        <div className="kpi" style={{ ['--kc' as any]: '#c5560f' }}><div><div className="kpi-val">{stats.orgs}</div><div className="kpi-label">Organizations</div></div></div>
+        <div className="kpi" style={{ ['--kc' as any]: '#f2622e' }}><div><div className="kpi-val">{stats.orgs}</div><div className="kpi-label">Organizations</div></div></div>
         <div className="kpi" style={{ ['--kc' as any]: '#3b82f6' }}><div><div className="kpi-val">{stats.users}</div><div className="kpi-label">Total users</div></div></div>
         <div className="kpi" style={{ ['--kc' as any]: '#10b981' }}><div><div className="kpi-val">{stats.tasks}</div><div className="kpi-label">Total tasks</div></div></div>
         <div className="kpi" style={{ ['--kc' as any]: '#a855f7' }}><div><div className="kpi-val">{fmtUsd(stats.ai_cost)}</div><div className="kpi-label">AI spend · {fmtNum(stats.ai_calls)} calls</div></div></div>
@@ -100,7 +100,7 @@ export default function Platform() {
                 <td className="cell-title">
                   <button style={{ fontWeight: 600, textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--primary)' }} onClick={() => openOrg(o.id)} title="View members & task breakdown">{o.name}</button>
                   {o.allowed_domains.length > 0 && <div className="muted" style={{ fontSize: 11 }}>{o.allowed_domains.join(', ')}</div>}</td>
-                <td data-label="Type">{o.is_personal ? <span className="badge" style={{ background: '#eef2ff', color: '#4f46e5' }}>Personal</span> : <span className="badge" style={{ background: '#fbe9d6', color: '#c5560f' }}>Company</span>}</td>
+                <td data-label="Type">{o.is_personal ? <span className="badge" style={{ background: '#eef2ff', color: '#4f46e5' }}>Personal</span> : <span className="badge" style={{ background: '#fbe9d6', color: '#f2622e' }}>Company</span>}</td>
                 <td data-label="Owner" className="muted">{o.owner_email || '—'}</td>
                 <td data-label="Users"><strong>{o.user_count}</strong></td>
                 <td data-label="Tasks">{o.task_count}</td>
