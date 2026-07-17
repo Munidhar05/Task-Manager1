@@ -35,6 +35,15 @@ const STATUS_LABEL: Record<string, string> = {
   confirming: 'Say “yes” to confirm, or “no”',
   error: 'Something went wrong',
 }
+// Short, large-type headline shown on the immersive voice screen for each state.
+const BIG_STATUS: Record<string, string> = {
+  idle: 'Tap to talk',
+  listening: 'Listening…',
+  processing: 'Thinking…',
+  speaking: 'Speaking…',
+  confirming: 'Confirm?',
+  error: 'Try again',
+}
 
 export default function VoiceAssistant() {
   const v = useVoiceAssistant()
@@ -91,60 +100,65 @@ export default function VoiceAssistant() {
   return (
     <div className="va-root">
       {v.open && (
-        <div className="va-panel" role="dialog" aria-label="Voice assistant">
+        <div className={'va-panel va-panel--' + v.state} role="dialog" aria-label="Voice assistant">
           <div className="va-head">
             <div className="va-title">
               <span className={'va-dot va-dot--' + v.state} />
               BTM Voice
             </div>
-            <div className="row" style={{ gap: 4 }}>
-              <button className="btn btn-ghost btn-sm" title={v.ttsOn ? 'Mute voice replies' : 'Unmute voice replies'} onClick={() => v.setTtsOn(!v.ttsOn)}>
+            <div className="row" style={{ gap: 6 }}>
+              <button className="va-iconbtn" title={v.ttsOn ? 'Mute voice replies' : 'Unmute voice replies'} onClick={() => v.setTtsOn(!v.ttsOn)}>
                 {v.ttsOn ? <SpeakerIcon /> : <SpeakerOffIcon />}
               </button>
-              <button className="btn btn-ghost btn-sm" title="Close" onClick={v.close}>✕</button>
+              <button className="va-iconbtn" title="Close" onClick={v.close}>✕</button>
             </div>
           </div>
 
-          <div className="va-log" ref={logRef}>
-            {v.messages.length === 0 && (
-              <div className="va-hint">
-                {!wakeWordConfigured() ? 'Tap the mic and speak.'
-                  : wake.status === 'listening' ? `Say “${wakeWordPhrase()}”, or tap the mic.`
-                  : wake.status === 'loading' ? 'Starting wake word…'
-                  : wake.status === 'awaiting-gesture' ? 'Click anywhere to arm the wake word.'
-                  : wake.status === 'error' ? `Wake word unavailable (${wake.detail || 'error'}) — tap the mic.`
-                  : 'Tap the mic and speak.'}<br />
-                Try: “Create a high priority task for Reddy to finish the logo by Friday.”
+          {/* The glowing orb + big status headline — the immersive focal point. */}
+          <div className="va-stage">
+            <div className="va-bigstatus">{BIG_STATUS[v.state] || STATUS_LABEL[v.state] || ''}</div>
+            <div className={'va-orb va-orb--' + v.state} aria-hidden="true">
+              <span className="va-orb-halo" />
+              <span className="va-orb-core" />
+            </div>
+            {v.messages.length === 0 && v.state === 'idle' && (
+              <div className="va-substatus">
+                {wakeWordConfigured() && wake.status === 'listening'
+                  ? <>Say “<b>{wakeWordPhrase()}</b>”, or tap the mic below.</>
+                  : 'I can help with tasks, summaries, reports and more — just talk.'}
               </div>
             )}
-            {v.messages.map((m, i) => (
-              <React.Fragment key={i}>
-                <div className={'va-msg va-msg--' + m.role}>{m.text}</div>
-                {/* Read tools return figures — show them, don't just say them. */}
-                {m.card && <VoiceCard data={m.card} />}
-              </React.Fragment>
-            ))}
           </div>
+
+          {v.messages.length > 0 && (
+            <div className="va-log" ref={logRef}>
+              {v.messages.map((m, i) => (
+                <React.Fragment key={i}>
+                  <div className={'va-msg va-msg--' + m.role}>{m.text}</div>
+                  {/* Read tools return figures — show them, don't just say them. */}
+                  {m.card && <VoiceCard data={m.card} />}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
 
           {v.pending && (
             <div className="va-confirm">
               <div className="va-confirm-summary">{v.pending.summary}</div>
               <div className="row" style={{ gap: 8 }}>
                 <button className="btn btn-primary btn-sm" onClick={v.confirmPending}>✓ Confirm</button>
-                <button className="btn btn-sm" onClick={v.cancelPending}>✕ Cancel</button>
+                <button className="btn btn-sm va-cancel" onClick={v.cancelPending}>✕ Cancel</button>
               </div>
             </div>
           )}
 
           <div className="va-foot">
-            <div className="va-status">{STATUS_LABEL[v.state] || ''}</div>
             <button
               className={'va-mic va-mic--' + v.state}
               onClick={v.micButton}
               title={v.state === 'listening' ? 'Stop' : 'Speak'}
-              style={v.state === 'listening' ? { boxShadow: `0 0 0 ${Math.round(v.level * 16)}px rgba(242,98,46,.12)` } : undefined}
             >
-              {v.state === 'processing' ? <span className="spinner" /> : <MicIcon />}
+              {v.state === 'processing' ? <span className="spinner" /> : <MicIcon size={28} />}
             </button>
           </div>
         </div>
