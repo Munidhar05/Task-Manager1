@@ -180,7 +180,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           <div className="row" style={{ marginLeft: 'auto', gap: 10 }}>
             <NotificationBell key={user.id} />
             <button className="topbar-avatar" onClick={() => setShowProfile(true)} title="Profile & settings" aria-label="Open profile & settings">
-              <Avatar name={user.name} color={user.avatar_color} size={38} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
+              <Avatar name={user.name} color={user.avatar_color} size={33} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
               <span className="topbar-avatar-dot" />
             </button>
           </div>
