@@ -290,7 +290,7 @@ export function dueLabel(t: { due_date?: string | null; due_date_raw?: string | 
   if (t.due_date) {
     const today = new Date().toISOString().slice(0, 10)
     const overdue = t.due_date < today
-    return <span style={{ color: overdue ? '#ef4444' : 'inherit', fontWeight: overdue ? 600 : 400 }}>{t.due_date}{overdue ? ' (overdue)' : ''}</span>
+    return <span style={{ color: overdue ? '#ef4444' : 'inherit', fontWeight: overdue ? 600 : 400 }}>{t.due_date}{overdue ? <span className="due-overdue"> (overdue)</span> : ''}</span>
   }
   if (t.due_date_raw) return <span style={{ fontStyle: 'italic', color: 'var(--muted)' }}>“{t.due_date_raw}”</span>
   return <span style={{ color: 'var(--n-400)' }}>—</span>
