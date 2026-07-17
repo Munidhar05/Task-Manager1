@@ -177,8 +177,12 @@ function Layout({ children }: { children: React.ReactNode }) {
             <h1>{meta.t}</h1>
             <div className="sub">{meta.s}</div>
           </div>
-          <div className="row" style={{ marginLeft: 'auto', gap: 12 }}>
+          <div className="row" style={{ marginLeft: 'auto', gap: 10 }}>
             <NotificationBell key={user.id} />
+            <button className="topbar-avatar" onClick={() => setShowProfile(true)} title="Profile & settings" aria-label="Open profile & settings">
+              <Avatar name={user.name} color={user.avatar_color} size={38} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
+              <span className="topbar-avatar-dot" />
+            </button>
           </div>
         </header>
         <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
