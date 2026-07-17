@@ -1057,6 +1057,15 @@ tbody tr:hover { background: var(--n-50); }
   .chips-quick .chip { flex: 1 1 0; min-width: 0; padding: 4px 5px; font-size: 10.5px; min-height: 34px; }
   .chips-quick .chip-count { margin-left: 3px; }
 }
+/* Tasks quick-view stat cards (match the template's stat row; also act as filters). */
+.task-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 4px 0 14px; }
+.task-stat { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 12px 13px; cursor: pointer; box-shadow: var(--e-1); transition: transform .15s, box-shadow .15s, border-color .15s; }
+.task-stat:hover { transform: translateY(-1px); box-shadow: var(--e-2); border-color: color-mix(in srgb, var(--sc) 40%, var(--border)); }
+.task-stat.active { border-color: var(--sc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sc) 22%, transparent); }
+.task-stat-ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: var(--sc); background: color-mix(in srgb, var(--sc) 13%, #fff); margin-bottom: 5px; }
+.task-stat-val { font-size: 22px; font-weight: 800; line-height: 1.1; color: var(--text); }
+.task-stat-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+
 .chip { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 999px; padding: 5px 14px; font-size: 12.5px; font-weight: 600; box-shadow: var(--shadow); }
 .chip:hover { border-color: var(--primary); color: var(--text); }
 .chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }

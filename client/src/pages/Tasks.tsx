@@ -678,18 +678,28 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         })}
       </div>
 
-      {/* Line 2: the remaining quick-view chips (Overdue, Due today, Completed) — kept on one line. */}
+      {/* Line 2: quick-view stat cards (Overdue, Due today, Completed) — double as
+          filters. Mirrors the template's stat-card row above the task list. */}
       {view === 'list' && tasks.length > 0 && (
-        <div className="chips chips-quick">
-          {QUICK_CHIPS.filter((c) => c.key !== 'active').map((c) => {
-            const count = tasks.filter((t) => matchesQuick(t, c.key)).length
+        <div className="task-stats">
+          {([
+            { key: 'overdue' as const, label: 'Overdue', color: '#ef4444', icon: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /></> },
+            { key: 'today' as const, label: 'Due today', color: '#3b82f6', icon: <><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M16 2v4M8 2v4M3 10h18" /></> },
+            { key: 'completed' as const, label: 'Completed', color: '#10b981', icon: <><circle cx="12" cy="12" r="9" /><path d="m8.5 12 2.5 2.5L16 9" /></> },
+          ]).map((s) => {
+            const count = tasks.filter((t) => matchesQuick(t, s.key)).length
             return (
               <button
-                key={c.key}
-                className={'chip' + (c.danger ? ' danger' : '') + (quickView === c.key ? ' active' : '')}
-                onClick={() => setQuickView(c.key)}
+                key={s.key}
+                className={'task-stat' + (quickView === s.key ? ' active' : '')}
+                style={{ ['--sc' as any]: s.color }}
+                onClick={() => setQuickView(s.key)}
               >
-                {c.label}<span className="chip-count">{count}</span>
+                <span className="task-stat-ic">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{s.icon}</svg>
+                </span>
+                <span className="task-stat-val">{count}</span>
+                <span className="task-stat-label">{s.label}</span>
               </button>
             )
           })}
