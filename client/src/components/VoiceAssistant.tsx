@@ -44,6 +44,29 @@ const BIG_STATUS: Record<string, string> = {
   confirming: 'Confirm?',
   error: 'Try again',
 }
+// One-line subtitle under the headline.
+const SUB_STATUS: Record<string, string> = {
+  idle: 'Tap the orb below to start',
+  listening: 'Speak now',
+  processing: 'Working on it…',
+  speaking: 'Playing the response',
+  confirming: 'Say “yes” to confirm, or “no”',
+  error: 'Please try again',
+}
+// The four-stage progress rail shown on the voice screen.
+const CheckIcon = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+)
+const DotsIcon = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
+)
+const VOICE_STEPS: { key: string; label: string; icon: React.ReactNode }[] = [
+  { key: 'listening', label: 'Listening', icon: <MicIcon size={18} /> },
+  { key: 'processing', label: 'Thinking', icon: <DotsIcon /> },
+  { key: 'speaking', label: 'Speaking', icon: <SpeakerIcon size={18} /> },
+  { key: 'complete', label: 'Complete', icon: <CheckIcon /> },
+]
+const STEP_INDEX: Record<string, number> = { listening: 0, processing: 1, speaking: 2 }
 
 export default function VoiceAssistant() {
   const v = useVoiceAssistant()
@@ -102,32 +125,52 @@ export default function VoiceAssistant() {
       {v.open && (
         <div className={'va-panel va-panel--' + v.state} role="dialog" aria-label="Voice assistant">
           <div className="va-head">
-            <div className="va-title">
-              <span className={'va-dot va-dot--' + v.state} />
-              BTM Voice
-            </div>
-            <div className="row" style={{ gap: 6 }}>
-              <button className="va-iconbtn" title={v.ttsOn ? 'Mute voice replies' : 'Unmute voice replies'} onClick={() => v.setTtsOn(!v.ttsOn)}>
-                {v.ttsOn ? <SpeakerIcon /> : <SpeakerOffIcon />}
-              </button>
-              <button className="va-iconbtn" title="Close" onClick={v.close}>✕</button>
-            </div>
+            <button className="va-iconbtn" title="Close" onClick={v.close} aria-label="Close">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+            <div className="va-head-title">AI Voice Assistant</div>
+            <button className="va-iconbtn" title={v.ttsOn ? 'Mute voice replies' : 'Unmute voice replies'} onClick={() => v.setTtsOn(!v.ttsOn)}>
+              {v.ttsOn ? <SpeakerIcon /> : <SpeakerOffIcon />}
+            </button>
           </div>
 
-          {/* The glowing orb + big status headline — the immersive focal point. */}
+          {/* Immersive focal point: status → glowing orb → progress rail. */}
           <div className="va-stage">
+            <div className="va-online"><span className="va-online-dot" /> Online</div>
             <div className="va-bigstatus">{BIG_STATUS[v.state] || STATUS_LABEL[v.state] || ''}</div>
-            <div className={'va-orb va-orb--' + v.state} aria-hidden="true">
-              <span className="va-orb-halo" />
-              <span className="va-orb-core" />
+            <div className="va-substatus">{SUB_STATUS[v.state] || ''}</div>
+
+            <button className={'va-orb va-orb--' + v.state} onClick={v.micButton} aria-label={v.state === 'listening' ? 'Stop listening' : 'Start talking'}>
+              <span className="va-orb-ring va-orb-ring--3" />
+              <span className="va-orb-ring va-orb-ring--2" />
+              <span className="va-orb-ring" />
+              {v.state === 'listening'
+                ? <span className="va-wave" aria-hidden="true">{Array.from({ length: 15 }).map((_, i) => <i key={i} />)}</span>
+                : v.state === 'processing'
+                  ? <span className="va-orb-think" aria-hidden="true"><i /><i /><i /></span>
+                  : <span className="va-orb-core" aria-hidden="true" />}
+            </button>
+
+            <div className="va-orb-action">
+              {v.state === 'listening' ? 'Tap to stop' : v.state === 'idle' ? 'Tap to talk' : ' '}
             </div>
-            {v.messages.length === 0 && v.state === 'idle' && (
-              <div className="va-substatus">
-                {wakeWordConfigured() && wake.status === 'listening'
-                  ? <>Say “<b>{wakeWordPhrase()}</b>”, or tap the mic below.</>
-                  : 'I can help with tasks, summaries, reports and more — just talk.'}
-              </div>
-            )}
+
+            {/* Four-stage progress rail. */}
+            <div className="va-steps">
+              {VOICE_STEPS.map((s, i) => {
+                const active = STEP_INDEX[v.state] ?? (v.messages.length ? 3 : 0)
+                return (
+                  <React.Fragment key={s.key}>
+                    {i > 0 && <span className={'va-step-line' + (i <= active ? ' done' : '')} />}
+                    <div className={'va-step' + (i === active ? ' active' : '') + (i < active ? ' done' : '')}>
+                      <span className="va-step-ic">{s.icon}</span>
+                      <span className="va-step-label">{s.label}</span>
+                      <span className="va-step-dot" />
+                    </div>
+                  </React.Fragment>
+                )
+              })}
+            </div>
           </div>
 
           {v.messages.length > 0 && (
@@ -153,13 +196,14 @@ export default function VoiceAssistant() {
           )}
 
           <div className="va-foot">
-            <button
-              className={'va-mic va-mic--' + v.state}
-              onClick={v.micButton}
-              title={v.state === 'listening' ? 'Stop' : 'Speak'}
-            >
-              {v.state === 'processing' ? <span className="spinner" /> : <MicIcon size={28} />}
-            </button>
+            {v.state === 'idle' && v.messages.length === 0 ? (
+              <button className="va-mic" onClick={v.micButton} aria-label="Start talking"><MicIcon size={28} /></button>
+            ) : (
+              <button className="va-cancelbtn" onClick={v.close}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                Cancel
+              </button>
+            )}
           </div>
         </div>
       )}
