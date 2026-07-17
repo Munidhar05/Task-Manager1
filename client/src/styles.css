@@ -1508,22 +1508,40 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
     font-size: 14.5px; line-height: 1.3;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
-  /* Line 2 — task state: priority + status. Status GROWS to fill the rest of the
-     line, which forces the assignee/due pair to always wrap to their own line 3 —
-     so the layout is identical on every card regardless of title or name length. */
-  .table-cards td[data-label="Priority"] { flex: 0 0 auto; }
-  .table-cards td[data-label="Status"] { flex: 1 1 auto; min-width: 0; }
-  /* Line 3 — people & date: assignee (avatar + name) on the left, due pinned right. */
-  .table-cards td[data-label="Assignee"] { flex: 0 0 auto; min-width: 0; max-width: 62%; }
-  .table-cards td[data-label="Assignee"] .row { min-width: 0; overflow: hidden; }
-  .table-cards td[data-label="Assignee"] .row > :last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .table-cards td[data-label="Due"] { flex: 1 1 auto; justify-content: flex-end; margin-left: auto; }
   .table-cards td[data-label="Due"]::before {
     display: inline; content: 'Due'; font-size: 10px; font-weight: 700;
     text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-right: 3px;
   }
-  /* Assigned/created timestamp lives in the drawer — hide it on the row for height. */
-  .table-cards td[data-label="Time"] { display: none; }
+
+  /* --- Tasks list: a FIXED 3-line card via CSS grid (scoped to .table-tasks so
+     other card-tables keep the plain flow). Positions are deterministic, so the
+     layout is IDENTICAL on every card no matter how long the title or name is:
+       line 1: title
+       line 2: priority   status
+       line 3: assignee ................. due
+     The name always sits on its own line (line 3), left-aligned, with the due
+     date justified to the right; a long name ellipsis-truncates instead of
+     shuffling the layout. */
+  .table-cards.table-tasks tbody tr:not(.day-group-row) {
+    display: grid; align-items: center; column-gap: 8px; row-gap: 8px;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "title  title  title"
+      "prio   status ."
+      "assign assign due";
+  }
+  .table-cards.table-tasks tbody tr .cell-title { grid-area: title; margin-bottom: 0; }
+  .table-cards.table-tasks tbody tr td[data-label="Priority"] { grid-area: prio; justify-self: start; }
+  .table-cards.table-tasks tbody tr td[data-label="Status"] { grid-area: status; justify-self: start; }
+  .table-cards.table-tasks tbody tr td[data-label="Assignee"] { grid-area: assign; justify-self: start; min-width: 0; max-width: 100%; overflow: hidden; }
+  .table-cards.table-tasks tbody tr td[data-label="Due"] { grid-area: due; justify-self: end; white-space: nowrap; }
+  .table-cards.table-tasks tbody tr td[data-label="Time"] { display: none; }
+  /* Let a long assignee name ellipsis-truncate rather than push the due date. */
+  .table-cards.table-tasks .an { min-width: 0; }
+  .table-cards.table-tasks .an-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Other card-tables (e.g. completed) keep the simple stacked flow. */
+  .table-cards:not(.table-tasks) td[data-label="Time"] { display: none; }
 
   /* Due-date urgency rail: on the compact card, draw it at the card's LEFT EDGE
      (inside the 14px padding gutter) instead of on the title cell — otherwise the

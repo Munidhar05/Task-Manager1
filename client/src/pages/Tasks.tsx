@@ -556,7 +556,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       {!personal && (
         <td data-label="Assignee">
           {t.assignee ? (
-            <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
+            <span className="row an"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> <span className="an-name">{t.assignee.name}</span></span>
           ) : isManager ? (
             <select
               className="btn btn-sm"
@@ -760,7 +760,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
             </div>
           ) : (
             <div className="card table-card-wrap">
-              <table className="table-cards">
+              <table className="table-cards table-tasks">
                 <thead><tr>
                   {sortTh('Task', 'task')}
                   {sortTh('Priority', 'priority')}
