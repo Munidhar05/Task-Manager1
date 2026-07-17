@@ -1513,5 +1513,15 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   .table-cards td[data-label="Time"] { display: none; }
   /* Push the assignee to the far right of the meta line. */
   .table-cards td[data-label="Assignee"] { margin-left: auto; }
+
+  /* Due-date urgency rail: on the compact card, draw it at the card's LEFT EDGE
+     (inside the 14px padding gutter) instead of on the title cell — otherwise the
+     3px bar overlaps the first letter of the title. Clipped by the card radius. */
+  .table-cards tbody tr.row-overdue .cell-title,
+  .table-cards tbody tr.row-today .cell-title,
+  .table-cards tbody tr.row-done .cell-title { box-shadow: none; }
+  .table-cards tbody tr.row-overdue { box-shadow: inset 3px 0 0 #ef4444; }
+  .table-cards tbody tr.row-today { box-shadow: inset 3px 0 0 #f59e0b; }
+  .table-cards tbody tr.row-done { box-shadow: inset 3px 0 0 #10b981; }
 }
 
