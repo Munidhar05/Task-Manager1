@@ -135,7 +135,7 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .speak-row { display: flex; justify-content: center; margin: 2px 0 2px; }
 .btn-mic-hero {
   font-size: var(--t-md); font-weight: 700; padding: 12px 30px; border-radius: 999px; gap: 10px;
-  color: #fff; background: linear-gradient(135deg, #ff7a18, #c5560f); border: none;
+  color: #fff; background: linear-gradient(135deg, #ff7a18, #f2622e); border: none;
   box-shadow: 0 4px 14px rgba(242,98,46,.32);
 }
 .btn-mic-hero:hover:not(:disabled) {
@@ -200,8 +200,8 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 /* Scoped with .sidebar-user for higher specificity than the mobile `.btn`
    padding override (which otherwise squeezes/clips this fixed-size icon button
    on phones). box-sizing keeps it square regardless of inherited padding. */
-.sidebar-user .logout-btn { color: #fff; background: linear-gradient(135deg,#e07a2f,#c5560f); border: 1px solid var(--primary-dark); width: 36px; height: 36px; min-width: 36px; padding: 0; box-sizing: border-box; border-radius: 9px; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(242,98,46,.4); flex-shrink: 0; }
-.sidebar-user .logout-btn:hover { background: linear-gradient(135deg,#c5560f,#a8480c); color: #fff; transform: translateY(-1px); }
+.sidebar-user .logout-btn { color: #fff; background: linear-gradient(135deg,#e07a2f,#f2622e); border: 1px solid var(--primary-dark); width: 36px; height: 36px; min-width: 36px; padding: 0; box-sizing: border-box; border-radius: 9px; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(242,98,46,.4); flex-shrink: 0; }
+.sidebar-user .logout-btn:hover { background: linear-gradient(135deg,#f2622e,#d94e1c); color: #fff; transform: translateY(-1px); }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
@@ -405,7 +405,7 @@ tbody tr:hover { background: var(--n-50); }
 .auth-brand {
   position: relative; display: flex; flex-direction: column; justify-content: space-between;
   padding: var(--s-7) var(--s-6); color: #fff; overflow: hidden;
-  background: linear-gradient(150deg, #201a16 0%, #8f3d0a 62%, #c5560f 100%);
+  background: linear-gradient(150deg, #201a16 0%, #8f3d0a 62%, #f2622e 100%);
 }
 /* soft warm bloom, not a gimmick — adds depth without motion */
 .auth-brand::after {
@@ -439,7 +439,7 @@ tbody tr:hover { background: var(--n-50); }
    is reserved for the primary sign-in. `--panda` / `login-stage` remain as inert
    aliases so those pages keep working unchanged. */
 .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: var(--s-5);
-  background: linear-gradient(150deg, #201a16 0%, #8f3d0a 62%, #c5560f 100%); }
+  background: linear-gradient(150deg, #201a16 0%, #8f3d0a 62%, #f2622e 100%); }
 .login-stage { position: relative; width: 100%; max-width: 420px; }
 .login-card { background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--e-3); padding: var(--s-6); width: 100%; max-width: 420px; }
 .login-card h1 { font-size: var(--t-xl); }
@@ -509,11 +509,11 @@ tbody tr:hover { background: var(--n-50); }
 .va-wake-chip--error .va-wake-dot { background: #e2483a; }
 @keyframes va-wake-blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .va-wake-chip--listening .va-wake-dot, .va-wake-chip--loading .va-wake-dot { animation: none; } }
-.va-fab { width: 56px; height: 56px; border-radius: 50%; border: none; background: var(--primary, #c5560f); color: #fff; display: grid; place-items: center; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,.22); transition: transform .12s ease, background .2s; }
-.va-fab:hover { background: #a8480c; }
+.va-fab { width: 56px; height: 56px; border-radius: 50%; border: none; background: var(--primary, #f2622e); color: #fff; display: grid; place-items: center; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,.22); transition: transform .12s ease, background .2s; }
+.va-fab:hover { background: #d94e1c; }
 .va-fab--open { background: var(--muted); }
 .va-fab--listening { background: #ef4444; animation: va-pulse 1.3s ease-out infinite; }
-.va-fab--processing, .va-fab--speaking { background: #c5560f; }
+.va-fab--processing, .va-fab--speaking { background: #f2622e; }
 @keyframes va-pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.5); } 70% { box-shadow: 0 0 0 16px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
 
 /* Signature voice control — the product's hero action. Prominent by SIZE, SHAPE
@@ -524,7 +524,7 @@ tbody tr:hover { background: var(--n-50); }
   position: relative; display: inline-flex; align-items: center; gap: 12px;
   height: 62px; padding: 0 24px 0 8px; border: none; border-radius: 999px;
   color: #fff; letter-spacing: .01em; cursor: pointer;
-  background: linear-gradient(135deg, #ff8a2b 0%, #ff6a00 45%, #c5560f 100%);
+  background: linear-gradient(135deg, #ff8a2b 0%, #ff6a00 45%, #f2622e 100%);
   box-shadow: 0 12px 28px rgba(242,98,46,.42), inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 1px rgba(255,255,255,.1);
   transition: transform .16s cubic-bezier(.16,.84,.44,1), box-shadow .2s ease;
 }
@@ -533,10 +533,10 @@ tbody tr:hover { background: var(--n-50); }
 .va-fab-pill:focus-visible { outline: 3px solid rgba(255,255,255,.85); outline-offset: 3px; }
 /* Mic in an inset translucent orb — the focal point. */
 .va-fab-ic { position: relative; width: 46px; height: 46px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
-  background: rgba(255,255,255,.2); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.32), 0 2px 6px rgba(31,26,22,.18); }
+  background: rgba(255,255,255,.2); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.32), 0 2px 6px rgba(16,24,40,.18); }
 /* Static AI sparkle at the orb's corner — a bit of character, no motion. */
 .va-fab-spark { position: absolute; top: -2px; right: -2px; display: inline-flex; color: #ffe39a;
-  filter: drop-shadow(0 1px 2px rgba(31,26,22,.4)); }
+  filter: drop-shadow(0 1px 2px rgba(16,24,40,.4)); }
 .va-fab-label { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.14; white-space: nowrap; }
 .va-fab-title { font-weight: 800; font-size: 15.5px; }
 .va-fab-sub { font-size: 10.5px; font-weight: 600; opacity: .9; letter-spacing: .02em; margin-top: 2px; }
@@ -637,7 +637,7 @@ tbody tr:hover { background: var(--n-50); }
 .vc-bar-row { display: grid; grid-template-columns: 84px 1fr 24px; align-items: center; gap: 8px; }
 .vc-bar-label { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vc-bar-track { height: 6px; background: var(--n-100); border-radius: 4px; overflow: hidden; }
-.vc-bar-fill { display: block; height: 100%; background: var(--primary, #c5560f); border-radius: 4px; }
+.vc-bar-fill { display: block; height: 100%; background: var(--primary, #f2622e); border-radius: 4px; }
 .vc-bar-val { font-size: 12px; text-align: right; color: var(--text); }
 
 /* When a transcript is present, shrink the orb stage so messages get room. */
@@ -669,10 +669,10 @@ tbody tr:hover { background: var(--n-50); }
 .google-btn:disabled { opacity: .6; }
 
 /* ---- modal / drawer ---- */
-.overlay { position: fixed; inset: 0; background: rgba(31,26,22,.45); z-index: 50; display: flex; justify-content: flex-end; }
+.overlay { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 50; display: flex; justify-content: flex-end; }
 .drawer { background: var(--surface); width: 540px; max-width: 92vw; height: 100%; overflow-y: auto; box-shadow: var(--shadow-lg); animation: slideIn .2s ease; }
 @keyframes slideIn { from { transform: translateX(30px); opacity: .6; } to { transform: none; opacity: 1; } }
-.modal-center { position: fixed; inset: 0; background: rgba(31,26,22,.45); z-index: 50; display: grid; place-items: center; padding: 20px; }
+.modal-center { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 50; display: grid; place-items: center; padding: 20px; }
 .modal { background: #fff; border-radius: 14px; box-shadow: var(--shadow-lg); width: 600px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
 .audio-drop { display: flex; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 22px 16px; border: 2px dashed var(--border); border-radius: 10px; background: #fffaf3; cursor: pointer; font-size: 13.5px; transition: .15s; }
 .audio-drop:hover { border-color: var(--primary); background: #fdeee3; }
@@ -799,7 +799,7 @@ tbody tr:hover { background: var(--n-50); }
 .chat { display: flex; flex-direction: column; height: calc(100dvh - 160px); }
 .chat-log { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 6px; }
 /* Compact bubbles (orange theme) with time + ticks tucked into the corner */
-.bubble { position: relative; max-width: 100%; width: fit-content; padding: 7px 11px; border-radius: 14px; white-space: normal; font-size: 13.5px; line-height: 1.36; box-shadow: 0 1px 2px rgba(31,26,22,.07); }
+.bubble { position: relative; max-width: 100%; width: fit-content; padding: 7px 11px; border-radius: 14px; white-space: normal; font-size: 13.5px; line-height: 1.36; box-shadow: 0 1px 2px rgba(16,24,40,.07); }
 .bubble::after { content: ''; display: block; clear: both; }
 .bubble.user { align-self: flex-end; background: linear-gradient(135deg, #d4631a, var(--primary)); color: #fff; border-bottom-right-radius: 5px; box-shadow: 0 2px 6px rgba(242,98,46,.28); }
 .bubble.ai { align-self: flex-start; background: #fff; color: var(--text); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
@@ -897,7 +897,7 @@ tbody tr:hover { background: var(--n-50); }
 .composer { padding-top: 4px; }
 
 /* modals (new chat / group info) */
-.modal-overlay { position: fixed; inset: 0; background: rgba(31,26,22,.45); display: grid; place-items: center; z-index: 200; padding: 16px; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(16,24,40,.45); display: grid; place-items: center; z-index: 200; padding: 16px; }
 .modal-card { background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 16px; width: 100%; max-width: 420px; max-height: 80vh; display: flex; flex-direction: column; }
 .modal-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
 .modal-tabs button { flex: 1; padding: 8px; border: 1px solid var(--border); background: var(--bg); border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
@@ -975,7 +975,7 @@ tbody tr:hover { background: var(--n-50); }
 .empty-state-action { margin-top: 14px; }
 
 /* Segmented List/Board toggle */
-.seg { display: inline-flex; background: rgba(31,26,22,.06); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg { display: inline-flex; background: rgba(16,24,40,.06); border-radius: 9px; padding: 3px; gap: 2px; }
 .seg-btn { border: none; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 5px 12px; border-radius: 7px; cursor: pointer; }
 .seg-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 
@@ -1010,12 +1010,12 @@ tbody tr:hover { background: var(--n-50); }
 
 /* Kanban board */
 .board { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 10px; align-items: flex-start; }
-.board-col { width: 280px; min-width: 280px; flex-shrink: 0; background: rgba(31,26,22,.04); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100dvh - 230px); transition: outline-color .15s; outline: 2px dashed transparent; outline-offset: -2px; }
+.board-col { width: 280px; min-width: 280px; flex-shrink: 0; background: rgba(16,24,40,.04); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100dvh - 230px); transition: outline-color .15s; outline: 2px dashed transparent; outline-offset: -2px; }
 .board-col.drop-over { outline-color: var(--primary); background: rgba(242,98,46,.06); }
 .board-col-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .board-col-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
 .board-col-title { font-weight: 700; font-size: 13px; }
-.board-col-count { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--muted); background: rgba(31,26,22,.07); border-radius: 10px; padding: 1px 8px; }
+.board-col-count { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--muted); background: rgba(16,24,40,.07); border-radius: 10px; padding: 1px 8px; }
 .board-col-body { padding: 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; min-height: 60px; }
 .board-col-empty { text-align: center; color: var(--n-500); font-size: 12px; padding: 18px 8px; border: 1px dashed var(--border); border-radius: 9px; }
 .board-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; cursor: pointer; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
@@ -1158,7 +1158,7 @@ tbody tr:hover { background: var(--n-50); }
 @media (max-width: 720px) {
   .sidebar { position: fixed; z-index: 40; transform: translateX(-100%); transition: transform .22s ease; box-shadow: var(--shadow-lg); width: 250px; }
   .sidebar.open { transform: none; }
-  .sidebar-backdrop { display: block; position: fixed; inset: 0; background: rgba(31,26,22,.45); z-index: 39; animation: fadeIn .2s ease; }
+  .sidebar-backdrop { display: block; position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 39; animation: fadeIn .2s ease; }
   .nav-toggle { display: inline-flex; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
@@ -1286,7 +1286,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   pointer-events: auto; display: flex; align-items: center; gap: 11px;
   width: 100%; text-align: left; padding: 12px 15px; border-radius: 12px;
   border: 1px solid var(--border); background: var(--surface); color: var(--text);
-  font-size: 13.5px; font-weight: 600; box-shadow: 0 12px 32px rgba(31,26,22,.18);
+  font-size: 13.5px; font-weight: 600; box-shadow: 0 12px 32px rgba(16,24,40,.18);
   animation: toast-in .22s cubic-bezier(.16,.84,.44,1);
 }
 @keyframes toast-in { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }

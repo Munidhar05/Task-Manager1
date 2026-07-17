@@ -137,7 +137,7 @@ function Overview() {
       <div className="grid grid-stats section">
         <Stat label="Users" value={d.totals.users} />
         <Stat label="Tasks" value={d.totals.tasks} accent="#3b82f6" />
-        <Stat label="Meetings" value={d.totals.meetings} accent="#d4a017" />
+        <Stat label="Meetings" value={d.totals.meetings} accent="#f5a623" />
         <Stat label="Projects" value={d.totals.projects} accent="#10b981" />
       </div>
       <div className="grid grid-2">
