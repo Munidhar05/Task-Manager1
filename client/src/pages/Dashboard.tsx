@@ -271,6 +271,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   const [to, setTo] = useState(todayYmd())
   const [datePopOpen, setDatePopOpen] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [showAllWorkload, setShowAllWorkload] = useState(false)
   const datePopRef = React.useRef<HTMLDivElement>(null)
   const d = useDrawer()
   const navigate = useNavigate()
@@ -388,8 +389,9 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
         <div className="pbi-card pbi-workload">
           <div className="pbi-head"><h3>Team workload</h3><span className="muted" style={{ marginLeft: 'auto', fontSize: 11.5 }}>open tasks per person</span></div>
           <div className="pbi-scroll">
-            {/* All members shown; the panel scrolls internally when the team is large. (API sorts by open_count desc.) */}
-            {data.workload.map((w: any) => {
+            {/* Show the 5 busiest by default (API sorts by open_count desc); the rest
+                expand via "View more". */}
+            {(showAllWorkload ? data.workload : data.workload.slice(0, 5)).map((w: any) => {
               const overloaded = w.open_count > (maxWl * 0.66) && w.open_count >= 3
               const pct = Math.round((w.open_count / maxWl) * 100)
               return (
@@ -419,6 +421,12 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                 </div>
               )
             })}
+            {data.workload.length > 5 && (
+              <button className="view-more-btn" onClick={() => setShowAllWorkload((s) => !s)}>
+                {showAllWorkload ? 'View less' : `View all ${data.workload.length} people`}
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: showAllWorkload ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+              </button>
+            )}
           </div>
         </div>
 

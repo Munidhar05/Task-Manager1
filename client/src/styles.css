@@ -363,6 +363,10 @@ tbody tr:hover { background: var(--n-50); }
 .pbi-head h3 { font-size: 15px; margin: 0; }
 .pbi-scroll { padding: 14px 16px; }
 
+/* "View all N people" toggle under a capped list (e.g. Team workload). */
+.view-more-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 8px; padding: 9px; border: none; background: transparent; color: var(--primary); font-weight: 700; font-size: 13px; cursor: pointer; border-radius: var(--r-md); transition: background .15s; }
+.view-more-btn:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+
 /* Recent activity feed */
 .act-list { display: flex; flex-direction: column; }
 .act-row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--n-100); }
