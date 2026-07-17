@@ -1475,14 +1475,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   .btn { box-shadow: none; }
   .btn-primary { box-shadow: 0 2px 6px rgba(242,98,46,.28); } /* keep the primary lifted */
 
-  /* --- Condensed dashboard: KPIs become one swipeable strip --------------- */
+  /* --- Condensed dashboard: KPIs as a 2×2 grid (no horizontal scrolling) --- */
   .pbi-kpis {
-    display: flex; grid-template-columns: none; gap: 10px; overflow-x: auto;
-    scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;
-    padding-bottom: 4px; margin: 0 -16px; padding-left: 16px; padding-right: 16px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    overflow: visible; margin: 0;
   }
-  .pbi-kpis::-webkit-scrollbar { display: none; }
-  .pbi-kpis > * { scroll-snap-align: start; flex: 0 0 46%; }
+  .pbi-kpis > * { flex: none; }
   .pbi-body { gap: 12px; }
 }
 
