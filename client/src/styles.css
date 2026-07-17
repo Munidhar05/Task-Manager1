@@ -295,7 +295,7 @@ tbody tr:hover { background: var(--n-50); }
 .report-custom label input { width: 140px; padding: 6px 8px; }
 
 /* ---- Power BI–style dashboard (single-screen, non-scrolling mosaic) ---- */
-.pbi { display: flex; flex-direction: column; gap: 14px; height: calc(100dvh - 116px); }
+.pbi { display: flex; flex-direction: column; gap: 14px; }
 .pbi-filter { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
 .pbi-seg { display: inline-flex; gap: 3px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
 .pbi-tab { border: none; background: transparent; color: var(--muted); padding: 7px 18px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .12s; }
@@ -351,13 +351,22 @@ tbody tr:hover { background: var(--n-50); }
 .kpi.alert { background: var(--danger-bg); border-color: var(--danger-border); }
 .kpi.alert .kpi-val { color: var(--danger-ink); }
 
-.pbi-body { display: grid; grid-template-columns: 1.3fr 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 14px; flex: 1; min-height: 0; }
-.pbi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.pbi-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.pbi-head h3 { font-size: 14px; margin: 0; }
-.pbi-scroll { padding: 14px 16px; overflow-y: auto; flex: 1; min-height: 0; }
-.pbi-workload { grid-row: 1 / 3; }
-.pbi-overdue { grid-column: 2 / 4; }
+/* Vertical stack of full-width cards (matches the template dashboard). */
+.pbi-body { display: flex; flex-direction: column; gap: 14px; }
+.pbi-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--e-1); display: flex; flex-direction: column; overflow: hidden; }
+.pbi-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.pbi-head h3 { font-size: 15px; margin: 0; }
+.pbi-scroll { padding: 14px 16px; }
+
+/* Recent activity feed */
+.act-list { display: flex; flex-direction: column; }
+.act-row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--n-100); }
+.act-row:last-child { border-bottom: none; }
+.act-ic { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; display: grid; place-items: center; color: var(--ac); background: color-mix(in srgb, var(--ac) 13%, #fff); }
+.act-body { flex: 1; min-width: 0; }
+.act-text { font-size: 13.5px; color: var(--text); line-height: 1.35; }
+.act-text b { font-weight: 700; }
+.act-time { font-size: 12px; color: var(--muted); flex-shrink: 0; white-space: nowrap; }
 
 /* horizontal bar chart rows (Team workload) */
 .hbar-row { display: grid; grid-template-columns: 124px 1fr auto; align-items: center; gap: 10px; margin-bottom: 9px; padding: 4px 6px; border-radius: 9px; }

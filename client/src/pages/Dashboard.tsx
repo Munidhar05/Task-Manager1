@@ -53,6 +53,66 @@ function AiSuggestBanner({ overdue, onGo }: { overdue: number; onGo: () => void 
   )
 }
 
+// Relative "time ago" for audit rows. SQLite stores UTC as a bare "YYYY-MM-DD
+// HH:MM:SS" string, so normalise it to a real UTC instant first.
+function timeAgo(raw: string | number): string {
+  let ms: number
+  if (typeof raw === 'number') ms = raw
+  else {
+    const s = /\dT|\dZ|[+-]\d\d:?\d\d$/.test(raw) ? raw : raw.replace(' ', 'T') + 'Z'
+    ms = Date.parse(s)
+  }
+  if (isNaN(ms)) return ''
+  const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000))
+  if (sec < 60) return 'just now'
+  if (sec < 3600) return Math.floor(sec / 60) + 'm ago'
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago'
+  return Math.floor(sec / 86400) + 'd ago'
+}
+
+const ActSvg = ({ children }: { children: React.ReactNode }) => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+)
+// Map an audit action (e.g. "task.complete") to a friendly verb + icon + colour.
+function actMeta(action: string): { verb: string; color: string; icon: React.ReactNode } {
+  const a = (action || '').toLowerCase()
+  if (a.includes('complete') || a.includes('done') || a.includes('approve')) return { verb: 'completed a task', color: '#10b981', icon: <ActSvg><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><path d="m9 11 3 3L22 4" /></ActSvg> }
+  if (a.includes('assign')) return { verb: 'was assigned a task', color: '#3b82f6', icon: <ActSvg><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="m15 11 2 2 4-4" /></ActSvg> }
+  if (a.startsWith('task.create') || a.includes('create') && a.includes('task')) return { verb: 'created a task', color: '#f2622e', icon: <ActSvg><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M12 8v8M8 12h8" /></ActSvg> }
+  if (a.includes('comment')) return { verb: 'added a comment', color: '#8b5cf6', icon: <ActSvg><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></ActSvg> }
+  if (a.includes('meeting')) return { verb: 'added a meeting', color: '#0ea5a3', icon: <ActSvg><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M16 2v4M8 2v4M3 10h18" /></ActSvg> }
+  if (a.includes('invite') || a.includes('member') || a.startsWith('user.')) return { verb: 'updated a member', color: '#3b82f6', icon: <ActSvg><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /></ActSvg> }
+  if (a.includes('upload') || a.includes('attach') || a.includes('file')) return { verb: 'uploaded a file', color: '#64748b', icon: <ActSvg><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></ActSvg> }
+  if (a.includes('delete') || a.includes('remove')) return { verb: 'removed an item', color: '#ef4444', icon: <ActSvg><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" /></ActSvg> }
+  if (a.includes('login') || a.includes('auth')) return { verb: 'signed in', color: '#64748b', icon: <ActSvg><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><path d="M10 17l5-5-5-5M15 12H3" /></ActSvg> }
+  return { verb: (a.split('.')[1] || a).replace(/_/g, ' '), color: '#f2622e', icon: <ActSvg><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M8 2v4M16 2v4M3 10h18" /></ActSvg> }
+}
+
+// Recent activity feed — mirrors the template's "Recent activity" card, backed by
+// the org audit log returned with the manager dashboard.
+function RecentActivity({ items }: { items: any[] }) {
+  return (
+    <div className="pbi-card">
+      <div className="pbi-head"><h3>Recent activity</h3></div>
+      <div className="act-list">
+        {(!items || items.length === 0) && <div className="muted" style={{ padding: '10px 4px', fontSize: 13 }}>No recent activity yet.</div>}
+        {items && items.map((a: any) => {
+          const m = actMeta(a.action)
+          return (
+            <div key={a.id} className="act-row">
+              <span className="act-ic" style={{ ['--ac' as any]: m.color }}>{m.icon}</span>
+              <div className="act-body">
+                <div className="act-text"><b>{a.actor_name || 'Someone'}</b> {m.verb}{a.detail ? <> “{a.detail}”</> : ''}</div>
+              </div>
+              <span className="act-time">{timeAgo(a.created_at)}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function useDrawer() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -294,7 +354,6 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
     </div>
   )
   const maxWl = Math.max(...data.workload.map((w: any) => w.open_count), 1)
-  const donutData = data.by_priority.map((p: any) => ({ label: p.priority, value: p.count, color: PRIORITY_COLORS[p.priority] }))
   return (
     <div className="pbi" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
       {toolbar}
@@ -344,66 +403,6 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
           </div>
         </div>
 
-        <div className="pbi-card">
-          <div className="pbi-head"><h3>Open by priority</h3></div>
-          <div className="pbi-scroll pbi-donut-wrap">
-            <Donut data={donutData} size={140} onSegmentClick={(label) => navigate(`/tasks?priority=${encodeURIComponent(label)}&view=active`)} />
-            <div className="pbi-legend">
-              {donutData.map((p: any) => {
-                const clickable = p.value > 0
-                return (
-                  <div
-                    key={p.label}
-                    className={'lg' + (clickable ? ' clickable' : '')}
-                    onClick={clickable ? () => navigate(`/tasks?priority=${encodeURIComponent(p.label)}&view=active`) : undefined}
-                    role={clickable ? 'button' : undefined}
-                    tabIndex={clickable ? 0 : undefined}
-                    onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/tasks?priority=${encodeURIComponent(p.label)}&view=active`) } } : undefined}
-                    title={clickable ? `Open ${p.label} tasks (${p.value})` : undefined}
-                  >
-                    <span className="dot" style={{ background: p.color }} />
-                    <span>{p.label}</span>
-                    <b>{p.value}</b>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-
-        <div className="pbi-card">
-          <div className="pbi-head"><h3>Tasks by status</h3></div>
-          <div className="pbi-scroll">
-            {(() => {
-              const maxStatus = Math.max(...data.by_status.map((s: any) => s.count), 1)
-              return data.by_status.map((s: any) => {
-                const goToStatus = () => navigate(`/tasks?status=${encodeURIComponent(s.status)}`)
-                return (
-                  <div
-                    key={s.status}
-                    className="clickable"
-                    style={{ marginBottom: 13 }}
-                    onClick={goToStatus}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goToStatus() } }}
-                    title={`Open ${s.status} tasks (${s.count})`}
-                  >
-                    <div className="spread" style={{ marginBottom: 4 }}>
-                      <span className="row" style={{ gap: 7, fontSize: 13 }}>
-                        <span style={{ width: 10, height: 10, borderRadius: 3, background: STATUS_COLORS[s.status] }} />
-                        {s.status}
-                      </span>
-                      <strong>{s.count}</strong>
-                    </div>
-                    <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status]} />
-                  </div>
-                )
-              })
-            })()}
-          </div>
-        </div>
-
         <div className="pbi-card pbi-overdue">
           <div className="pbi-head"><h3>Overdue tasks</h3>{data.overdue.length > 0 && <span className="badge" style={{ marginLeft: 'auto', background: '#fee2e2', color: '#ef4444' }}>{c.overdue}</span>}</div>
           <div className="pbi-scroll" style={{ padding: 0 }}>
@@ -423,6 +422,8 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
             </table>
           </div>
         </div>
+
+        <RecentActivity items={data.recent_activity} />
       </div>
       {d.node}
     </div>
