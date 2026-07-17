@@ -8,7 +8,7 @@
   /* Brand — clean light canvas, coral-orange as the single action colour. */
   --bg: #f2f4f7;            /* light cool-gray canvas */
   --surface: #ffffff;
-  --border: #e9ecf1;
+  --border: #dbe0e8;        /* visible enough to define cards/buttons on white */
   --text: #16191d;          /* charcoal */
   --primary: #f2622e;       /* coral-orange — the one action colour */
   --primary-dark: #d94e1c;
@@ -84,8 +84,8 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--p
 label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 5px; }
 
 /* ---- buttons ---- */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border); background: #fff; color: var(--text); font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
-.btn:hover { background: #faf6ef; border-color: color-mix(in srgb, var(--primary) 22%, var(--border)); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--n-300); background: var(--n-50); color: var(--n-700); font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
+.btn:hover { background: var(--n-100); border-color: var(--n-400); color: var(--text); }
 .btn:active { transform: translateY(1px); }
 .btn-primary { background: linear-gradient(135deg, #d4631a, var(--primary)); color: #fff; border-color: var(--primary); box-shadow: 0 2px 7px rgba(242,98,46,.28); }
 .btn-primary:hover { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); border-color: var(--primary-dark); box-shadow: 0 5px 14px rgba(242,98,46,.36); transform: translateY(-1px); }
@@ -210,7 +210,7 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .content { padding: 24px 28px; max-width: 1240px; width: 100%; }
 
 /* hamburger toggle + dimming backdrop — only used on mobile, hidden on desktop */
-.nav-toggle { display: none; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 10px; border: 1px solid var(--border); background: #fff; color: var(--text); flex-shrink: 0; transition: .15s; }
+.nav-toggle { display: none; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 10px; border: 1px solid var(--n-300); background: var(--n-50); color: var(--text); flex-shrink: 0; transition: .15s; }
 .nav-toggle:hover { background: var(--bg); }
 
 /* Header back button — steps back one tab/view (the previous screen) */
@@ -1182,7 +1182,7 @@ tbody tr:hover { background: var(--n-50); }
 
 /* Custom themed sort menu (replaces the unstyleable native <select>) */
 .sortmenu { position: relative; }
-.sortmenu-btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }
+.sortmenu-btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--n-300); border-radius: 11px; background: var(--n-50); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }
 .sortmenu-btn:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
 .sortmenu-btn:active { transform: translateY(1px); }
 .sortmenu-ic { color: var(--primary); flex-shrink: 0; }
@@ -1203,7 +1203,7 @@ tbody tr:hover { background: var(--n-50); }
 .filterbtn-dot { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: #fff; font-size: 10.5px; font-weight: 800; display: grid; place-items: center; }
 
 /* Collapsible task search: an icon button that expands into an input */
-.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); flex-shrink: 0; transition: .15s; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--n-300); background: var(--n-50); color: var(--text); flex-shrink: 0; transition: .15s; }
 .icon-btn:hover { background: var(--bg); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); color: var(--primary); }
 .search-box { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .search-box:focus-within { border-color: var(--primary); }
