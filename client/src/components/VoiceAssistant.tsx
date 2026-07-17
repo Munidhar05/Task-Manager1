@@ -78,6 +78,14 @@ export default function VoiceAssistant() {
   // Opening the assistant counts as "seen".
   useEffect(() => { if (v.open) dismissCoach() }, [v.open])
 
+  // The mobile bottom-nav center mic (in App's Layout) opens the assistant by
+  // firing an 'open-voice' event — listen for it here where the voice state lives.
+  useEffect(() => {
+    const open = () => v.start()
+    window.addEventListener('open-voice', open)
+    return () => window.removeEventListener('open-voice', open)
+  }, [v])
+
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [v.messages, v.state])
 
   return (
@@ -134,7 +142,7 @@ export default function VoiceAssistant() {
               className={'va-mic va-mic--' + v.state}
               onClick={v.micButton}
               title={v.state === 'listening' ? 'Stop' : 'Speak'}
-              style={v.state === 'listening' ? { boxShadow: `0 0 0 ${Math.round(v.level * 16)}px rgba(197,86,15,.12)` } : undefined}
+              style={v.state === 'listening' ? { boxShadow: `0 0 0 ${Math.round(v.level * 16)}px rgba(242,98,46,.12)` } : undefined}
             >
               {v.state === 'processing' ? <span className="spinner" /> : <MicIcon />}
             </button>

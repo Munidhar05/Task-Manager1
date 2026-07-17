@@ -194,7 +194,7 @@ export default function NotificationBell() {
                 role={actionable ? 'button' : undefined}
                 tabIndex={actionable ? 0 : undefined}
                 onKeyDown={actionable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNotif(n) } } : undefined}
-                style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(197,86,15,.08)', fontSize: 13, display: 'flex', gap: 11, alignItems: 'flex-start' }}
+                style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(242,98,46,.08)', fontSize: 13, display: 'flex', gap: 11, alignItems: 'flex-start' }}
               >
                 <NotifIcon type={n.type} />
                 <div style={{ minWidth: 0, flex: 1 }}>

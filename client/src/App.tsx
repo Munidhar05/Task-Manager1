@@ -113,6 +113,14 @@ function Layout({ children }: { children: React.ReactNode }) {
   const visibleNav = NAV.filter((n) => (n as any).platformOnly
     ? !!user.platform_admin
     : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly))
+  // One bottom-nav tab (shared by the slots on either side of the center mic).
+  const renderBottomTab = (n: typeof NAV[number]) => (
+    <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
+      <span className="bn-ic">{n.icon}</span>
+      <span className="bn-label">{n.label}</span>
+      {n.to === '/chats' && chatUnread > 0 && <span className="bn-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
+    </NavLink>
+  )
   return (
     <div className="app">
       <aside className={'sidebar' + (open ? ' open' : '')}>
@@ -175,16 +183,25 @@ function Layout({ children }: { children: React.ReactNode }) {
         </header>
         <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
       </div>
-      {/* Mobile bottom tab bar — thumb-reachable quick nav to the core sections,
-          with a "More" button that opens the full sidebar drawer. Hidden on desktop. */}
+      {/* Mobile bottom tab bar — template layout: two tabs, the signature center
+          floating AI voice mic, one more tab, then "More" (opens the full drawer).
+          The center mic opens the global VoiceAssistant via an 'open-voice' event. */}
       <nav className="bottom-nav" aria-label="Primary">
-        {visibleNav.slice(0, 4).map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
-            <span className="bn-ic">{n.icon}</span>
-            <span className="bn-label">{n.label}</span>
-            {n.to === '/chats' && chatUnread > 0 && <span className="bn-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
-          </NavLink>
-        ))}
+        {visibleNav.slice(0, 2).map(renderBottomTab)}
+        <button
+          className="bn-mic"
+          onClick={() => window.dispatchEvent(new Event('open-voice'))}
+          aria-label="Open voice assistant"
+          title="Talk to the AI assistant"
+        >
+          <span className="bn-mic-btn">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1" /><line x1="12" y1="19" x2="12" y2="22" />
+            </svg>
+          </span>
+          <span className="bn-mic-label">AI</span>
+        </button>
+        {visibleNav.slice(2, 3).map(renderBottomTab)}
         <button className="bn-item" onClick={() => setOpen(true)} aria-label="More menu">
           <span className="bn-ic">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
