@@ -65,10 +65,17 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
     FROM projects p LEFT JOIN tasks t ON t.project_id=p.id WHERE p.org_id=? GROUP BY p.id
   `).all(org)
   const meetings = db.prepare('SELECT COUNT(*) c FROM meetings WHERE org_id=?').get(org).c
-  // Recent activity feed for the dashboard (most-recent org audit events).
-  const recentActivity = db.prepare(`SELECT a.*, u.name AS actor_name, u.avatar_color AS actor_color
-    FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_id
-    WHERE a.org_id=? ORDER BY a.created_at DESC LIMIT 8`).all(org)
+  // Recent activity feed for the dashboard — TASK events only (created, status
+  // changes, approvals, splits, comments). Auth/file/invite events are excluded.
+  // Joins the task so the feed can name it (task.status only stores the status).
+  const recentActivity = db.prepare(`SELECT a.id, a.action, a.detail, a.created_at,
+      u.name AS actor_name, u.avatar_color AS actor_color, t.title AS task_title
+    FROM audit_logs a
+    LEFT JOIN users u ON u.id=a.actor_id
+    LEFT JOIN tasks t ON t.id=a.entity_id AND a.entity_type='task'
+    WHERE a.org_id=? AND a.entity_type='task'
+      AND a.action IN ('task.create','task.status','task.approval','task.split','task.comment')
+    ORDER BY a.created_at DESC LIMIT 8`).all(org)
   res.json({
     counts: {
       total: tasks.length,

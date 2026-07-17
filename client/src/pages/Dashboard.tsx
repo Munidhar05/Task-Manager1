@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Task } from '../api'
 import { useAuth } from '../auth'
-import { Bar, Donut, PriorityBadge, StatusBadge, Avatar, EmptyState, Ic, dueLabel, PRIORITY_COLORS, STATUS_COLORS } from '../ui'
+import { Bar, PriorityBadge, Avatar, EmptyState, Ic, dueLabel, STATUS_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import { presetRange, todayYmd, ReportRange, downloadManagerReport } from '../report'
 import { toast } from '../lib/toast'
@@ -73,37 +73,56 @@ function timeAgo(raw: string | number): string {
 const ActSvg = ({ children }: { children: React.ReactNode }) => (
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
 )
-// Map an audit action (e.g. "task.complete") to a friendly verb + icon + colour.
-function actMeta(action: string): { verb: string; color: string; icon: React.ReactNode } {
-  const a = (action || '').toLowerCase()
-  if (a.includes('complete') || a.includes('done') || a.includes('approve')) return { verb: 'completed a task', color: '#10b981', icon: <ActSvg><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><path d="m9 11 3 3L22 4" /></ActSvg> }
-  if (a.includes('assign')) return { verb: 'was assigned a task', color: '#3b82f6', icon: <ActSvg><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="m15 11 2 2 4-4" /></ActSvg> }
-  if (a.startsWith('task.create') || a.includes('create') && a.includes('task')) return { verb: 'created a task', color: '#f2622e', icon: <ActSvg><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M12 8v8M8 12h8" /></ActSvg> }
-  if (a.includes('comment')) return { verb: 'added a comment', color: '#8b5cf6', icon: <ActSvg><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></ActSvg> }
-  if (a.includes('meeting')) return { verb: 'added a meeting', color: '#0ea5a3', icon: <ActSvg><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M16 2v4M8 2v4M3 10h18" /></ActSvg> }
-  if (a.includes('invite') || a.includes('member') || a.startsWith('user.')) return { verb: 'updated a member', color: '#3b82f6', icon: <ActSvg><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /></ActSvg> }
-  if (a.includes('upload') || a.includes('attach') || a.includes('file')) return { verb: 'uploaded a file', color: '#64748b', icon: <ActSvg><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></ActSvg> }
-  if (a.includes('delete') || a.includes('remove')) return { verb: 'removed an item', color: '#ef4444', icon: <ActSvg><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" /></ActSvg> }
-  if (a.includes('login') || a.includes('auth')) return { verb: 'signed in', color: '#64748b', icon: <ActSvg><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><path d="M10 17l5-5-5-5M15 12H3" /></ActSvg> }
-  return { verb: (a.split('.')[1] || a).replace(/_/g, ' '), color: '#f2622e', icon: <ActSvg><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M8 2v4M16 2v4M3 10h18" /></ActSvg> }
+const ACT_ICONS = {
+  create: <ActSvg><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M12 8v8M8 12h8" /></ActSvg>,
+  status: <ActSvg><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /><path d="M3 21v-5h5" /></ActSvg>,
+  done: <ActSvg><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><path d="m9 11 3 3L22 4" /></ActSvg>,
+  comment: <ActSvg><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></ActSvg>,
+  split: <ActSvg><path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9" /></ActSvg>,
+} as const
+
+// Format one TASK audit row into a readable line + coloured icon. The status of a
+// task.status row rides in `detail` (e.g. "In Review"); the task's name comes from
+// the joined `task_title`.
+function actMeta(a: any): { text: React.ReactNode; color: string; icon: React.ReactNode } {
+  const who = <b>{a.actor_name || 'Someone'}</b>
+  const title = a.task_title || (a.action === 'task.create' ? a.detail : '')
+  const named = title ? <>“{title}”</> : 'a task'
+  switch (a.action) {
+    case 'task.status': {
+      const st: string = a.detail || ''
+      const color = (STATUS_COLORS as any)[st] || '#f2622e'
+      return { color, icon: st === 'Done' ? ACT_ICONS.done : ACT_ICONS.status,
+        text: <>{who} moved {named} to <b style={{ color }}>{st}</b></> }
+    }
+    case 'task.approval':
+      return a.detail === 'reject'
+        ? { color: '#ef4444', icon: ACT_ICONS.status, text: <>{who} sent {named} back</> }
+        : { color: '#10b981', icon: ACT_ICONS.done, text: <>{who} approved {named}</> }
+    case 'task.comment':
+      return { color: '#8b5cf6', icon: ACT_ICONS.comment, text: <>{who} commented on {named}</> }
+    case 'task.split':
+      return { color: '#0ea5a3', icon: ACT_ICONS.split, text: <>{who} split out {named}</> }
+    case 'task.create':
+    default:
+      return { color: '#f2622e', icon: ACT_ICONS.create, text: <>{who} created {named}</> }
+  }
 }
 
-// Recent activity feed — mirrors the template's "Recent activity" card, backed by
-// the org audit log returned with the manager dashboard.
+// Recent activity feed — task events only (created / status changes / approvals /
+// comments), backed by the org audit log returned with the manager dashboard.
 function RecentActivity({ items }: { items: any[] }) {
   return (
     <div className="pbi-card">
       <div className="pbi-head"><h3>Recent activity</h3></div>
       <div className="act-list">
-        {(!items || items.length === 0) && <div className="muted" style={{ padding: '10px 4px', fontSize: 13 }}>No recent activity yet.</div>}
+        {(!items || items.length === 0) && <div className="muted" style={{ padding: '10px 4px', fontSize: 13 }}>No task activity yet.</div>}
         {items && items.map((a: any) => {
-          const m = actMeta(a.action)
+          const m = actMeta(a)
           return (
             <div key={a.id} className="act-row">
               <span className="act-ic" style={{ ['--ac' as any]: m.color }}>{m.icon}</span>
-              <div className="act-body">
-                <div className="act-text"><b>{a.actor_name || 'Someone'}</b> {m.verb}{a.detail ? <> “{a.detail}”</> : ''}</div>
-              </div>
+              <div className="act-body"><div className="act-text">{m.text}</div></div>
               <span className="act-time">{timeAgo(a.created_at)}</span>
             </div>
           )
