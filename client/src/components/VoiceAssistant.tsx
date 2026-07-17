@@ -223,19 +223,6 @@ export default function VoiceAssistant() {
         </div>
       )}
 
-      {/* Wake-word status chip (only while the panel is closed + wake word on), so
-          it's visible that the app IS listening for the phrase — and diagnosable if
-          it isn't (loading / needs a click / errored). */}
-      {!v.open && wakeWordConfigured() && wake.status !== 'off' && (
-        <div className={'va-wake-chip va-wake-chip--' + wake.status} role="status">
-          <span className="va-wake-dot" />
-          {wake.status === 'listening' ? <>Listening for “<b>{wakeWordPhrase()}</b>”</>
-            : wake.status === 'loading' ? 'Starting wake word…'
-            : wake.status === 'awaiting-gesture' ? <>Tap anywhere to enable “<b>{wakeWordPhrase()}</b>”</>
-            : wake.status === 'error' ? 'Wake word off — tap the mic' : ''}
-        </div>
-      )}
-
       {/* The signature control — voice is the product's core feature, so it's a
           LABELLED pill (not an anonymous icon) with a gentle live pulse, so users
           notice it and know what it does. Hidden while the panel is open (the panel
