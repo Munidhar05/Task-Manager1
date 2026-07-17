@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Task, User, Attachment, taskAttachmentUrl } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
@@ -131,10 +131,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     <div className="overlay" onClick={onClose}>
       <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={task.title} onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread">
-          <div className="row">
-            <PriorityBadge p={task.priority} /><StatusBadge s={task.status} /><CategoryBadge c={task.category} />
-            {task.visible_to_manager === 0 && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)', border: '1px solid var(--info-border)' }}><Ic name="lock" size={12} /> Private</span>}
-          </div>
+          <div className="dr-headtitle">Task details</div>
           <div className="row">
             {isManager && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
             {canDelete && <button className="btn btn-sm btn-danger row" style={{ gap: 6 }} disabled={busy} onClick={del} title="Delete task"><Ic name="trash" size={14} /> Delete</button>}
@@ -160,11 +157,20 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               </div>
             </div>
           ) : (
-            <>
-              <h2 style={{ fontSize: 19 }}>{task.title}</h2>
+            <div className="dr-hero" style={{ ['--pr' as any]: PRIORITY_COLORS[task.priority] || 'var(--primary)' }}>
+              <h2 className="dr-title">{task.title}</h2>
+              <div className="dr-badges">
+                <PriorityBadge p={task.priority} /><StatusBadge s={task.status} /><CategoryBadge c={task.category} />
+                {task.visible_to_manager === 0 && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)', border: '1px solid var(--info-border)' }}><Ic name="lock" size={12} /> Private</span>}
+              </div>
               <ConfidenceTag c={task.ownership_confidence} />
-              {task.description && task.description !== task.title && <p className="muted" style={{ marginTop: 8 }}>{task.description}</p>}
-            </>
+              {task.description && task.description !== task.title && (
+                <>
+                  <div className="dr-section-label">Description</div>
+                  <p className="dr-desc">{task.description}</p>
+                </>
+              )}
+            </div>
           )}
 
           {(task.source_quote || (task as any).assignee_reasoning) && (
@@ -173,54 +179,64 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
           )}
 
-          <div className="grid grid-2" style={{ gap: 14, margin: '16px 0' }}>
-            <div>
-              <label>Assignee</label>
-              {isManager ? (
-                <div className="row" style={{ gap: 8 }}>
-                  <select value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
-                    <option value="">Select member…</option>
-                    {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          <div className="dr-fields">
+            <div className="dr-field dr-field--tall">
+              <span className="dr-field-label">Assignee</span>
+              <div className="dr-field-val">
+                {isManager ? (
+                  <div className="row" style={{ gap: 8 }}>
+                    <select value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
+                      <option value="">Select member…</option>
+                      {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={busy || pendingAssignee === (task.assignee?.id || '')}
+                      onClick={() => setAssignee(pendingAssignee)}
+                    >
+                      {busy ? <span className="spinner" /> : pendingAssignee ? 'Assign' : 'Unassign'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="row" style={{ gap: 8 }}>{task.assignee ? <><Avatar name={task.assignee.name} color={task.assignee.avatar_color} size={24} /> {task.assignee.name}</> : '—'}</div>
+                )}
+                {task.assignee_name_raw && !task.assignee && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Heard as: “{task.assignee_name_raw}”</div>}
+              </div>
+            </div>
+            <div className="dr-field">
+              <span className="dr-field-label">Priority</span>
+              <div className="dr-field-val">
+                {isManager ? (
+                  <select value={task.priority} onChange={(e) => setPriority(e.target.value)} style={{ width: 'auto' }}>
+                    {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
                   </select>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    disabled={busy || pendingAssignee === (task.assignee?.id || '')}
-                    onClick={() => setAssignee(pendingAssignee)}
-                  >
-                    {busy ? <span className="spinner" /> : pendingAssignee ? 'Assign' : 'Unassign'}
-                  </button>
-                </div>
-              ) : (
-                <div className="row">{task.assignee ? <><Avatar name={task.assignee.name} color={task.assignee.avatar_color} size={22} /> {task.assignee.name}</> : '—'}</div>
-              )}
-              {task.assignee_name_raw && !task.assignee && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Heard as: “{task.assignee_name_raw}”</div>}
+                ) : <PriorityBadge p={task.priority} />}
+              </div>
             </div>
-            <div>
-              <label>Priority</label>
-              {isManager ? (
-                <select value={task.priority} onChange={(e) => setPriority(e.target.value)}>
-                  {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
-                </select>
-              ) : <PriorityBadge p={task.priority} />}
+            <div className="dr-field">
+              <span className="dr-field-label">Category</span>
+              <div className="dr-field-val">
+                {isManager ? (
+                  <select value={task.category || ''} onChange={(e) => setCategory(e.target.value)} style={{ width: 'auto' }}>
+                    <option value="">Uncategorized</option>
+                    {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                ) : (task.category ? <CategoryBadge c={task.category} /> : <span className="muted">Uncategorized</span>)}
+              </div>
             </div>
-            <div>
-              <label>Category</label>
-              {isManager ? (
-                <select value={task.category || ''} onChange={(e) => setCategory(e.target.value)}>
-                  <option value="">Uncategorized</option>
-                  {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              ) : (task.category ? <CategoryBadge c={task.category} /> : <div className="muted">Uncategorized</div>)}
+            <div className="dr-field">
+              <span className="dr-field-label">Assigned by</span>
+              <div className="dr-field-val">
+                <div className="row" style={{ gap: 8 }}>{task.assignedBy ? <><Avatar name={task.assignedBy.name} size={24} /> {task.assignedBy.name}</> : '—'}</div>
+              </div>
             </div>
-            <div>
-              <label>Assigned by</label>
-              <div className="row">{task.assignedBy ? <><Avatar name={task.assignedBy.name} size={22} /> {task.assignedBy.name}</> : '—'}</div>
-            </div>
-            <div>
-              <label>Due date</label>
-              {editing
-                ? <input type="date" value={editForm.due_date} onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })} />
-                : <div>{dueLabel(task)}</div>}
+            <div className="dr-field">
+              <span className="dr-field-label">Due date</span>
+              <div className="dr-field-val">
+                {editing
+                  ? <input type="date" value={editForm.due_date} onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })} style={{ width: 'auto' }} />
+                  : <span>{dueLabel(task)}</span>}
+              </div>
             </div>
           </div>
 
