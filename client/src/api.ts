@@ -84,7 +84,19 @@ export interface Task {
   assigned_at?: string; submitted_at?: string; completed_at?: string; created_at?: string; updated_at?: string
   visible_to_manager?: number; parent_task_id?: string | null
   subtasks?: Task[]; comments?: any[]; dependencies?: any[]; attachments?: Attachment[]
+  // How this task reached its current owner — drives the badge on each card.
+  // 'self' means they created it for themselves, so there's no hand-off to show.
+  origin?: TaskOrigin
+  reassignedBy?: User; previousAssignee?: User
+  reassigned_at?: string | null
+  parent?: { id: string; title: string; assignee_id?: string | null } | null
+  is_split_parent?: boolean
+  // Flat name columns — the dashboard endpoints return rows straight from SQL
+  // rather than the hydrated objects above, to avoid ~8 queries per task.
+  assigned_by_name?: string | null; reassigned_by_name?: string | null
+  assignee_name?: string | null; assignee_color?: string | null; parent_title?: string | null
 }
+export type TaskOrigin = 'assigned' | 'reassigned' | 'split' | 'self'
 export interface Attachment {
   id: string; task_id: string; filename: string; file_type?: string | null; file_size?: number | null
   uploaded_by?: string | null; created_at?: string

@@ -4,6 +4,7 @@ import { api, Task } from '../api'
 import { useAuth } from '../auth'
 import { Bar, PriorityBadge, Avatar, EmptyState, Ic, dueLabel, STATUS_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
+import TaskOriginBadge, { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { presetRange, todayYmd, ReportRange, downloadManagerReport } from '../report'
 import { toast } from '../lib/toast'
 
@@ -183,7 +184,11 @@ function EmployeeDash() {
             {data.upcoming.map((t: Task) => (
               <div key={t.id} className="emp-list-row clickable" onClick={() => d.setOpenId(t.id)} role="button" tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
-                <div style={{ minWidth: 0 }}><div className="emp-list-title">{t.title}</div><div className="muted" style={{ fontSize: 12 }}>{dueLabel(t)}</div></div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="emp-list-title">{t.title}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>{dueLabel(t)}</div>
+                  <TaskHandoverLine task={t} />
+                </div>
                 <PriorityBadge p={t.priority} />
               </div>
             ))}
@@ -208,9 +213,76 @@ function EmployeeDash() {
           </div>
         </div>
       </div>
+
+      {/* Work handed to someone else. Deliberately below the fold and outside the
+          KPIs above: it is not this person's workload, so it must not inflate
+          their Overdue count — but until now it was invisible everywhere. */}
+      {data.assigned_by_me?.length > 0 && (
+        <div className="card section">
+          <div className="card-head">
+            <h3>Assigned by me</h3>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/tasks?assigned_by_me=1')}>View all</button>
+          </div>
+          <div className="emp-list">
+            {data.assigned_by_me.slice(0, 8).map((t: Task) => (
+              <div key={t.id} className="emp-list-row clickable" onClick={() => d.setOpenId(t.id)} role="button" tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="emp-list-title">{t.title}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {t.assignee_name || 'Unassigned'} · {dueLabel(t)}
+                  </div>
+                  <span className="task-handover"><TaskOriginBadge task={t} /><StatusPill status={t.status} /></span>
+                </div>
+                <PriorityBadge p={t.priority} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Tasks of mine that I split up. They're containers, so they're kept out of
+          the counts above — but the owner still has to be able to see them and
+          who holds which part. */}
+      {data.shared_by_me?.length > 0 && (
+        <div className="card section">
+          <div className="card-head"><h3>Split by me</h3></div>
+          <div className="emp-list">
+            {data.shared_by_me.map((t: any) => (
+              <div key={t.id} className="split-parent">
+                <div className="emp-list-row clickable" onClick={() => d.setOpenId(t.id)} role="button" tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="emp-list-title">{t.title}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {t.parts.filter((p: any) => p.status === 'Done').length} of {t.parts.length} parts done · {dueLabel(t)}
+                    </div>
+                  </div>
+                  <PriorityBadge p={t.priority} />
+                </div>
+                <div className="split-parts">
+                  {t.parts.map((p: any) => (
+                    <div key={p.id} className="split-part clickable" onClick={() => d.setOpenId(p.id)} role="button" tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(p.id) } }}>
+                      <span className="split-part-title">{p.title}</span>
+                      <span className="muted">{p.assignee_name || 'Unassigned'}</span>
+                      <StatusPill status={p.status} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {d.node}
     </>
   )
+}
+
+// Small status chip, so a delegated task's state reads without opening it.
+function StatusPill({ status }: { status: string }) {
+  return <span className="status-pill" style={{ ['--sc' as any]: STATUS_COLORS[status] || '#94a3b8' }}>{status}</span>
 }
 
 // Clean line-style KPI icons (inherit currentColor → tinted to each card's accent).
@@ -440,7 +512,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                   <tr key={t.id} className="clickable" onClick={() => d.setOpenId(t.id)}
                     role="button" tabIndex={0} aria-label={`Open ${t.title}`}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
-                    <td>{t.title}</td>
+                    <td>{t.title}<TaskHandoverLine task={t} /></td>
                     <td className="muted">{t.assignee_name || 'Unassigned'}</td>
                     <td>{dueLabel(t)}</td>
                   </tr>

@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
+import { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
 import { useEscape } from '../lib/useEscape'
@@ -323,6 +324,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const QUICK_VIEWS = ['active', 'overdue', 'today', 'completed'] as const
   const urlView = searchParams.get('view')
   const urlStatus = searchParams.get('status')
+  const assignedByMe = searchParams.get('assigned_by_me') === '1'
   const initialQuick = (QUICK_VIEWS as readonly string[]).includes(urlView || '')
     ? (urlView as 'active' | 'overdue' | 'today' | 'completed')
     // A Done deep-link (e.g. clicking "Done" on the dashboard) must land on the
@@ -358,6 +360,9 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     const p = new URLSearchParams()
     Object.entries(filters).forEach(([k, v]) => v && p.set(k, v))
     if (personal) p.set('mine', '1') // My Tasks: only the current user's own tasks
+    // Deep-link from the dashboard's "Assigned by me" section — work this user
+    // handed to someone else, which the normal assignee filter excludes.
+    if (assignedByMe) p.set('assigned_by_me', '1')
     api.get('/tasks?' + p.toString())
       .then((d) => { if (myReq === reqIdRef.current) { setTasks(d); setLoading(false) } })
       .catch(() => { if (myReq === reqIdRef.current) { setLoadError(true); setLoading(false) } })
@@ -365,7 +370,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // Re-fetch on `personal` too: /tasks and /my-tasks reuse this same component, so
   // navigating between them flips `personal` without changing `filters` — without
   // this dep the list would keep showing the previous route's tasks until a refresh.
-  useEffect(() => { load() }, [filters, personal])
+  useEffect(() => { load() }, [filters, personal, assignedByMe])
   useEffect(() => { api.get('/users').then(setUsers) }, [])
 
   // Deep-links (dashboard KPI cards, voice navigation) can arrive while this page
@@ -529,7 +534,11 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
   const renderRow = (t: Task) => (
     <tr key={t.id} className={'clickable ' + rowClass(t)} onClick={() => setOpenId(t.id)}>
-      <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><span className="row" style={{ gap: 6 }}><ConfidenceTag c={t.ownership_confidence} /><CategoryBadge c={t.category} /></span></td>
+      <td className="cell-title">
+        <div style={{ fontWeight: 600 }}>{t.title}</div>
+        <span className="row" style={{ gap: 6 }}><ConfidenceTag c={t.ownership_confidence} /><CategoryBadge c={t.category} /></span>
+        <TaskHandoverLine task={t} />
+      </td>
       <td data-label="Priority">
         {isManager ? (
           <select

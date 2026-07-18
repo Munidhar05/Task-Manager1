@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Task } from '../api'
 import { PriorityBadge, Avatar, ConfidenceTag, dueLabel, STATUS_COLORS } from '../ui'
+import { TaskHandoverLine } from './TaskOriginBadge'
 
 // Columns mirror the task lifecycle (same order as the status sort rank).
 const COLUMNS = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
@@ -55,6 +56,7 @@ export default function TaskBoard({ tasks, onOpen, onMove }: {
                 >
                   <div className="board-card-title">{t.title}</div>
                   <ConfidenceTag c={t.ownership_confidence} />
+                  <TaskHandoverLine task={t} />
                   <div className="board-card-foot">
                     <PriorityBadge p={t.priority} />
                     <span className="board-card-due">{dueLabel(t)}</span>
