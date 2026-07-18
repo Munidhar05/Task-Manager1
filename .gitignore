@@ -26,3 +26,7 @@ client/android/local.properties
 client/android/keystore.properties
 *.jks
 *.keystore
+
+# Play Store listing assets (screenshots, feature graphic, store icon).
+# Marketing artefacts regenerated from the app, not source — kept out of the repo.
+play-screenshots/
