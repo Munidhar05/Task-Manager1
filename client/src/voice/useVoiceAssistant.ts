@@ -147,8 +147,12 @@ export function useVoiceAssistant() {
         await say(sayText || 'Shall I go ahead?')
         break
       case 'navigate':
-        await say(sayText || 'Opening that.')
         if (resp.navigate?.url) navigate(resp.navigate.url)
+        // The voice screen is full-screen, so it would hide the page we just
+        // opened. End the session and close the panel to REVEAL the destination;
+        // the confirmation still plays as audio over it.
+        sessionRef.current++; openRef.current = false; setOpen(false); setState('idle')
+        say(sayText || 'Opening that.')
         break
       case 'answer':
         // Read tools may report a number AND open the matching list.
