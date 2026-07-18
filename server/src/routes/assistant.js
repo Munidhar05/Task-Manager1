@@ -239,6 +239,17 @@ async function handleCommand(req, res) {
         { kind: 'delete_task', task_id: t.id, summary: `Delete "${t.title}"`, body: {} }))
     }
 
+    // ---- chats: send a real direct message in the Chats section -------------
+    case 'send_message': {
+      const match = a.recipient_name ? resolveUser(user.org_id, a.recipient_name) : null
+      if (!match) return res.json(clarify(a.recipient_name ? `I couldn't find "${a.recipient_name}" — who should I message?` : 'Who should I message?'))
+      if (match.id === user.id) return res.json(clarify("That's you — who did you want to message?"))
+      const body = String(a.body || '').trim()
+      if (!body) return res.json(clarify(`What should I tell ${match.name}?`))
+      return res.json(confirm(`Message ${match.name} in chat: "${body}". Send it?`,
+        { kind: 'send_message', to_user_id: match.id, to_name: match.name, text: body, summary: `Messaged ${match.name}` }))
+    }
+
     case 'navigate': {
       const nav = navUrl(a, user)
       if (nav?.deny) return res.json(answer(nav.deny))

@@ -43,6 +43,11 @@ export const TOOLS = [
     desc: 'Delete a task permanently.',
     args: 'task_id' },
 
+  // ---- chats (the Chats section — real 1:1 messages, NOT task comments) -----
+  { name: 'send_message', kind: 'mutate', roles: ALL,
+    desc: "Send a DIRECT CHAT MESSAGE to a teammate in the Chats section — this is real person-to-person messaging, NOT a task comment. Use whenever the user says 'message X', 'tell X in chat', 'send X a message', 'ping X', 'message him/her personally'. If they mention a task, weave it into the message text.",
+    args: 'recipient_name, body (the message to send, phrased naturally in English)' },
+
   // ---- views ---------------------------------------------------------------
   { name: 'navigate', kind: 'navigate', roles: ALL,
     desc: 'Open a screen or a filtered task list. Use for "show/open/go to".',
@@ -130,6 +135,7 @@ ${lines}${deniedNote}
 
 RULES:
 - Pick the single best tool. Never invent a tool name.
+- CHATS vs COMMENTS: "message / tell / ping / text someone (in chat / personally)" means a real chat message → use send_message. Only use add_comment when they explicitly say "comment on the task" or "add a note to the task".
 - When a tool targets an existing task, copy its exact id from the snapshot into task_id. If several tasks plausibly match, use "clarify" and name the top options. If none match, use "clarify".
 - NEVER compute or guess numbers/metrics yourself — call get_overview / get_workload / group_tasks and let the system count.
 - If the request is a question rather than a command, use "ask".
