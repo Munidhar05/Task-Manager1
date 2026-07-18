@@ -1,49 +1,118 @@
 # Training the "hey BTM" wake-word model (Colab runbook)
 
-This produces `hey_btm.onnx` for the on-device wake word. It's the **one remaining
-step** — the detector code and the two shared models are already in the repo. You
-run this in Google Colab (free); it **synthesizes** all the training speech, so you
-record nothing. Budget ~1 hour, mostly unattended.
+This produces `hey_btm.onnx` for the on-device wake word. It **synthesizes** all the
+training speech, so you record nothing. Budget ~2–3 hours on a free T4, mostly
+unattended — the bulk is downloading, not GPU time.
 
-> Every crash we hit last time is pre-patched below. Follow the cells in order and
-> don't skip the patch cell.
+> **Do not follow openWakeWord's own notebook.** As of 2026 it cannot run on Colab
+> at all: it installs `tensorflow-cpu==2.8.1`, which has no wheel for Python 3.12
+> (what Colab now ships), and pip hard-fails. Several of its data URLs are dead too.
+> The cells below replace it. Paste them into a blank Colab notebook in order.
+>
+> **Status: not executed end-to-end by us.** Every individual fix below was verified
+> against upstream source, live URLs, and PyPI wheel tags, but nobody has run the
+> whole pipeline start to finish. Expect to debug a cell or two. Where a step is
+> most likely to bite, there's a note saying so.
 
----
-
-## 0. Open the notebook + pick a GPU
-
-1. Open openWakeWord's automatic training notebook:
-   <https://colab.research.google.com/github/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb>
-2. **Runtime → Change runtime type → GPU** (T4 is fine). Training on CPU is painfully slow.
-3. Run the notebook top-to-bottom, but apply the edits in the steps below.
-
----
-
-## 1. Run the install cell(s) as-is
-
-Run Step 1 (the `pip install` + data-download cells). Let them finish. **Ignore**
-any dependency-resolver warnings — they don't matter here.
+**Runtime → Change runtime type → GPU (T4)** before you start.
 
 ---
 
-## 2. ⚠️ Patch cell — INSERT this and run it BEFORE any `import` of the training code
-
-The notebook's pinned `torch-audiomentations==0.11.0` calls
-`torchaudio.set_audio_backend(...)`, which was **removed in torchaudio ≥ 2.1** (what
-Colab now ships). Without this patch, Steps 1/2/3 all crash on import with:
-
-```
-AttributeError: module 'torchaudio' has no attribute 'set_audio_backend'
-```
-
-Add a **new code cell** right after the installs and run it:
+## Cell 1 — confirm the GPU and Python version
 
 ```python
-# --- FIX: torch-audiomentations 0.11.0 calls a torchaudio API removed in >=2.1 ---
-import importlib.util, re, pathlib
+!nvidia-smi -L
+import sys; print("Python", sys.version)
+```
+
+Expect a T4 and Python 3.12.x. If there's no GPU, training still works but takes
+many hours.
+
+---
+
+## Cell 2 — install, without TensorFlow
+
+The key deviation from upstream. **TensorFlow is only needed for the TFLite export,
+which we don't want** — we need ONNX. Dropping it removes the fatal wheel problem
+and most of the dependency conflicts.
+
+Note `--no-deps` on openwakeword itself, and that we install from **git, not PyPI**:
+the released PyPI package still requires `tflite-runtime`, which has no cp312 wheel,
+while `main` has migrated to `ai-edge-litert`. That migration was never released.
+
+```python
+# openWakeWord from git (PyPI 0.6.0 is too old to install on Py3.12)
+!git clone -q https://github.com/dscripka/openWakeWord.git
+!pip install -q -e ./openWakeWord --no-deps
+
+# Deps by hand. NEVER use the [full] extra — it pins protobuf<4, onnx==1.14,
+# datasets<3, torchmetrics<1 and will spend 20 minutes backtracking before failing.
+!pip install -q \
+    onnx onnxruntime \
+    torch torchaudio torchinfo torchmetrics \
+    speechbrain audiomentations torch-audiomentations \
+    acoustics pronouncing mutagen soundfile librosa \
+    datasets pyyaml tqdm scipy scikit-learn \
+    ai-edge-litert speexdsp-ns
+
+# Piper TTS, for synthesizing the positive samples
+!pip install -q piper-phonemize-cross piper-tts
+```
+
+`piper-phonemize` now ships a cp312 wheel, so the old "install `-cross` first to
+work around the missing 3.12 wheel" advice is obsolete — either package works.
+
+---
+
+## Cell 3 — piper-sample-generator, with a layout shim
+
+openWakeWord's `train.py` does `sys.path.insert(0, piper_sample_generator_path)`
+then `from generate_samples import generate_samples`. That needs a **top-level**
+`generate_samples.py`. Upstream has since moved it into a `piper_sample_generator/`
+package, so a fresh clone raises `ModuleNotFoundError: No module named 'piper'`.
+
+Rather than pin to an old commit, this detects the layout and writes a shim:
+
+```python
+import os, pathlib, textwrap
+
+!git clone -q https://github.com/rhasspy/piper-sample-generator.git
+
+root = pathlib.Path("piper-sample-generator")
+if not (root / "generate_samples.py").exists():
+    inner = root / "piper_sample_generator" / "generate_samples.py"
+    assert inner.exists(), f"can't find generate_samples.py; layout changed again: {list(root.iterdir())}"
+    (root / "generate_samples.py").write_text(textwrap.dedent("""
+        # Shim: train.py expects this module at the top level, upstream moved it
+        # into a package. Re-export so both layouts work.
+        from piper_sample_generator.generate_samples import *          # noqa: F401,F403
+        from piper_sample_generator.generate_samples import generate_samples  # noqa: F401
+    """))
+    print("wrote top-level shim")
+else:
+    print("flat layout, no shim needed")
+
+# The TTS voice checkpoint. Only the v1.0.0/v2.0.0 release tags carry assets —
+# v3.x releases exist but are empty.
+!wget -q -O piper-sample-generator/models/en_US-libritts_r-medium.pt \
+  https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt
+print("voice:", os.path.getsize("piper-sample-generator/models/en_US-libritts_r-medium.pt"), "bytes")
+```
+
+---
+
+## Cell 4 — patch `torch_audiomentations`
+
+It calls `torchaudio.set_audio_backend()`, removed in torchaudio ≥2.1, and
+`torchaudio.info()`, whose signature changed. Both crash on import.
+
+```python
+import importlib.util, pathlib
+
 spec = importlib.util.find_spec("torch_audiomentations")
 io_path = pathlib.Path(spec.submodule_search_locations[0]) / "utils" / "io.py"
 src = io_path.read_text()
+
 patched = src.replace(
     "torchaudio.set_audio_backend(",
     'getattr(torchaudio, "set_audio_backend", lambda *a, **k: None)(',
@@ -52,116 +121,243 @@ io_path.write_text(patched)
 print("patched:", io_path, "| changed:", src != patched)
 ```
 
-It prints `changed: True` the first time. (No kernel restart needed — the trainer
-runs as a subprocess and re-imports the patched file.)
+Prints `changed: True` the first time. No kernel restart needed — the trainer runs
+as a subprocess and re-imports the patched file.
 
 ---
 
-## 3. Set the target phrase + model name
+## Cell 5 — training data
 
-In the notebook's **config cell** (the one that builds the training `config` dict /
-YAML), set the phrase to **pronunciation variants** and name the model. Piper's TTS
-mispronounces the bare initialism "BTM", so giving it spelled-out variants makes the
-synthetic data much better:
+Three notes on what changed:
+
+- **AudioSet is gone.** The notebook fetches `agkphysics/AudioSet .../bal_train09.tar`,
+  which now returns **404** — that repo was reorganised to Parquet. We use FMA for
+  background noise instead.
+- The ACAV100M feature file is **~17 GB** and dominates the whole runtime. It is
+  the single biggest reason this takes hours. Start this cell and go do something else.
+- MIT RIRs and the validation features are both still live.
 
 ```python
-config["target_phrase"] = ["hey btm", "hey bee tee em", "hey b t m"]
-config["model_name"]    = "hey_btm"
+import os, scipy.io.wavfile, numpy as np, datasets, tqdm
+
+# --- room impulse responses (reverb augmentation) ---
+os.makedirs("mit_rirs", exist_ok=True)
+rir_ds = datasets.load_dataset("davidscripka/MIT_environmental_impulse_responses",
+                               split="train", streaming=True)
+for row in tqdm.tqdm(rir_ds, desc="RIRs"):
+    name = row['audio']['path'].split('/')[-1]
+    scipy.io.wavfile.write(f"mit_rirs/{name}", 16000,
+                           (row['audio']['array'] * 32767).astype(np.int16))
+
+# --- background noise: FMA (AudioSet's tar is 404) ---
+os.makedirs("background_clips", exist_ok=True)
+fma = datasets.load_dataset("rudraml/fma", name="small", split="train", streaming=True)
+fma = iter(fma.cast_column("audio", datasets.Audio(sampling_rate=16000)))
+for i in tqdm.tqdm(range(2000), desc="background"):
+    row = next(fma)
+    scipy.io.wavfile.write(f"background_clips/{i}.wav", 16000,
+                           (row['audio']['array'] * 32767).astype(np.int16))
+
+# --- precomputed negative features (the big one, ~17 GB) ---
+!wget -q --show-progress https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
+!wget -q --show-progress https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/validation_set_features.npy
 ```
-
-Leave the other defaults (sample counts, steps) unless you want a longer run. Run this cell.
-
-> "hey BTM" is a **short** phrase, so it has a naturally higher false-accept rate.
-> That's expected — we handle it with threshold tuning in Step 7, not here.
 
 ---
 
-## 4. Generate clips + train
+## Cell 6 — the config
 
-Run the training step (the cell that calls `train.py` with `--generate_clips
---augment_clips --train_model`, or the notebook's equivalent "run all training"
-cell). This is the ~1 hour part:
+Written as Python then dumped to YAML, so you never hand-edit `custom_model.yml`.
 
-- generates synthetic "hey btm" clips (positives) + negatives/background,
-- augments them (reverb, noise),
-- trains the classifier and **exports ONNX**.
+**`target_phrase` is a list, and giving it pronunciation variants matters here.**
+Piper phonemises the bare initialism "BTM" badly; spelling it out produces far
+better positives. All variants still train one binary classifier.
 
-The finished model lands at:
+```python
+import yaml
 
-```
-./my_custom_model/hey_btm.onnx
+config = {
+    "model_name": "hey_btm",
+    "target_phrase": ["hey btm", "hey bee tee em", "hey b t m"],
+    "custom_negative_phrases": [],
+
+    # Sample counts. Upstream recommends >=20,000; 100,000+ is better but slower.
+    # 20k is a reasonable first run — retrain with more if accuracy disappoints.
+    "n_samples": 20000,
+    "n_samples_val": 2000,
+
+    "tts_batch_size": 50,
+    "augmentation_batch_size": 16,
+    "augmentation_rounds": 1,
+
+    "piper_sample_generator_path": "./piper-sample-generator",
+    "output_dir": "./my_custom_model",
+    "rir_paths": ["./mit_rirs"],
+    "background_paths": ["./background_clips"],
+    "background_paths_duplication_rate": [1],
+    "false_positive_validation_data_path": "./validation_set_features.npy",
+    "feature_data_files": {
+        "ACAV100M_sample": "./openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
+    },
+    "batch_n_per_class": {
+        "ACAV100M_sample": 1024,
+        "adversarial_negative": 50,
+        "positive": 50,
+    },
+
+    "model_type": "dnn",
+    "layer_size": 32,
+    "steps": 50000,
+
+    # These two are the real false-positive/recall knobs. There is no
+    # `target_accuracy` / `false_activation_penalty` key, whatever blog posts say.
+    "max_negative_weight": 1500,
+    "target_false_positives_per_hour": 0.2,
+}
+
+with open("hey_btm.yaml", "w") as f:
+    yaml.dump(config, f)
+print(open("hey_btm.yaml").read())
 ```
 
 ---
 
-## 5. ⛔ SKIP Step 4 of the notebook (ONNX → TFLite)
+## Cell 7 — generate the positive clips
 
-We only need the **ONNX** file. The notebook's TFLite-conversion cell errors with
-`No module named 'onnx'` and is **irrelevant** to this app — do not run it.
+```python
+!python ./openWakeWord/openwakeword/train.py --training_config hey_btm.yaml --generate_clips
+```
 
 ---
 
-## 6. Download the model + drop it in the repo
+## Cell 8 — ⚠️ resample 22050 → 16000
 
-1. In Colab's file browser (📁 left sidebar), open `my_custom_model/`, download
-   **`hey_btm.onnx`**.
-2. Put it here in the repo:
-   ```
-   client/public/wakeword/hey_btm.onnx
-   ```
-3. In **`client/.env`**, point the wake word at it (replace the placeholder line):
+**The step most likely to bite you, and it fails late.** Piper's libritts voice
+outputs **22050 Hz**, but the augmentation and feature pipeline assumes **16000 Hz**.
+Skip this and you get `Clip does not have the correct sample rate` — or worse, a
+model that trains and never fires. This is upstream
+[issue #296](https://github.com/dscripka/openWakeWord/issues/296), still open.
+
+```python
+import librosa, soundfile as sf, glob, tqdm, os
+
+fixed = 0
+for path in tqdm.tqdm(glob.glob("my_custom_model/**/*.wav", recursive=True), desc="resample"):
+    y, sr = librosa.load(path, sr=None)
+    if sr != 16000:
+        sf.write(path, librosa.resample(y, orig_sr=sr, target_sr=16000), 16000)
+        fixed += 1
+print(f"resampled {fixed} clips to 16 kHz")
+
+# Stale feature arrays must go or they'll be reused at the wrong rate.
+for npy in glob.glob("my_custom_model/**/*.npy", recursive=True):
+    os.remove(npy)
+    print("removed stale", npy)
+```
+
+---
+
+## Cell 9 — augment, then train
+
+```python
+!python ./openWakeWord/openwakeword/train.py --training_config hey_btm.yaml --augment_clips
+```
+
+```python
+!python ./openWakeWord/openwakeword/train.py --training_config hey_btm.yaml --train_model
+```
+
+**Do not pass `--convert_to_tflite`.** It needs the TensorFlow stack we deliberately
+skipped, and we only want ONNX.
+
+---
+
+## Cell 10 — verify the exported model matches what the app expects
+
+Worth 10 seconds here rather than discovering a shape mismatch in the browser. The
+detector in [`client/src/voice/wakeword.ts`](../client/src/voice/wakeword.ts) feeds
+16 stacked 96-d embeddings and reads one score:
+
+```python
+import onnxruntime as ort, numpy as np
+
+sess = ort.InferenceSession("my_custom_model/hey_btm.onnx")
+i, o = sess.get_inputs()[0], sess.get_outputs()[0]
+print("input :", i.name, i.shape)    # expect [1, 16, 96]
+print("output:", o.name, o.shape)    # expect [1, 1]
+
+score = sess.run(None, {i.name: np.zeros((1, 16, 96), dtype=np.float32)})[0]
+print("score on silence:", float(score.ravel()[0]), "(should be near 0)")
+```
+
+If the input isn't `[1,16,96]`, something exported the wrong graph — re-run Cell 9's
+`--train_model` and make sure you didn't run a TFLite path.
+
+```python
+from google.colab import files
+files.download("my_custom_model/hey_btm.onnx")
+```
+
+---
+
+## Install it in the app
+
+1. Put the file at `client/public/wakeword/hey_btm.onnx`.
+2. In `client/.env`, **delete** the placeholder line — the code already defaults to
+   `/wakeword/hey_btm.onnx`:
    ```diff
    - VITE_WAKEWORD_MODEL_PATH=/wakeword/hey_jarvis_v0.1.onnx
+   - VITE_WAKEWORD_PHRASE=hey jarvis
    ```
-   Deleting that line is enough — the code defaults to `/wakeword/hey_btm.onnx`.
-   Keep `VITE_WAKEWORD_ENABLED=true`.
-4. For production builds, mirror it in **`client/.env.production`** if that file sets
-   a model path.
-5. Restart the Vite dev server (env changes need a restart), or rebuild for Android.
+3. Set `VITE_WAKEWORD_MODE=onnx` to force the on-device path everywhere (leave it
+   `auto` if you still want desktop browsers using Web Speech).
+4. Restart Vite — env changes need a restart — or rebuild for Android.
 
-The model contract the export must match (openWakeWord's default output — it will):
-`melspectrogram [batch, samples] → 32 mel bins`, `embedding [1,76,32,1] → 96-d`,
-`wakeword [1,16,96] → 1 score`.
+## Tune the threshold on a real device
 
----
-
-## 7. Tune the threshold on a real device
-
-Say **"hey BTM"** with the app open. Because we ship `VITE_WAKEWORD_DEBUG=true`, the
-browser console logs every scored frame:
+With `VITE_WAKEWORD_DEBUG=true` the console logs every scored frame:
 
 ```
 [wakeword] score 0.412
 [wakeword] score 0.884 *** WAKE ***
 ```
 
-- Watch the peak score when you say the phrase vs. when you're just talking.
-- Set the threshold just **below** your reliable "hey BTM" peaks and **above** the
-  chatter noise floor. Two ways:
-  - **Live, no rebuild:** `localStorage.setItem('wakeword_threshold','0.6')` in the
-    console, then reload.
-  - **Committed:** set `VITE_WAKEWORD_THRESHOLD=0.6` in `client/.env`.
-- Start around **0.5**; a short phrase like this often needs **0.6–0.7** to avoid
-  false triggers. If it never fires, lower it and check the peak scores.
-- Once tuned, set `VITE_WAKEWORD_DEBUG=false` (or remove it) to quiet the console.
+Say "hey BTM" a few times, then talk normally for a minute. Set the threshold below
+your reliable wake peaks and above the chatter floor. Live, without a rebuild:
+`localStorage.setItem('wakeword_threshold','0.6')` then reload. Once settled, commit
+it as `VITE_WAKEWORD_THRESHOLD` and turn `VITE_WAKEWORD_DEBUG` off.
+
+Start at **0.5**. "hey BTM" is short, so it has a naturally higher false-accept rate
+and often wants **0.6–0.7**. The current placeholder needs 0.2 only because the
+generic "hey jarvis" model scores weakly — a purpose-trained model should peak much
+higher, so if you still need 0.2 after training, the model is weak and wants more
+samples.
+
+## Before shipping commercially
+
+openWakeWord's **pretrained** models are CC-BY-NC-SA 4.0 and cannot be used
+commercially — that's why `hey_jarvis_v0.1.onnx` is a dev placeholder only, and it
+must not ship. Your own trained model should be yours, but `melspectrogram.onnx` and
+`embedding_model.onnx` are upstream's frozen feature extractor and every custom model
+depends on them at inference. We could not get a definitive license answer for those
+two files. **Confirm it before a paid release.**
 
 ---
 
 ## Troubleshooting
 
-- **Colab import crash `set_audio_backend`** → you skipped the Step 2 patch cell, or
-  ran an import before it. Run the patch cell, then re-run from there.
-- **Piper says "B-T-M" weirdly / poor positives** → confirm the `target_phrase`
-  variants in Step 3; more variants = more robust synthetic data.
-- **Model loads but never fires** → open the console: no `[wakeword] score` lines at
-  all means the mic/plumbing isn't running (grant mic permission; needs a user
-  gesture first). Scores that peak below your threshold → lower the threshold.
-- **Wrong tensor shape error on load** → you exported something other than the
-  default `[1,16,96]→1` model (e.g. ran the TFLite path). Re-export the ONNX from
-  Step 4's `--train_model` output.
-- **Offline / Android** → self-host the ONNX runtime: copy
-  `node_modules/onnxruntime-web/dist/*.wasm` into `client/public/ort/` and set
-  `VITE_ORT_WASM_PATH=/ort/` (otherwise it loads WASM from a CDN and needs network).
+- **`ModuleNotFoundError: No module named 'piper'`** → Cell 3's shim didn't apply, or
+  the layout changed again. Check what's actually in `piper-sample-generator/`.
+- **`AttributeError: module 'torchaudio' has no attribute 'set_audio_backend'`** →
+  Cell 4 didn't run, or an import beat it. Run it and re-run from there.
+- **`Clip does not have the correct sample rate`** → Cell 8. Also delete the stale
+  `.npy` features, which that cell does.
+- **404 downloading AudioSet** → expected; we use FMA instead. Don't re-add it.
+- **pip backtracking forever** → you used the `[full]` extra. Don't.
+- **Colab disconnects mid-run** → free tier idles out. Keep the tab foregrounded;
+  the 17 GB download is the long pole.
+- **Model loads but never fires** → no `[wakeword] score` lines at all means the mic
+  isn't running (grant permission; a user gesture is required before the AudioContext
+  starts). Scores peaking below threshold → lower it.
 
-See also [VOICE_ASSISTANT_SETUP.md](VOICE_ASSISTANT_SETUP.md) for how the wake word
-fits into the overall voice assistant.
+See also [VOICE_ASSISTANT_SETUP.md](VOICE_ASSISTANT_SETUP.md).
