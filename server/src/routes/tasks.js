@@ -69,16 +69,42 @@ const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 const VALID_STATUS = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
+const userBrief = (uid) => (uid ? db.prepare('SELECT id,name,avatar_color FROM users WHERE id=?').get(uid) : null)
+
+// How this task came to its current owner, so the UI can label it:
+//   split       — it is one part of a task somebody divided up
+//   reassigned  — it was moved off a previous owner
+//   assigned    — somebody else handed it over directly
+//   self        — the owner created it for themselves (no hand-off to show)
+function taskOrigin(t) {
+  if (t.parent_task_id) return 'split'
+  if (t.reassigned_at) return 'reassigned'
+  if (t.assigned_by_id && t.assignee_id && t.assigned_by_id !== t.assignee_id) return 'assigned'
+  return 'self'
+}
+
 function hydrate(t) {
   if (!t) return t
   const assignee = t.assignee_id ? db.prepare('SELECT id,name,avatar_color,role FROM users WHERE id=?').get(t.assignee_id) : null
-  const assignedBy = t.assigned_by_id ? db.prepare('SELECT id,name FROM users WHERE id=?').get(t.assigned_by_id) : null
+  const assignedBy = userBrief(t.assigned_by_id)
+  const reassignedBy = userBrief(t.reassigned_by_id)
+  const previousAssignee = userBrief(t.previous_assignee_id)
   const project = t.project_id ? db.prepare('SELECT id,name FROM projects WHERE id=?').get(t.project_id) : null
   const subtasks = db.prepare('SELECT * FROM tasks WHERE parent_task_id=? ORDER BY created_at').all(t.id)
+  // A split part needs to name its parent — it's shown out of context in lists
+  // and dashboards now, where "part of X" is the only thing that makes it read.
+  const parent = t.parent_task_id
+    ? db.prepare('SELECT id,title,assignee_id FROM tasks WHERE id=?').get(t.parent_task_id)
+    : null
   const comments = db.prepare(`SELECT c.*, u.name AS user_name, u.avatar_color FROM task_comments c JOIN users u ON u.id=c.user_id WHERE c.task_id=? ORDER BY c.created_at`).all(t.id)
   const deps = db.prepare(`SELECT d.depends_on_task_id AS id, t2.title, t2.status FROM task_dependencies d JOIN tasks t2 ON t2.id=d.depends_on_task_id WHERE d.task_id=?`).all(t.id)
   const attachments = db.prepare('SELECT * FROM attachments WHERE task_id=?').all(t.id)
-  return { ...t, assignee, assignedBy, project, subtasks, comments, dependencies: deps, attachments }
+  return {
+    ...t, assignee, assignedBy, reassignedBy, previousAssignee, parent, project,
+    subtasks, comments, dependencies: deps, attachments,
+    origin: taskOrigin(t),
+    is_split_parent: subtasks.length > 0,
+  }
 }
 
 // Roll a split parent's status up from its children: once every shared part is
@@ -105,10 +131,23 @@ function syncParentStatus(parentId) {
 
 // LIST with filters: ?status=&priority=&assignee=&project=&meeting=&mine=1&q=
 r.get('/', (req, res) => {
-  const { status, priority, assignee, project, meeting, mine, q, confidence } = req.query
-  let sql = `SELECT t.* FROM tasks t WHERE t.org_id=? AND t.parent_task_id IS NULL`
+  const { status, priority, assignee, project, meeting, mine, q, confidence, assigned_by_me } = req.query
+  // NOTE: split parts (rows with a parent_task_id) used to be excluded here. That
+  // made them unreachable — the assignee got a notification for a task that
+  // appeared in no list, and couldn't open the parent either since it wasn't
+  // theirs. Parts are ordinary tasks to the person doing them, so they're listed
+  // like any other and carry a "Part of X" badge for context.
+  let sql = `SELECT t.* FROM tasks t WHERE t.org_id=?`
   const args = [req.user.org_id]
-  if (req.user.role === 'employee') {
+  if (assigned_by_me) {
+    // Work I handed to someone else — lets the dashboard's "Assigned by me"
+    // section link through to the full list. This REPLACES the usual visibility
+    // clause rather than adding to it: an employee's is `assignee_id = me`, which
+    // can never also be `!= me`. Safe, because being the assigner (or the person
+    // who moved it) is itself the grounds for seeing it.
+    sql += ' AND t.assignee_id IS NOT NULL AND t.assignee_id != ? AND (t.assigned_by_id=? OR t.reassigned_by_id=?)'
+    args.push(req.user.id, req.user.id, req.user.id)
+  } else if (req.user.role === 'employee') {
     // Employees see all of their own tasks (including private drafts).
     sql += ' AND t.assignee_id=?'; args.push(req.user.id)
   } else {
@@ -300,12 +339,22 @@ r.patch('/:id', (req, res) => {
   // Category override: normalise to a known label, or null to clear (Uncategorized).
   if ('category' in b) { sets.push('category=?'); args.push(normalizeCategory(b.category)) }
   let newlyAssigned = null
+  let takenFrom = null
   if ('assignee_id' in b) {
     sets.push('assignee_id=?'); args.push(b.assignee_id || null)
     sets.push('ownership_confidence=?'); args.push(b.assignee_id ? 'high' : 'needs_confirmation')
     if (b.assignee_id && b.assignee_id !== t.assignee_id) {
       newlyAssigned = b.assignee_id
       sets.push('assigned_at=?'); args.push(now())
+      // Moving a task OFF someone is a reassignment, not a fresh assignment.
+      // Record it: the row is overwritten in place, so this is the only trace
+      // that the task ever belonged to anyone else.
+      if (t.assignee_id) {
+        takenFrom = t.assignee_id
+        sets.push('reassigned_at=?'); args.push(now())
+        sets.push('reassigned_by_id=?'); args.push(req.user.id)
+        sets.push('previous_assignee_id=?'); args.push(t.assignee_id)
+      }
     }
   }
   if ('status' in b) {
@@ -324,8 +373,15 @@ r.patch('/:id', (req, res) => {
   sets.push('updated_at=?'); args.push(now())
   args.push(t.id)
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id=?`).run(...args)
-  audit(req.user.org_id, req.user.id, 'task.update', 'task', t.id, b)
+  // Reassignment gets its own audit action so it can be told apart from an
+  // ordinary field edit — 'task.update' is excluded from the activity feed.
+  audit(req.user.org_id, req.user.id, takenFrom ? 'task.reassign' : 'task.update', 'task', t.id, b)
   if (newlyAssigned) notify(t.org_id, newlyAssigned, 'task_assigned', `${req.user.name} assigned you "${t.title}"`, t.id)
+  // Tell whoever lost the task. Without this it simply disappears from their
+  // dashboard with no explanation.
+  if (takenFrom && takenFrom !== req.user.id) {
+    notify(t.org_id, takenFrom, 'task_reassigned', `${req.user.name} reassigned "${t.title}" to someone else`, t.id)
+  }
   if (t.parent_task_id && 'status' in b) syncParentStatus(t.parent_task_id)
   indexTask(t.id) // re-index on edit (title/desc/assignee/status may have changed)
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))

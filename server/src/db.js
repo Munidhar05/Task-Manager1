@@ -4,7 +4,10 @@ import path from 'node:path'
 import { id, now } from './util.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DB_PATH = path.join(__dirname, '..', 'data', 'smarttask.db')
+// DB_PATH lets a throwaway instance run against a COPY of the database — the real
+// file holds live org data, so exercising anything that writes (splits,
+// reassignment) must never touch it. Unset in normal use.
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'smarttask.db')
 
 // Ensure the data directory exists.
 import fs from 'node:fs'
@@ -439,6 +442,14 @@ export function initSchema() {
   // auto-detected from the task text. NULL = Uncategorized. See categories.js.
   ensureColumn('tasks', 'category', 'TEXT')
   ensureColumn('suggested_tasks', 'category', 'TEXT')
+  // Reassignment trail. Changing assignee_id overwrites the previous owner in
+  // place, so without these a reassigned task is indistinguishable from one that
+  // was assigned directly, and the person it was taken from leaves no trace.
+  // NULL on every existing row = "never reassigned", which is the honest answer
+  // for tasks that predate this.
+  ensureColumn('tasks', 'reassigned_at', 'TEXT')
+  ensureColumn('tasks', 'reassigned_by_id', 'TEXT')   // who moved it
+  ensureColumn('tasks', 'previous_assignee_id', 'TEXT') // who it was taken from
 
   // Task attachments: the original table only had `filename`. Enrich it to store
   // the on-disk name, mime type, size and org (mirrors the chat_messages file

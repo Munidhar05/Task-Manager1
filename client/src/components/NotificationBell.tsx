@@ -14,6 +14,7 @@ const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone:
   task_approved: { name: 'check', tone: 'success' },
   task_reopened: { name: 'refresh', tone: 'warning' },
   task_assigned: { name: 'user', tone: 'primary' },
+  task_reassigned: { name: 'refresh', tone: 'warning' },
   task_comment: { name: 'chat', tone: 'info' },
   chat_message: { name: 'chat', tone: 'info' },
 }
