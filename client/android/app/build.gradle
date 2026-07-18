@@ -16,8 +16,10 @@ android {
         applicationId "io.smarttask.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "2.0"
+        // versionCode 2 is permanently consumed — v2 (2.0) went to Production on
+        // Play on 9 Jul 2026, so Play will reject a reupload of that code.
+        versionCode 3
+        versionName "3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
