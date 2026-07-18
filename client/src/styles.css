@@ -206,8 +206,9 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
 .topbar h1 { font-size: 18px; margin: 0; }
-/* Profile avatar in the top bar (right of the notification bell). */
-.topbar-avatar { position: relative; border: none; background: transparent; padding: 0; border-radius: 50%; cursor: pointer; flex-shrink: 0; line-height: 0; transition: transform .12s; }
+/* Profile avatar in the top bar (right of the bell). Shown ONLY on mobile —
+   desktop uses the sidebar profile instead, so there's just one profile per view. */
+.topbar-avatar { display: none; position: relative; border: none; background: transparent; padding: 0; border-radius: 50%; cursor: pointer; flex-shrink: 0; line-height: 0; transition: transform .12s; }
 .topbar-avatar:hover { transform: scale(1.05); }
 .topbar-avatar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .topbar-avatar-dot { position: absolute; right: 0; bottom: 0; width: 9px; height: 9px; border-radius: 50%; background: #22c55e; border: 2px solid var(--surface); }
@@ -1267,6 +1268,10 @@ tbody tr:hover { background: var(--n-50); }
   .sidebar-backdrop { display: block; position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 39; animation: fadeIn .2s ease; }
   /* Hamburger removed on mobile — the bottom-nav "More" tab opens the same menu. */
   .nav-toggle { display: none; }
+  /* One profile per view: mobile shows the top-bar avatar (opens profile + logout),
+     so hide the sidebar-drawer profile to avoid showing two. */
+  .topbar-avatar { display: inline-flex; }
+  .sidebar-user { display: none; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
   /* Meetings toolbar: center the count + action buttons instead of right-aligning */
