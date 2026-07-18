@@ -175,9 +175,80 @@ async function handleCommand(req, res) {
     return t || clarify(call.say || `Which task should I ${verb}?`)
   }
 
+  // Resolve ONE mutation step (used by the multi-step planner) into a concrete,
+  // client-executable action, or an error phrase describing what couldn't be done.
+  const isMgr = user.role === 'manager' || user.role === 'admin'
+  const resolveMutation = (tool, s) => {
+    switch (tool) {
+      case 'create_task': {
+        if (!s.title) return { error: 'create a task with no title' }
+        const m = s.assignee_name ? resolveUser(user.org_id, s.assignee_name) : null
+        const priority = PRIORITIES.includes(s.priority) ? s.priority : 'Medium'
+        return { action: { kind: 'create_task', summary: `create "${s.title}"${m ? ` for ${m.name}` : ''}`, body: { title: s.title, description: s.description || '', assignee_id: m?.id || null, priority, due_date: dueFrom(s.due_date_raw) } } }
+      }
+      case 'update_task': {
+        const t = findTask(s.task_id); if (!t) return { error: "edit a task I couldn't find" }
+        const body = {}, bits = []
+        if (s.title) { body.title = String(s.title).trim(); bits.push(`rename to "${body.title}"`) }
+        if (s.description) { body.description = String(s.description).trim(); bits.push('update the description') }
+        if (PRIORITIES.includes(s.priority)) { body.priority = s.priority; bits.push(`set priority ${s.priority}`) }
+        if (s.progress != null && !Number.isNaN(Number(s.progress))) { body.progress = Math.max(0, Math.min(100, Math.round(Number(s.progress)))); bits.push(`set progress ${body.progress}%`) }
+        if (s.due_date_raw) { const d = dueFrom(s.due_date_raw); if (d) { body.due_date = d; body.due_date_raw = null; bits.push(`due ${d}`) } }
+        if (!bits.length) return { error: `find nothing to change on "${t.title}"` }
+        return { action: { kind: 'update_task', task_id: t.id, summary: `update "${t.title}" (${bits.join(', ')})`, body } }
+      }
+      case 'set_status': {
+        const t = findTask(s.task_id); if (!t) return { error: "set the status of a task I couldn't find" }
+        if (!STATUSES.includes(s.status)) return { error: `set an unknown status on "${t.title}"` }
+        return { action: { kind: 'set_status', task_id: t.id, summary: `mark "${t.title}" ${s.status}`, body: { status: s.status } } }
+      }
+      case 'assign_task': {
+        const t = findTask(s.task_id); if (!t) return { error: "reassign a task I couldn't find" }
+        const m = s.assignee_name ? resolveUser(user.org_id, s.assignee_name) : null
+        if (!m) return { error: `assign "${t.title}" to someone I couldn't find` }
+        return { action: { kind: 'assign_task', task_id: t.id, summary: `assign "${t.title}" to ${m.name}`, body: { assignee_id: m.id } } }
+      }
+      case 'add_comment': {
+        const t = findTask(s.task_id); if (!t) return { error: "comment on a task I couldn't find" }
+        const body = String(s.body || '').trim(); if (!body) return { error: `add an empty comment to "${t.title}"` }
+        return { action: { kind: 'add_comment', task_id: t.id, summary: `comment on "${t.title}"`, body: { body } } }
+      }
+      case 'delete_task': {
+        if (!isMgr) return { error: 'delete a task (managers only)' }
+        const t = findTask(s.task_id); if (!t) return { error: "delete a task I couldn't find" }
+        return { action: { kind: 'delete_task', task_id: t.id, summary: `delete "${t.title}"`, body: {} } }
+      }
+      case 'send_message': {
+        const m = s.recipient_name ? resolveUser(user.org_id, s.recipient_name) : null
+        if (!m) return { error: "message someone I couldn't find" }
+        if (m.id === user.id) return { error: 'message yourself' }
+        const body = String(s.body || '').trim(); if (!body) return { error: `send an empty message to ${m.name}` }
+        return { action: { kind: 'send_message', to_user_id: m.id, to_name: m.name, text: body, summary: `message ${m.name}` } }
+      }
+      default: return { error: `run an unsupported step (${tool})` }
+    }
+  }
+
   switch (call.tool) {
     case 'denied':
       return res.json(answer(call.say))
+
+    // ---- multi-step plan: resolve every step, confirm the batch at once ------
+    case 'plan': {
+      const steps = Array.isArray(a.steps) ? a.steps.slice(0, 10) : []
+      const actions = [], summaries = [], skipped = []
+      for (const s of steps) {
+        const r = resolveMutation(s?.tool, s?.args || {})
+        if (r.error) skipped.push(r.error)
+        else { actions.push(r.action); summaries.push(r.action.summary) }
+      }
+      if (!actions.length) return res.json(clarify(call.say || "I couldn't work out those steps — could you say it another way?"))
+      const list = summaries.map((s, i) => `${i + 1}. ${s.charAt(0).toUpperCase() + s.slice(1)}`).join('\n')
+      const spoken = call.say
+        || (actions.length === 1 ? `I'll ${summaries[0]}. Confirm?` : `I'll do ${actions.length} things. Confirm?`)
+      const note = skipped.length ? `\n(Skipping ${skipped.length}: couldn't ${skipped[0]}.)` : ''
+      return res.json(confirm(spoken, { kind: 'plan', summary: list + note, steps: actions, count: actions.length }))
+    }
 
     case 'create_task': {
       if (!a.title) return res.json(clarify('What should the task be?'))

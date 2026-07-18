@@ -32,7 +32,7 @@ export interface VoiceCardData {
 // A message is either spoken text or a data card rendered inline in the panel.
 export interface VoiceMsg { role: 'user' | 'ai'; text: string; card?: VoiceCardData }
 
-interface PendingAction { kind: string; task_id?: string; to_user_id?: string; to_name?: string; text?: string; needsPassword?: boolean; summary?: string; body: any }
+interface PendingAction { kind: string; task_id?: string; to_user_id?: string; to_name?: string; text?: string; needsPassword?: boolean; summary?: string; steps?: PendingAction[]; count?: number; body?: any }
 
 const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|okey|confirm|confirmed|correct|right|go ahead|do it|please do|haan|haa|ha|ji|karo|sari|sare|avunu|cheyyi|cheyandi|cheyyandi)\b/i
 const NO_RE = /\b(no|nope|nah|cancel|cancelled|don'?t|stop|nahi|nahin|mat|vddu|venda|vodhu|leave it|never mind|nevermind)\b/i
@@ -81,45 +81,52 @@ export function useVoiceAssistant() {
   // ---- execute a confirmed mutation via the existing task endpoints --------
   // Every kind maps to an endpoint the app already exposes, so permissions and
   // notifications behave exactly as they do from the UI.
+  // Run ONE action against the app's real endpoints (permissions/notifications
+  // behave exactly as they do from the UI).
+  const executeOne = async (action: PendingAction, password?: string) => {
+    switch (action.kind) {
+      case 'create_task': await api.post('/tasks', action.body); break
+      case 'set_status': await api.post(`/tasks/${action.task_id}/status`, action.body); break
+      case 'add_comment': await api.post(`/tasks/${action.task_id}/comments`, action.body); break
+      case 'delete_task': await api.del(`/tasks/${action.task_id}`); break
+      case 'send_message': {
+        // Find/create the direct thread, then post the message.
+        const conv: any = await api.post('/chat/conversations', { type: 'direct', userId: action.to_user_id })
+        await api.post(`/chat/conversations/${conv.id}/messages`, { body: action.text })
+        break
+      }
+      case 'remove_user': {
+        // Gate the destructive account removal behind the manager's password.
+        await api.post('/auth/verify-password', { password })
+        await api.del(`/users/${action.to_user_id}`)
+        break
+      }
+      // update_task / assign_task / set_priority / set_due_date all PATCH fields
+      default: await api.patch(`/tasks/${action.task_id}`, action.body)
+    }
+  }
+
   const execute = async (action: PendingAction, password?: string) => {
     setState('processing')
+    // A plan runs each step in order; a single action is just a 1-step plan.
+    const steps = action.kind === 'plan' ? (action.steps || []) : [action]
     try {
-      switch (action.kind) {
-        case 'create_task': await api.post('/tasks', action.body); break
-        case 'set_status': await api.post(`/tasks/${action.task_id}/status`, action.body); break
-        case 'add_comment': await api.post(`/tasks/${action.task_id}/comments`, action.body); break
-        case 'delete_task': await api.del(`/tasks/${action.task_id}`); break
-        case 'send_message': {
-          // Find/create the direct thread, then post the message (both go through
-          // the real chat endpoints, so notifications & push fire as normal).
-          const conv: any = await api.post('/chat/conversations', { type: 'direct', userId: action.to_user_id })
-          await api.post(`/chat/conversations/${conv.id}/messages`, { body: action.text })
-          break
-        }
-        case 'remove_user': {
-          // Gate the destructive account removal behind the manager's password.
-          await api.post('/auth/verify-password', { password })
-          await api.del(`/users/${action.to_user_id}`)
-          break
-        }
-        // update_task / assign_task / set_priority / set_due_date all PATCH fields
-        default: await api.patch(`/tasks/${action.task_id}`, action.body)
+      let done = 0
+      for (const step of steps) {
+        await executeOne(step, password)
+        done++
+        // Narrate progress so a multi-step plan doesn't feel frozen.
+        if (steps.length > 1) push({ role: 'ai', text: `✓ (${done}/${steps.length}) ${step.summary || 'done'}` })
       }
-      push({ role: 'ai', text: `✓ ${action.summary || 'Done'}` })
-      await say('Done.')
-      // Refresh whatever list is showing and jump to the relevant section.
-      if (action.kind === 'send_message') {
-        window.dispatchEvent(new Event('chat-unread-changed'))
-        navigate('/chats')
-      } else if (action.kind === 'remove_user') {
-        window.dispatchEvent(new CustomEvent('users-changed'))
-        navigate('/admin')
-      } else {
-        window.dispatchEvent(new CustomEvent('tasks-changed'))
-        navigate('/tasks')
-      }
+      if (steps.length === 1) push({ role: 'ai', text: `✓ ${action.summary || 'Done'}` })
+      await say(steps.length > 1 ? `Done — ${done} ${done === 1 ? 'step' : 'steps'} completed.` : 'Done.')
+      // Refresh the relevant lists and jump to the most relevant section.
+      const kinds = new Set(steps.map((s) => s.kind))
+      if (kinds.has('remove_user')) { window.dispatchEvent(new CustomEvent('users-changed')); navigate('/admin') }
+      else if (kinds.size === 1 && kinds.has('send_message')) { window.dispatchEvent(new Event('chat-unread-changed')); navigate('/chats') }
+      else { window.dispatchEvent(new CustomEvent('tasks-changed')); if (kinds.has('send_message')) window.dispatchEvent(new Event('chat-unread-changed')); navigate('/tasks') }
     } catch (e: any) {
-      const m = `Sorry, that didn't work: ${e?.message || 'please try again'}`
+      const m = `Sorry, that didn't fully work: ${e?.message || 'please try again'}`
       push({ role: 'ai', text: m }); await say(m)
     }
   }
