@@ -48,6 +48,15 @@ export const TOOLS = [
     desc: "Send a DIRECT CHAT MESSAGE to a teammate in the Chats section — this is real person-to-person messaging, NOT a task comment. Use whenever the user says 'message X', 'tell X in chat', 'send X a message', 'ping X', 'message him/her personally'. If they mention a task, weave it into the message text.",
     args: 'recipient_name, body (the message to send, phrased naturally in English)' },
 
+  // ---- team / people (managers) --------------------------------------------
+  { name: 'add_user', kind: 'navigate', roles: MGR,
+    desc: "Open Administration to add a new teammate. Adding needs their email & phone (entered on the form), so this opens the page rather than creating blindly. Use for 'add an employee', 'create a new user', 'onboard someone'.",
+    args: '(none)' },
+
+  { name: 'remove_user', kind: 'mutate', roles: MGR,
+    desc: "Permanently remove a teammate's account from the organization. Use for 'delete <name>', 'remove <name> from the team', 'fire <name>'. The app will require the manager's own password to confirm before it happens.",
+    args: 'person_name' },
+
   // ---- views ---------------------------------------------------------------
   { name: 'navigate', kind: 'navigate', roles: ALL,
     desc: 'Open a screen or a filtered task list. Use for "show/open/go to".',
@@ -104,6 +113,8 @@ const DENIAL = {
   list_meetings: 'Only managers can see the meeting list.',
   get_workload: "Only managers can see the team's workload — I can show you your own tasks.",
   delete_task: 'Only managers can delete tasks.',
+  add_user: 'Only managers can add teammates.',
+  remove_user: 'Only managers can remove teammates.',
 }
 const denialFor = (name) => DENIAL[name] || "You don't have access to that."
 

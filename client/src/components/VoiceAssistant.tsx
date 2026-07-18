@@ -71,6 +71,7 @@ const STEP_INDEX: Record<string, number> = { listening: 0, processing: 1, speaki
 export default function VoiceAssistant() {
   const v = useVoiceAssistant()
   const logRef = useRef<HTMLDivElement>(null)
+  const [confirmPw, setConfirmPw] = useState('')
   const [wake, setWake] = useState<{ status: WakeStatus; detail?: string }>({ status: 'off' })
   // Per-login coachmark: introduces voice (the app's core feature) once each time
   // the user logs in. The flag is set when it shows (so it doesn't re-pop as they
@@ -187,10 +188,29 @@ export default function VoiceAssistant() {
 
           {v.pending && (
             <div className="va-confirm">
-              <div className="va-confirm-summary">{v.pending.summary}</div>
+              <div className="va-confirm-summary">
+                {v.pending.needsPassword
+                  ? <>Remove <b>{v.pending.to_name}</b>’s account? Enter your password to confirm.</>
+                  : v.pending.summary}
+              </div>
+              {v.pending.needsPassword && (
+                <input
+                  type="password"
+                  className="va-confirm-pw"
+                  placeholder="Your password"
+                  value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && confirmPw) { v.confirmPending(confirmPw); setConfirmPw('') } }}
+                  autoFocus
+                />
+              )}
               <div className="row" style={{ gap: 8 }}>
-                <button className="btn btn-primary btn-sm" onClick={v.confirmPending}>✓ Confirm</button>
-                <button className="btn btn-sm va-cancel" onClick={v.cancelPending}>✕ Cancel</button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={!!v.pending.needsPassword && !confirmPw}
+                  onClick={() => { const pw = v.pending?.needsPassword ? confirmPw : undefined; setConfirmPw(''); v.confirmPending(pw) }}
+                >✓ Confirm</button>
+                <button className="btn btn-sm va-cancel" onClick={() => { setConfirmPw(''); v.cancelPending() }}>✕ Cancel</button>
               </div>
             </div>
           )}

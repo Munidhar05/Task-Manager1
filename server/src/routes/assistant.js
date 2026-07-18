@@ -250,6 +250,19 @@ async function handleCommand(req, res) {
         { kind: 'send_message', to_user_id: match.id, to_name: match.name, text: body, summary: `Messaged ${match.name}` }))
     }
 
+    // ---- team / people (managers) ------------------------------------------
+    case 'add_user':
+      return res.json({ mode: 'navigate', say: call.say || 'Opening user management so you can add a teammate — their email and phone go on the form.', navigate: { url: '/admin' } })
+
+    case 'remove_user': {
+      const match = a.person_name ? resolveUser(user.org_id, a.person_name) : null
+      if (!match) return res.json(clarify(a.person_name ? `I couldn't find "${a.person_name}" on the team.` : 'Who should I remove?'))
+      if (match.id === user.id) return res.json(answer("You can't remove your own account."))
+      // needsPassword tells the client to require the manager's password before it runs.
+      return res.json(confirm(`Remove ${match.name}'s account permanently. Enter your password to confirm.`,
+        { kind: 'remove_user', to_user_id: match.id, to_name: match.name, needsPassword: true, summary: `Removed ${match.name}` }))
+    }
+
     case 'navigate': {
       const nav = navUrl(a, user)
       if (nav?.deny) return res.json(answer(nav.deny))

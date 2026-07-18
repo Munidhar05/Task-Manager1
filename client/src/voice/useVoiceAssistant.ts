@@ -32,7 +32,7 @@ export interface VoiceCardData {
 // A message is either spoken text or a data card rendered inline in the panel.
 export interface VoiceMsg { role: 'user' | 'ai'; text: string; card?: VoiceCardData }
 
-interface PendingAction { kind: string; task_id?: string; to_user_id?: string; to_name?: string; text?: string; summary?: string; body: any }
+interface PendingAction { kind: string; task_id?: string; to_user_id?: string; to_name?: string; text?: string; needsPassword?: boolean; summary?: string; body: any }
 
 const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|okey|confirm|confirmed|correct|right|go ahead|do it|please do|haan|haa|ha|ji|karo|sari|sare|avunu|cheyyi|cheyandi|cheyyandi)\b/i
 const NO_RE = /\b(no|nope|nah|cancel|cancelled|don'?t|stop|nahi|nahin|mat|vddu|venda|vodhu|leave it|never mind|nevermind)\b/i
@@ -81,7 +81,7 @@ export function useVoiceAssistant() {
   // ---- execute a confirmed mutation via the existing task endpoints --------
   // Every kind maps to an endpoint the app already exposes, so permissions and
   // notifications behave exactly as they do from the UI.
-  const execute = async (action: PendingAction) => {
+  const execute = async (action: PendingAction, password?: string) => {
     setState('processing')
     try {
       switch (action.kind) {
@@ -96,6 +96,12 @@ export function useVoiceAssistant() {
           await api.post(`/chat/conversations/${conv.id}/messages`, { body: action.text })
           break
         }
+        case 'remove_user': {
+          // Gate the destructive account removal behind the manager's password.
+          await api.post('/auth/verify-password', { password })
+          await api.del(`/users/${action.to_user_id}`)
+          break
+        }
         // update_task / assign_task / set_priority / set_due_date all PATCH fields
         default: await api.patch(`/tasks/${action.task_id}`, action.body)
       }
@@ -105,6 +111,9 @@ export function useVoiceAssistant() {
       if (action.kind === 'send_message') {
         window.dispatchEvent(new Event('chat-unread-changed'))
         navigate('/chats')
+      } else if (action.kind === 'remove_user') {
+        window.dispatchEvent(new CustomEvent('users-changed'))
+        navigate('/admin')
       } else {
         window.dispatchEvent(new CustomEvent('tasks-changed'))
         navigate('/tasks')
@@ -234,13 +243,14 @@ export function useVoiceAssistant() {
     }
   }, [state, runTurn])
 
-  // Manual confirm / cancel buttons for the pending action card.
-  const confirmPending = useCallback(async () => {
+  // Manual confirm / cancel buttons for the pending action card. `password` is
+  // supplied only for actions that require re-auth (e.g. removing a teammate).
+  const confirmPending = useCallback(async (password?: string) => {
     const p = pendingRef.current
     if (!p) return
     setPend(null); sessionRef.current++
     try { recRef.current?.cancel() } catch {}
-    await execute(p)
+    await execute(p, password)
     sessionRef.current++; openRef.current = true; runTurn()
   }, [runTurn])
 
