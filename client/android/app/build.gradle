@@ -16,8 +16,12 @@ android {
         applicationId "io.smarttask.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "2.0"
+        // versionCode must keep climbing and is never reused: 2 is permanently
+        // consumed (v2 went to Production on Play on 9 Jul 2026). versionName is
+        // just the label users see, so it doesn't have to track versionCode —
+        // this ships as "2.1" on a versionCode of 3.
+        versionCode 3
+        versionName "2.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
