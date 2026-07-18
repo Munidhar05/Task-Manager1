@@ -51,7 +51,7 @@ export default function AcceptInvite() {
         <form className="login-card login-card--panda" onSubmit={submit}>
           <div className="brand" style={{ padding: 0, marginBottom: 14, marginTop: 26, justifyContent: 'space-between', width: '100%' }}>
             <div>
-              <div className="brand-name" style={{ color: '#1f1a16' }}>{info ? `Join ${info.org_name}` : 'Accept invitation'}</div>
+              <div className="brand-name" style={{ color: '#16191d' }}>{info ? `Join ${info.org_name}` : 'Accept invitation'}</div>
               <div className="muted" style={{ fontSize: 12 }}>
                 {info ? `Invited as ${info.role} · ${info.email}` : 'Set up your account'}
               </div>
@@ -86,7 +86,7 @@ export default function AcceptInvite() {
                 </div>
                 <PasswordStrength password={password} />
               </div>
-              {err && <div className="login-err">{err}</div>}
+              {err && <div className="login-err" role="alert">{err}</div>}
               <button className="btn btn-primary login-btn" disabled={busy || !name.trim()}>
                 {busy ? <span className="spinner" /> : 'JOIN TEAM'}
               </button>

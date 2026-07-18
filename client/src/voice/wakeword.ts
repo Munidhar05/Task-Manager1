@@ -13,9 +13,33 @@
 //
 // NOTE: this browser port needs on-device tuning (threshold, and self-hosting the
 // ORT wasm for offline use). Constants below follow the openWakeWord reference.
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { useSpeechWakeWord, speechWakeSupported } from './wakeSpeech'
 
 const ENABLED = (import.meta.env.VITE_WAKEWORD_ENABLED as string | undefined) === 'true'
+// Which detector runs:
+//   'speech' — browser SpeechRecognition matching the words "hey btm". Needs no
+//              trained model, but needs network and is not reliably present in
+//              the Android WebView (see below).
+//   'onnx'   — the on-device openWakeWord pipeline in this file. Offline and
+//              cheap, but needs a trained hey_btm.onnx.
+//   'auto'   — (default) pick per platform at runtime, and fall back if the
+//              chosen one turns out not to work on this device.
+const RAW_MODE = (import.meta.env.VITE_WAKEWORD_MODE as string | undefined) || 'auto'
+const MODE: 'speech' | 'onnx' | 'auto' =
+  RAW_MODE === 'speech' || RAW_MODE === 'onnx' ? RAW_MODE : 'auto'
+
+// Whether the speech path is even worth attempting here. Web Speech is a Chrome
+// feature, NOT a WebView one — caniwebview lists it as undetermined for Android
+// WebView and Chromium bug 40417848 is open for exactly this. It also streams
+// audio to Google, so it can't work offline. In the packaged app we therefore
+// prefer the on-device model and only try speech if there's nothing else.
+const preferSpeech = () => {
+  if (MODE === 'speech') return true
+  if (MODE === 'onnx') return false
+  return !Capacitor.isNativePlatform() && speechWakeSupported()
+}
 const MEL_PATH = (import.meta.env.VITE_WAKEWORD_MELSPEC_PATH as string | undefined) || '/wakeword/melspectrogram.onnx'
 const EMB_PATH = (import.meta.env.VITE_WAKEWORD_EMBEDDING_PATH as string | undefined) || '/wakeword/embedding_model.onnx'
 const WW_PATH = (import.meta.env.VITE_WAKEWORD_MODEL_PATH as string | undefined) || '/wakeword/hey_btm.onnx'
@@ -31,7 +55,14 @@ const ORT_WASM = (import.meta.env.VITE_ORT_WASM_PATH as string | undefined) || '
 // Log every scored frame above a floor — invaluable for tuning the threshold.
 const DEBUG = (import.meta.env.VITE_WAKEWORD_DEBUG as string | undefined) === 'true'
 
-export const wakeWordConfigured = () => ENABLED
+export const wakeWordConfigured = () => ENABLED && (!preferSpeech() || speechWakeSupported())
+
+// The spoken phrase to SHOW users. It must match what the active detector will
+// actually fire on. The speech path genuinely listens for "hey BTM"; the onnx
+// path fires on whatever model is loaded (the placeholder "hey jarvis" model
+// never fires on "hey BTM"), so VITE_WAKEWORD_PHRASE overrides there.
+export const wakeWordPhrase = () =>
+  preferSpeech() ? 'hey BTM' : (import.meta.env.VITE_WAKEWORD_PHRASE as string | undefined) || 'hey BTM'
 
 // What the detector is doing, so the UI can say so instead of failing silently.
 export type WakeStatus = 'off' | 'loading' | 'awaiting-gesture' | 'listening' | 'error'
@@ -55,7 +86,36 @@ const REFRACTORY_MS = 1500
 interface WakeOptions { enabled: boolean; onWake: () => void; onStatus?: (s: WakeStatus, detail?: string) => void }
 
 // Subscribe to the wake word while `enabled`. Safe to call always.
+//
+// Both detectors are always mounted (rules of hooks) but only the selected one is
+// ever `enabled`, so exactly one holds a microphone at a time.
+//
+// Web Speech can be PRESENT but non-functional (the Android WebView exposes it in
+// some builds and then never delivers a result, and it fails outright with no
+// network). Feature-detection alone can't tell — so if the speech path reports
+// itself unavailable at runtime we permanently switch this mount to the on-device
+// model rather than leaving the user with a wake word that silently never fires.
 export function useWakeWord({ enabled, onWake, onStatus }: WakeOptions) {
+  const [speechDead, setSpeechDead] = useState(false)
+  const speech = ENABLED && preferSpeech() && !speechDead
+
+  const handleStatus = (s: WakeStatus, detail?: string) => {
+    // Only 'unavailable' means "this engine can't work here". A denied mic
+    // affects BOTH engines, so falling back on it would just fail twice.
+    if (s === 'error' && detail === 'unavailable') {
+      console.warn('[wakeword] speech path unavailable — falling back to on-device model')
+      setSpeechDead(true)
+      return
+    }
+    onStatus?.(s, detail)
+  }
+
+  useSpeechWakeWord({ enabled: enabled && speech, onWake, onStatus: handleStatus })
+  useOnnxWakeWord({ enabled: ENABLED && enabled && !speech, onWake, onStatus })
+}
+
+// On-device openWakeWord detector. Needs a trained model at VITE_WAKEWORD_MODEL_PATH.
+function useOnnxWakeWord({ enabled, onWake, onStatus }: WakeOptions) {
   const onWakeRef = useRef(onWake)
   const onStatusRef = useRef(onStatus)
   onWakeRef.current = onWake

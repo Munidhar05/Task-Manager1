@@ -108,7 +108,7 @@ export default function UserManagement() {
                 <td className="cell-title"><span className="row"><Avatar name={u.name} color={u.avatar_color} size={26} /> {u.name}</span></td>
                 <td className="muted" data-label="Email">{u.email}</td>
                 <td className="muted" data-label="Phone">{u.phone || '—'}</td>
-                <td data-label="Role"><Badge color="#c5560f" soft>{u.role}</Badge></td>
+                <td data-label="Role"><Badge color="#f2622e" soft>{u.role}</Badge></td>
                 <td data-label="Department">{deptName(u.department_id)}</td>
                 <td data-label="">
                   {canEdit(u) && (
@@ -200,7 +200,9 @@ function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin
 function UserForm({ user, depts, isAdmin, onClose, onDone }: { user: any | null; depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
   const isEdit = !!user
   const [f, setF] = useState<any>({
-    name: user?.name || '', email: user?.email || '', phone: user?.phone || '', password: isEdit ? '' : 'password123',
+    // No prefilled default password — shipping a guessable 'password123' that
+    // renders in clear text was a real account-security foot-gun.
+    name: user?.name || '', email: user?.email || '', phone: user?.phone || '', password: '',
     role: user?.role || 'employee', department_id: user?.department_id || '', aliases: user?.aliases || '',
     preferred_language: user?.preferred_language || 'en',
   })
@@ -233,7 +235,7 @@ function UserForm({ user, depts, isAdmin, onClose, onDone }: { user: any | null;
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="card-head spread"><h3>{isEdit ? 'Edit user' : 'Add user'}</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
+        <div className="card-head spread"><h3>{isEdit ? 'Edit user' : 'Add user'}</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="card-pad grid" style={{ gap: 12 }}>
           <div className="grid grid-3" style={{ gap: 10 }}>
             <div><label>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
@@ -244,11 +246,11 @@ function UserForm({ user, depts, isAdmin, onClose, onDone }: { user: any | null;
             <div><label>Role</label><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roleOptions.map((r) => <option key={r}>{r}</option>)}</select></div>
             <div><label>Department</label><select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}><option value="">—</option>{depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           </div>
-          <div><label>Password {isEdit && <span className="muted" style={{ fontWeight: 400 }}>(leave blank to keep current)</span>}</label><input value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
-          {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
+          <div><label>Password {isEdit && <span className="muted" style={{ fontWeight: 400 }}>(leave blank to keep current)</span>}</label><input type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
+          {err && <div style={{ color: '#ef4444', fontSize: 13 }} role="alert">{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" onClick={save} disabled={busy || !f.name || !f.email}>{busy ? <span className="spinner" /> : isEdit ? 'Save changes' : 'Create user'}</button>
+            <button className="btn btn-primary" onClick={save} disabled={busy || !f.name || !f.email || (!isEdit && !f.password)}>{busy ? <span className="spinner" /> : isEdit ? 'Save changes' : 'Create user'}</button>
           </div>
         </div>
       </div>

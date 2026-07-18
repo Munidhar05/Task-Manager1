@@ -74,6 +74,7 @@ export function audit(orgId, actorId, action, entityType, entityId, detail = '')
 // Short, human title per notification type — shown as the push heading.
 const PUSH_TITLES = {
   task_assigned: 'New task assigned',
+  task_reassigned: 'Task reassigned',
   task_comment: 'New comment',
   task_submitted: 'Task submitted',
   task_approved: 'Task approved',

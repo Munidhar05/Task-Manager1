@@ -62,6 +62,9 @@ export interface User { id: string; name: string; email: string; role: Role; org
 // Authenticated avatar image URLs (token in query so <img> can load them).
 // `ver` (the stored filename) busts the browser cache when the photo changes.
 export const userAvatarUrl = (userId: string, ver?: string | null) => `${API_BASE}/api/users/${userId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
+// Authenticated URL for a task attachment (token in query so <img>/<video> can load it).
+// Pass download=true to force a file download instead of inline display.
+export const taskAttachmentUrl = (attId: string, download = false) => `${API_BASE}/api/tasks/attachments/${attId}/file?token=${getToken()}${download ? '&download=1' : ''}`
 export const groupAvatarUrl = (convId: string, ver?: string | null) => `${API_BASE}/api/chat/conversations/${convId}/avatar?token=${getToken()}${ver ? `&v=${encodeURIComponent(ver)}` : ''}`
 
 // An AI-suggested task awaiting manager review (the review queue).
@@ -74,11 +77,27 @@ export interface Suggestion {
 }
 export interface Task {
   id: string; title: string; description?: string; priority: 'Critical' | 'High' | 'Medium' | 'Low'
-  status: string; due_date?: string; due_date_raw?: string; progress: number
+  status: string; due_date?: string; due_date_raw?: string; progress: number; category?: string | null
   ownership_confidence: string; approval_status: string; source_quote?: string
   assignee?: User; assignedBy?: User; assignee_name_raw?: string; assigned_by_name_raw?: string
   project?: { id: string; name: string }; meeting_id?: string
   assigned_at?: string; submitted_at?: string; completed_at?: string; created_at?: string; updated_at?: string
   visible_to_manager?: number; parent_task_id?: string | null
-  subtasks?: Task[]; comments?: any[]; dependencies?: any[]; attachments?: any[]
+  subtasks?: Task[]; comments?: any[]; dependencies?: any[]; attachments?: Attachment[]
+  // How this task reached its current owner — drives the badge on each card.
+  // 'self' means they created it for themselves, so there's no hand-off to show.
+  origin?: TaskOrigin
+  reassignedBy?: User; previousAssignee?: User
+  reassigned_at?: string | null
+  parent?: { id: string; title: string; assignee_id?: string | null } | null
+  is_split_parent?: boolean
+  // Flat name columns — the dashboard endpoints return rows straight from SQL
+  // rather than the hydrated objects above, to avoid ~8 queries per task.
+  assigned_by_name?: string | null; reassigned_by_name?: string | null
+  assignee_name?: string | null; assignee_color?: string | null; parent_title?: string | null
+}
+export type TaskOrigin = 'assigned' | 'reassigned' | 'split' | 'self'
+export interface Attachment {
+  id: string; task_id: string; filename: string; file_type?: string | null; file_size?: number | null
+  uploaded_by?: string | null; created_at?: string
 }

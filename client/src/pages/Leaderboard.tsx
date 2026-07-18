@@ -66,9 +66,12 @@ export default function Leaderboard() {
   const [error, setError] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
 
+  // Window switches keep the current list on screen (slightly dimmed) and swap
+  // the data in place — nulling it would flash the page back to skeletons.
+  const [refreshing, setRefreshing] = useState(false)
   const load = () => {
-    setError(false); setData(null)
-    api.get(`/scores/leaderboard?window=${win}`).then(setData).catch(() => setError(true))
+    setError(false); setRefreshing(true)
+    api.get(`/scores/leaderboard?window=${win}`).then(setData).catch(() => setError(true)).finally(() => setRefreshing(false))
   }
   useEffect(load, [win])
 
@@ -103,7 +106,7 @@ export default function Leaderboard() {
       )}
 
       {!error && data && data.ranked.length > 0 && (
-        <div className="lb-list section">
+        <div className="lb-list section" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
           {data.ranked.map((r: any) => (
             <RankCard key={r.id} row={r} onOpen={() => setDetailId(r.id)} />
           ))}

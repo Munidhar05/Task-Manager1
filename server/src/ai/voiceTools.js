@@ -43,6 +43,20 @@ export const TOOLS = [
     desc: 'Delete a task permanently.',
     args: 'task_id' },
 
+  // ---- chats (the Chats section — real 1:1 messages, NOT task comments) -----
+  { name: 'send_message', kind: 'mutate', roles: ALL,
+    desc: "Send a DIRECT CHAT MESSAGE to a teammate in the Chats section — this is real person-to-person messaging, NOT a task comment. Use whenever the user says 'message X', 'tell X in chat', 'send X a message', 'ping X', 'message him/her personally'. If they mention a task, weave it into the message text.",
+    args: 'recipient_name, body (the message to send, phrased naturally in English)' },
+
+  // ---- team / people (managers) --------------------------------------------
+  { name: 'add_user', kind: 'navigate', roles: MGR,
+    desc: "Open Administration to add a new teammate. Adding needs their email & phone (entered on the form), so this opens the page rather than creating blindly. Use for 'add an employee', 'create a new user', 'onboard someone'.",
+    args: '(none)' },
+
+  { name: 'remove_user', kind: 'mutate', roles: MGR,
+    desc: "Permanently remove a teammate's account from the organization. Use for 'delete <name>', 'remove <name> from the team', 'fire <name>'. The app will require the manager's own password to confirm before it happens.",
+    args: 'person_name' },
+
   // ---- views ---------------------------------------------------------------
   { name: 'navigate', kind: 'navigate', roles: ALL,
     desc: 'Open a screen or a filtered task list. Use for "show/open/go to".',
@@ -99,6 +113,8 @@ const DENIAL = {
   list_meetings: 'Only managers can see the meeting list.',
   get_workload: "Only managers can see the team's workload — I can show you your own tasks.",
   delete_task: 'Only managers can delete tasks.',
+  add_user: 'Only managers can add teammates.',
+  remove_user: 'Only managers can remove teammates.',
 }
 const denialFor = (name) => DENIAL[name] || "You don't have access to that."
 
@@ -130,13 +146,19 @@ ${lines}${deniedNote}
 
 RULES:
 - Pick the single best tool. Never invent a tool name.
+- MULTI-STEP: if the request needs SEVERAL actions in one go (e.g. "message everyone who's overdue", "mark the logo task done and tell Pawan", "reassign all of Sameer's tasks to Pawan", "message Pawan and Chinmay to finish up"), respond with a PLAN instead of a single tool:
+  {"tool":"plan","steps":[{"tool":"<name>","args":{...}}, ...],"say":"one natural sentence describing everything you'll do"}
+  Fill exact task ids from the TASKS snapshot and names from the TEAM list. Expand "everyone overdue / all of X's tasks / both of them" into one step per person/task using the snapshot. Plan steps may ONLY use these mutation tools: create_task, update_task, set_status, assign_task, add_comment, delete_task, send_message. Max 10 steps. For a SINGLE action, use the normal one-tool form (do NOT wrap it in a plan).
+- CHATS vs COMMENTS: "message / tell / ping / text someone (in chat / personally)" means a real chat message → use send_message. Only use add_comment when they explicitly say "comment on the task" or "add a note to the task".
 - When a tool targets an existing task, copy its exact id from the snapshot into task_id. If several tasks plausibly match, use "clarify" and name the top options. If none match, use "clarify".
 - NEVER compute or guess numbers/metrics yourself — call get_overview / get_workload / group_tasks and let the system count.
 - If the request is a question rather than a command, use "ask".
 - "say" is one short, natural spoken sentence. For mutate tools it should read like you are about to do it (the app adds a yes/no step). For read tools, leave "say" empty — the system supplies the real answer.
 
-Respond with ONLY a JSON object, no markdown fences:
-{"tool":"<name>","args":{...},"say":"..."}`
+Respond with ONLY a JSON object, no markdown fences. Either a single tool:
+{"tool":"<name>","args":{...},"say":"..."}
+…or a multi-step plan:
+{"tool":"plan","steps":[{"tool":"<name>","args":{...}}],"say":"..."}`
 }
 
 // Beyond this many tasks the prompt is ranked down to the ones that could
@@ -216,6 +238,12 @@ export async function routeCommand(transcript, { user, tasks = [], users = [], h
 
   // Explicit refusal the model was told to emit for a restricted tool.
   if (obj.tool === 'denied') return { tool: 'denied', args: {}, say: denialFor(obj.args?.wanted) }
+
+  // Multi-step plan: a list of mutation steps to confirm & run as a batch. The
+  // dispatcher resolves each step; role checks are applied there and per-step.
+  if (obj.tool === 'plan' && Array.isArray(obj.steps)) {
+    return { tool: 'plan', kind: 'plan', args: { steps: obj.steps.slice(0, 10) }, say: typeof obj.say === 'string' ? obj.say.trim() : '' }
+  }
 
   const spec = toolByName(obj.tool)
   // Unknown tool, or one this role may not use -> degrade gracefully.

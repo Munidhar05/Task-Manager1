@@ -2,6 +2,7 @@
 // Used when OPENAI_API_KEY is set (and no ANTHROPIC_API_KEY); otherwise the
 // orchestrator falls back to the rule-based engine.
 import { detectLanguages } from './rules.js'
+import { CATEGORY_LABELS } from '../categories.js'
 
 const API_URL = 'https://api.openai.com/v1/chat/completions'
 
@@ -30,6 +31,7 @@ Rules for task extraction:
 - priority is one of Critical | High | Medium | Low. Infer from urgency cues (production issue/ASAP/today=>higher; future/enhancement=>Low).
 - due_date_raw = the natural-language deadline phrase exactly as spoken (e.g. "by Friday", "repu", "kal", "before deployment"); leave null if none.
 - Also resolve due_date to an absolute YYYY-MM-DD relative to the meeting date when possible.
+- category = which business unit / brand the task belongs to, chosen ONLY from: ${CATEGORY_LABELS.join(', ')}. Use the meeting's overall topic as context. Set null if it clearly fits none. NEVER invent a category outside this list.
 
 Accuracy rules:
 - Ignore greetings, introductions, jokes, and casual side discussions. Extract ONLY actionable work items.
@@ -54,7 +56,7 @@ Respond with ONLY a JSON object (no markdown) matching this shape:
     "title":"... (English)","description":"... (English)","assignee_name":"...|null","assigned_by_name":"...|null",
     "assignee_reasoning":"... (English)","confidence":85,
     "due_date":"YYYY-MM-DD|null","due_date_raw":"...|null","priority":"High",
-    "ownership_confidence":"high|low|needs_confirmation","source_quote":"... (original language)","language":"en+te"
+    "ownership_confidence":"high|low|needs_confirmation","category":"${CATEGORY_LABELS[0]}|null","source_quote":"... (original language)","language":"en+te"
   }]
 }`
 
@@ -106,6 +108,7 @@ ${transcript}`
     due_date_raw: t.due_date_raw || null,
     priority: ['Critical', 'High', 'Medium', 'Low'].includes(t.priority) ? t.priority : 'Medium',
     ownership_confidence: t.ownership_confidence || (t.assignee_name ? 'high' : 'needs_confirmation'),
+    category: t.category || null,
     source_quote: t.source_quote || t.description || t.title,
     language: t.language || detectLanguages(t.source_quote || t.title).join('+'),
   }))

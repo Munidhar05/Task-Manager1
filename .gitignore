@@ -1,5 +1,7 @@
 node_modules/
 server/data/
+# Nested checkout of the other working copy — its own git repo, never commit it.
+Task-Manager1/
 server/.env
 # Local client config (API base, Google client id, wake-word flags).
 # Templates live in client/.env.example; client/.env.production IS committed.

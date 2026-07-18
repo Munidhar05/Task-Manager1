@@ -7,11 +7,61 @@ r.use(authRequired)
 const today = () => new Date().toISOString().slice(0, 10)
 const OPEN = "('To Do','In Progress','Blocked','In Review','Reopened')"
 
+// A task counts once, for whoever actually does it. When a task is split, the
+// PARTS are the real work and the parent is just a container holding them — so
+// counting both would double-report. "Leaf" = has no children of its own.
+// This replaces the old `parent_task_id IS NULL`, which did the opposite: it
+// counted containers and hid the parts, so split work was attributed to nobody
+// and the people doing it couldn't see their own tasks at all.
+const LEAF = 'NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id)'
+
+// How a task reached its owner, for the badge on each card. Mirrors taskOrigin()
+// in routes/tasks.js — kept in sync by hand because dashboards read rows directly
+// rather than going through hydrate() (which costs ~8 queries per task).
+const originOf = (t) => {
+  if (t.parent_task_id) return 'split'
+  if (t.reassigned_at) return 'reassigned'
+  if (t.assigned_by_id && t.assignee_id && t.assigned_by_id !== t.assignee_id) return 'assigned'
+  return 'self'
+}
+
 // EMPLOYEE dashboard: my work
 r.get('/employee', (req, res) => {
   const uid = req.user.id
-  const mine = db.prepare(`SELECT t.*, m.title AS meeting_title FROM tasks t LEFT JOIN meetings m ON m.id=t.meeting_id
-    WHERE t.assignee_id=? AND t.parent_task_id IS NULL`).all(uid)
+  // Everything I personally have to do — including parts of a split task, which
+  // used to be invisible in every list view despite sending a notification.
+  const mine = db.prepare(`SELECT t.*, m.title AS meeting_title,
+      ab.name AS assigned_by_name, rb.name AS reassigned_by_name, p.title AS parent_title
+    FROM tasks t
+    LEFT JOIN meetings m ON m.id=t.meeting_id
+    LEFT JOIN users ab ON ab.id=t.assigned_by_id
+    LEFT JOIN users rb ON rb.id=t.reassigned_by_id
+    LEFT JOIN tasks p ON p.id=t.parent_task_id
+    WHERE t.assignee_id=? AND t.org_id=? AND ${LEAF}`).all(uid, req.user.org_id).map((t) => ({ ...t, origin: originOf(t) }))
+
+  // Work I handed to someone else: tasks I created for a colleague, parts I
+  // distributed, and tasks I moved off someone. Deliberately NOT folded into the
+  // counts above — my Overdue tile should reflect what I owe, not what I'm owed.
+  const assignedByMe = db.prepare(`SELECT t.*, u.name AS assignee_name, u.avatar_color AS assignee_color,
+      p.title AS parent_title
+    FROM tasks t
+    LEFT JOIN users u ON u.id=t.assignee_id
+    LEFT JOIN tasks p ON p.id=t.parent_task_id
+    WHERE t.org_id=? AND t.assignee_id IS NOT NULL AND t.assignee_id != ?
+      AND (t.assigned_by_id=? OR t.reassigned_by_id=?) AND ${LEAF}
+    ORDER BY t.due_date IS NULL, t.due_date`).all(req.user.org_id, uid, uid, uid)
+    .map((t) => ({ ...t, origin: originOf(t) }))
+
+  // Tasks of mine that I split up. They're containers, so they're excluded from
+  // the counts above — but the owner still needs to see them, with the parts.
+  const sharedByMe = db.prepare(`SELECT t.* FROM tasks t
+    WHERE t.assignee_id=? AND t.org_id=? AND NOT (${LEAF})`).all(uid, req.user.org_id).map((t) => ({
+      ...t,
+      parts: db.prepare(`SELECT c.id, c.title, c.status, c.due_date, u.name AS assignee_name, u.avatar_color AS assignee_color
+        FROM tasks c LEFT JOIN users u ON u.id=c.assignee_id
+        WHERE c.parent_task_id=? ORDER BY c.created_at`).all(t.id),
+    }))
+
   const open = mine.filter((t) => !['Done'].includes(t.status))
   res.json({
     counts: {
@@ -20,10 +70,13 @@ r.get('/employee', (req, res) => {
       completed: mine.filter((t) => t.status === 'Done').length,
       overdue: mine.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done').length,
       blocked: mine.filter((t) => t.status === 'Blocked').length,
+      assigned_by_me: assignedByMe.length,
     },
     upcoming: open.filter((t) => t.due_date).sort((a, b) => (a.due_date || '').localeCompare(b.due_date || '')).slice(0, 6),
     by_status: ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done'].map((s) => ({ status: s, count: mine.filter((t) => t.status === s).length })),
     needs_confirmation: mine.filter((t) => t.ownership_confidence === 'needs_confirmation').length,
+    assigned_by_me: assignedByMe,
+    shared_by_me: sharedByMe,
   })
 })
 
@@ -40,17 +93,25 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
   const inRange = (iso) => { if (!scoped) return true; if (!iso) return false; const day = String(iso).slice(0, 10); return day >= from && day <= to }
   const OPEN_STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Reopened']
 
-  const allTasks = db.prepare(`SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
-    WHERE t.org_id=? AND t.parent_task_id IS NULL AND t.visible_to_manager=1`).all(org)
+  const allTasks = db.prepare(`SELECT t.*, u.name AS assignee_name,
+      ab.name AS assigned_by_name, rb.name AS reassigned_by_name, p.title AS parent_title
+    FROM tasks t
+    LEFT JOIN users u ON u.id=t.assignee_id
+    LEFT JOIN users ab ON ab.id=t.assigned_by_id
+    LEFT JOIN users rb ON rb.id=t.reassigned_by_id
+    LEFT JOIN tasks p ON p.id=t.parent_task_id
+    WHERE t.org_id=? AND ${LEAF} AND t.visible_to_manager=1`).all(org).map((t) => ({ ...t, origin: originOf(t) }))
   const tasks = allTasks.filter((t) => inRange(t.created_at))
   const overdue = tasks.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done')
 
   // Workload is derived from the scoped set in JS so it honours the date range.
-  const members = db.prepare("SELECT id, name, avatar_color FROM users WHERE org_id=? AND role='employee'").all(org)
+  // Everyone in the org is included (employees, managers AND admins) so the manager
+  // can see their own load and any tasks assigned to fellow managers/admins too.
+  const members = db.prepare('SELECT id, name, avatar_color, role FROM users WHERE org_id=?').all(org)
   const workload = members.map((u) => {
     const mine = tasks.filter((t) => t.assignee_id === u.id)
     return {
-      id: u.id, name: u.name, avatar_color: u.avatar_color,
+      id: u.id, name: u.name, avatar_color: u.avatar_color, role: u.role,
       open_count: mine.filter((t) => OPEN_STATUSES.includes(t.status)).length,
       done_count: mine.filter((t) => t.status === 'Done').length,
       overdue_count: mine.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done').length,
@@ -63,6 +124,17 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
     FROM projects p LEFT JOIN tasks t ON t.project_id=p.id WHERE p.org_id=? GROUP BY p.id
   `).all(org)
   const meetings = db.prepare('SELECT COUNT(*) c FROM meetings WHERE org_id=?').get(org).c
+  // Recent activity feed for the dashboard — TASK events only (created, status
+  // changes, approvals, splits, comments). Auth/file/invite events are excluded.
+  // Joins the task so the feed can name it (task.status only stores the status).
+  const recentActivity = db.prepare(`SELECT a.id, a.action, a.detail, a.created_at,
+      u.name AS actor_name, u.avatar_color AS actor_color, t.title AS task_title
+    FROM audit_logs a
+    LEFT JOIN users u ON u.id=a.actor_id
+    LEFT JOIN tasks t ON t.id=a.entity_id AND a.entity_type='task'
+    WHERE a.org_id=? AND a.entity_type='task'
+      AND a.action IN ('task.create','task.status','task.approval','task.split','task.comment','task.reassign')
+    ORDER BY a.created_at DESC LIMIT 8`).all(org)
   res.json({
     counts: {
       total: tasks.length,
@@ -78,6 +150,7 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
     workload,
     projects: projects.map((p) => ({ ...p, progress: p.total ? Math.round((p.done / p.total) * 100) : 0 })),
     overdue: overdue.slice(0, 8),
+    recent_activity: recentActivity,
   })
 })
 
@@ -92,7 +165,7 @@ r.get('/report', requireRole('manager', 'admin'), (req, res) => {
   const inRange = (iso) => { if (!iso) return false; const day = String(iso).slice(0, 10); return day >= from && day <= to }
 
   const tasks = db.prepare(`SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
-    WHERE t.org_id=? AND t.parent_task_id IS NULL AND t.visible_to_manager=1`).all(org)
+    WHERE t.org_id=? AND ${LEAF} AND t.visible_to_manager=1`).all(org)
   const created = tasks.filter((t) => inRange(t.created_at))
   const completed = tasks.filter((t) => t.status === 'Done' && inRange(t.completed_at))
   const dueInRange = tasks.filter((t) => t.due_date && t.due_date >= from && t.due_date <= to)
@@ -128,10 +201,10 @@ r.get('/report', requireRole('manager', 'admin'), (req, res) => {
 r.get('/admin', requireRole('manager', 'admin'), (req, res) => {
   const org = req.user.org_id
   const users = db.prepare('SELECT role, COUNT(*) c FROM users WHERE org_id=? GROUP BY role').all(org)
-  const tasks = db.prepare('SELECT status, COUNT(*) c FROM tasks WHERE org_id=? AND parent_task_id IS NULL GROUP BY status').all(org)
+  const tasks = db.prepare(`SELECT status, COUNT(*) c FROM tasks t WHERE org_id=? AND ${LEAF} GROUP BY status`).all(org)
   const totals = {
     users: db.prepare('SELECT COUNT(*) c FROM users WHERE org_id=?').get(org).c,
-    tasks: db.prepare('SELECT COUNT(*) c FROM tasks WHERE org_id=? AND parent_task_id IS NULL').get(org).c,
+    tasks: db.prepare(`SELECT COUNT(*) c FROM tasks t WHERE org_id=? AND ${LEAF}`).get(org).c,
     meetings: db.prepare('SELECT COUNT(*) c FROM meetings WHERE org_id=?').get(org).c,
     projects: db.prepare('SELECT COUNT(*) c FROM projects WHERE org_id=?').get(org).c,
   }

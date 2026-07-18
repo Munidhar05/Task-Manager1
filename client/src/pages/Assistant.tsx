@@ -14,7 +14,7 @@ const MicIcon = ({ size = 16 }: { size?: number }) => (
   </svg>
 )
 
-const GREETING: Msg = { role: 'ai', text: 'Hi! I\'m your task assistant. Ask me anything about your tasks, deadlines, meetings, or your team\'s workload — in plain language.' }
+const GREETING: Msg = { role: 'ai', text: 'Hello! 👋 How can I help you today? Ask me anything about your tasks, deadlines, meetings, or your team\'s workload — in plain language.' }
 
 function relTime(ts: number) {
   const s = Math.floor((Date.now() - ts) / 1000)

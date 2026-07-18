@@ -278,5 +278,16 @@ function publicUser(u) {
     avatar_file: u.avatar_file || null, email_verified: u.email_verified ? 1 : 0 }
 }
 
+// Re-confirm the CURRENT user's password. Used to gate sensitive voice actions
+// (e.g. removing a teammate) behind the manager's own password.
+r.post('/verify-password', authRequired, (req, res) => {
+  const { password } = req.body || {}
+  const u = db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.user.id)
+  if (!u || !password || !verifyPassword(String(password), u.password_hash)) {
+    return res.status(401).json({ error: 'Incorrect password' })
+  }
+  res.json({ ok: true })
+})
+
 export default r
 export { publicUser }
