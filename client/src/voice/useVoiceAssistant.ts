@@ -45,6 +45,9 @@ export function useVoiceAssistant() {
   const [level, setLevel] = useState(0)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [ttsOn, setTtsOnState] = useState(isTtsEnabled())
+  // Minimized = the session stays live in a small bar (page visible) so the user
+  // can keep giving commands without re-triggering the wake word.
+  const [minimized, setMinimized] = useState(false)
 
   // Refs mirror state for use inside the async turn loop (avoids stale closures).
   const sessionRef = useRef(0)          // bump to invalidate an in-flight loop
@@ -53,9 +56,11 @@ export function useVoiceAssistant() {
   const msgsRef = useRef<VoiceMsg[]>([])
   const emptyStreakRef = useRef(0)
   const openRef = useRef(false)
+  const minimizedRef = useRef(false)
   msgsRef.current = messages
   pendingRef.current = pending
   openRef.current = open
+  minimizedRef.current = minimized
 
   const push = (m: VoiceMsg) => setMessages((ms) => [...ms.slice(-20), m])
   const setPend = (p: PendingAction | null) => { pendingRef.current = p; setPending(p) }
@@ -137,30 +142,40 @@ export function useVoiceAssistant() {
     await speak(text)
   }
 
+  // The loop went quiet: a minimized (background) session just closes; a full
+  // open session parks at idle so the user can tap the orb to talk again.
+  const endOnSilence = () => {
+    if (minimizedRef.current) { setMinimized(false); setOpen(false) }
+    else setState('idle')
+  }
+
   const handleResponse = async (resp: any) => {
     const sayText = String(resp?.say || '').trim()
     // Attach any figures to the reply so the panel can show them, not just speak them.
     if (sayText) push({ role: 'ai', text: sayText, card: resp?.data || undefined })
     switch (resp?.mode) {
       case 'confirm':
+        setMinimized(false)  // expand so the confirmation card is visible
         if (resp.action) { setPend(resp.action); setState('confirming') }
         await say(sayText || 'Shall I go ahead?')
         break
       case 'navigate':
         if (resp.navigate?.url) navigate(resp.navigate.url)
-        // The voice screen is full-screen, so it would hide the page we just
-        // opened. End the session and close the panel to REVEAL the destination;
-        // the confirmation still plays as audio over it.
-        sessionRef.current++; openRef.current = false; setOpen(false); setState('idle')
-        say(sayText || 'Opening that.')
+        // The full-screen panel would hide the page we just opened. Shrink to the
+        // minimized bar instead of closing — the session stays live, so the next
+        // command needs no wake word (just speak or tap the bar). Await the reply
+        // so the mic doesn't re-open (and echo the TTS) until it finishes.
+        setMinimized(true)
+        await say(sayText || 'Opening that.')
         break
       case 'answer':
-        // Read tools may report a number AND open the matching list.
+        setMinimized(false)  // expand to show any figures/cards
         await say(sayText || "I don't have anything on that.")
         if (resp.navigate?.url) navigate(resp.navigate.url)
         break
       case 'clarify':
       default:
+        setMinimized(false)
         await say(sayText || "Sorry, I didn't understand.")
         break
     }
@@ -191,13 +206,13 @@ export function useVoiceAssistant() {
       // 2. Transcribe. Silence ends the loop → armed; any pending confirmation
       // stays on screen so its yes/no buttons still work.
       setState('processing'); setLevel(0)
-      if (!blob.size) { setState('idle'); return }
+      if (!blob.size) { endOnSilence(); return }
       let text = ''
       try { text = await transcribeBlob(blob) } catch { /* treat as empty */ }
       if (!alive()) return
       if (!text) {
         emptyStreakRef.current++
-        if (emptyStreakRef.current >= 2) { setState('idle'); return }
+        if (emptyStreakRef.current >= 2) { endOnSilence(); return }
         await say("Sorry, I didn't catch that.")
         continue
       }
@@ -225,6 +240,7 @@ export function useVoiceAssistant() {
 
   // ---- public controls -----------------------------------------------------
   const start = useCallback(() => {
+    setMinimized(false)
     if (!canRecord()) { push({ role: 'ai', text: 'Voice needs microphone access on this device.' }); setOpen(true); return }
     setOpen(true)
     emptyStreakRef.current = 0
@@ -239,6 +255,7 @@ export function useVoiceAssistant() {
     recRef.current = null
     stopSpeaking()
     setPend(null)
+    setMinimized(false)
     setState('idle')
   }, [])
 
@@ -274,8 +291,8 @@ export function useVoiceAssistant() {
   useEffect(() => () => { sessionRef.current++; try { recRef.current?.cancel() } catch {}; stopSpeaking() }, [])
 
   return {
-    open, state, messages, level, pending, ttsOn,
+    open, state, messages, level, pending, ttsOn, minimized,
     start, stop, close, micButton, confirmPending, cancelPending, setTtsOn,
-    setOpen,
+    setOpen, setMinimized,
   }
 }

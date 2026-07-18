@@ -123,7 +123,34 @@ export default function VoiceAssistant() {
 
   return (
     <div className="va-root">
-      {v.open && (
+      {/* Minimized bar — the session stays live over the page, so the user can
+          keep giving commands (speak or tap) without re-triggering the wake word. */}
+      {v.open && v.minimized && (
+        <div className={'va-mini va-mini--' + v.state} role="dialog" aria-label="Voice assistant (minimized)">
+          <button className="va-mini-orb" onClick={v.micButton} title={v.state === 'listening' ? 'Stop' : 'Talk'} aria-label={v.state === 'listening' ? 'Stop' : 'Talk'}>
+            {v.state === 'processing'
+              ? <span className="spinner" />
+              : v.state === 'listening'
+                ? <span className="va-mini-wave" aria-hidden="true"><i /><i /><i /><i /></span>
+                : <MicIcon size={20} />}
+          </button>
+          <div className="va-mini-text">
+            <div className="va-mini-title">BTM</div>
+            <div className="va-mini-status">
+              {v.state === 'listening' ? 'Listening — say your next command'
+                : v.state === 'processing' ? 'Working…'
+                : v.state === 'speaking' ? 'Speaking…'
+                : 'Tap to talk'}
+            </div>
+          </div>
+          <button className="va-mini-btn" onClick={() => v.setMinimized(false)} title="Expand" aria-label="Expand">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+          </button>
+          <button className="va-mini-btn" onClick={v.close} title="Close" aria-label="Close">✕</button>
+        </div>
+      )}
+
+      {v.open && !v.minimized && (
         <div className={'va-panel va-panel--' + v.state} role="dialog" aria-label="Voice assistant">
           <div className="va-head">
             <button className="va-iconbtn" title="Close" onClick={v.close} aria-label="Close">

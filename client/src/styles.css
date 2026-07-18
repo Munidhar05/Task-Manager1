@@ -683,6 +683,25 @@ tbody tr:hover { background: var(--n-50); }
 .va-cancelbtn svg { color: #ff6a6a; }
 .va-cancelbtn:hover { background: rgba(255,255,255,.12); }
 
+/* Minimized voice bar — live session parked over the page (no wake word needed). */
+.va-mini {
+  position: fixed; left: 12px; right: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 1300;
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 16px;
+  background: linear-gradient(180deg, var(--voice-bg2), var(--voice-bg)); border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 14px 34px rgba(0,0,0,.4); color: var(--voice-ink); animation: va-panel-in .2s ease both;
+}
+@media (min-width: 721px) { .va-mini { left: auto; right: 20px; width: 340px; bottom: 20px; } }
+.va-mini-orb { width: 44px; height: 44px; border-radius: 50%; border: none; flex-shrink: 0; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg,#ff8a3d,var(--primary)); box-shadow: 0 4px 14px rgba(242,98,46,.5); cursor: pointer; }
+.va-mini--listening .va-mini-orb { animation: va-pulse 1.3s ease-out infinite; }
+.va-mini-text { flex: 1; min-width: 0; }
+.va-mini-title { font-weight: 800; font-size: 13px; line-height: 1.2; }
+.va-mini-status { font-size: 12px; color: var(--voice-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.va-mini-btn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: var(--voice-ink); display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
+.va-mini-btn:hover { background: rgba(255,255,255,.14); }
+.va-mini-wave { display: flex; gap: 2.5px; align-items: center; height: 18px; }
+.va-mini-wave i { width: 3px; height: 40%; background: #fff; border-radius: 2px; animation: va-bar .9s ease-in-out infinite; }
+.va-mini-wave i:nth-child(2){animation-delay:.15s} .va-mini-wave i:nth-child(3){animation-delay:.3s} .va-mini-wave i:nth-child(4){animation-delay:.45s}
+
 @keyframes va-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 @keyframes va-ring { 0% { transform: scale(.78); opacity: .7; } 100% { transform: scale(1.5); opacity: 0; } }
 @keyframes va-glow { 0%,100% { box-shadow: 0 0 24px 2px rgba(242,98,46,.5), inset 0 0 20px rgba(242,98,46,.3); } 50% { box-shadow: 0 0 42px 6px rgba(242,98,46,.85), inset 0 0 28px rgba(242,98,46,.45); } }
