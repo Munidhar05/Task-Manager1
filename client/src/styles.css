@@ -1590,14 +1590,44 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
     color: var(--primary); font-size: 10.5px; font-weight: 700;
   }
   .bn-mic-btn {
-    display: grid; place-items: center; width: 56px; height: 56px; margin-top: -26px;
+    --sz-btn: 56px;
+    --space: calc(var(--sz-btn) / 5.5);
+    --gen-sz: calc(var(--space) * 2);
+    --sz-text: calc(var(--sz-btn) - var(--gen-sz));
+    position: relative; display: grid; place-items: center;
+    width: var(--sz-btn); height: var(--sz-btn); margin-top: -26px;
     border-radius: 50%; color: #fff;
     background: linear-gradient(135deg, #ff8a3d, var(--primary));
     box-shadow: 0 8px 20px rgba(242,98,46,.5), 0 0 0 5px var(--surface);
     transition: transform .14s ease, box-shadow .2s ease;
   }
-  .bn-mic:active .bn-mic-btn { transform: scale(.92); }
-  .bn-mic-label { line-height: 1; }
+  /* Sparkle overlay: idle it twinkles small in the top-left; on press it swells to
+     fill the orb while the "AI" wordmark fades out (Uiverse-style reveal). */
+  .bn-mic-spark {
+    position: absolute; z-index: 2; overflow: visible; color: #ffd7bf;
+    top: calc(var(--sz-text) / 7); left: calc(var(--sz-text) / 7);
+    height: var(--gen-sz); width: var(--gen-sz);
+    animation: bn-mic-twinkle 2s ease-in-out infinite;
+    transition: all .3s ease;
+  }
+  .bn-mic-ai {
+    font-size: calc(var(--sz-btn) * .46); font-weight: 800; line-height: 1;
+    letter-spacing: .5px; color: #fff; transition: opacity .2s ease;
+  }
+  .bn-mic:active .bn-mic-btn { transform: scale(.95); }
+  .bn-mic:active .bn-mic-spark {
+    color: #fff; animation: none;
+    height: var(--sz-text); width: var(--sz-text);
+    top: calc(var(--gen-sz) / 2); left: calc(var(--sz-text) / 4);
+  }
+  .bn-mic:active .bn-mic-ai { opacity: 0; }
+  @keyframes bn-mic-twinkle {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .45; transform: scale(.88); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bn-mic-spark { animation: none; }
+  }
   .bn-item {
     flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 3px; padding: 6px 2px;
