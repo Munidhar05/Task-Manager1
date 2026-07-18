@@ -27,7 +27,7 @@ export default function VerifyEmail() {
       <div className="login-stage">
         <div className="login-card login-card--panda">
           <div className="brand" style={{ padding: 0, marginBottom: 18, marginTop: 26, justifyContent: 'space-between', width: '100%' }}>
-            <div className="brand-name" style={{ color: '#1f1a16' }}>Email verification</div>
+            <div className="brand-name" style={{ color: '#16191d' }}>Email verification</div>
             <img src="/logo.png" alt="Befach" className="brand-logo-img" />
           </div>
 

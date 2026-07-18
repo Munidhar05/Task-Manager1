@@ -58,7 +58,7 @@ export default function Signup() {
         <form className="login-card login-card--panda" onSubmit={submit}>
           <div className="brand" style={{ padding: 0, marginBottom: 14, marginTop: 26, justifyContent: 'space-between', width: '100%' }}>
             <div>
-              <div className="brand-name" style={{ color: '#1f1a16' }}>{personal ? 'Create your account' : 'Create your company'}</div>
+              <div className="brand-name" style={{ color: '#16191d' }}>{personal ? 'Create your account' : 'Create your company'}</div>
               <div className="muted" style={{ fontSize: 12 }}>{personal ? 'Track and manage your own tasks' : "Set up your team's task workspace"}</div>
             </div>
             <img src="/logo.png" alt="Befach" className="brand-logo-img" />
@@ -99,7 +99,7 @@ export default function Signup() {
             <PasswordStrength password={password} />
           </div>
 
-          {err && <div className="login-err">{err}</div>}
+          {err && <div className="login-err" role="alert">{err}</div>}
 
           <button className="btn btn-primary login-btn" disabled={busy}>
             {busy ? <span className="spinner" /> : (personal ? 'CREATE ACCOUNT' : 'CREATE COMPANY')}

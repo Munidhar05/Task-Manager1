@@ -108,6 +108,19 @@ function Layout({ children }: { children: React.ReactNode }) {
   const base = '/' + (loc.pathname.split('/')[1] || '')
   const meta = TITLES[base] || TITLES['/']
   if (!user) return null
+  // The nav items this user can see, filtered once and shared by the sidebar
+  // (full list) and the mobile bottom bar (the first few, thumb-reachable).
+  const visibleNav = NAV.filter((n) => (n as any).platformOnly
+    ? !!user.platform_admin
+    : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly))
+  // One bottom-nav tab (shared by the slots on either side of the center mic).
+  const renderBottomTab = (n: typeof NAV[number]) => (
+    <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
+      <span className="bn-ic">{n.icon}</span>
+      <span className="bn-label">{n.label}</span>
+      {n.to === '/chats' && chatUnread > 0 && <span className="bn-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
+    </NavLink>
+  )
   return (
     <div className="app">
       <aside className={'sidebar' + (open ? ' open' : '')}>
@@ -119,9 +132,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <nav className="nav" onClick={() => setOpen(false)}>
-          {NAV.filter((n) => (n as any).platformOnly
-            ? !!user.platform_admin
-            : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly)).map((n) => (
+          {visibleNav.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
               <span className="nav-icon">{n.icon}</span>{n.label}
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
@@ -166,12 +177,45 @@ function Layout({ children }: { children: React.ReactNode }) {
             <h1>{meta.t}</h1>
             <div className="sub">{meta.s}</div>
           </div>
-          <div className="row" style={{ marginLeft: 'auto', gap: 12 }}>
+          <div className="row" style={{ marginLeft: 'auto', gap: 10 }}>
             <NotificationBell key={user.id} />
+            <button className="topbar-avatar" onClick={() => setShowProfile(true)} title="Profile & settings" aria-label="Open profile & settings">
+              <Avatar name={user.name} color={user.avatar_color} size={33} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
+              <span className="topbar-avatar-dot" />
+            </button>
           </div>
         </header>
         <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
       </div>
+      {/* Mobile bottom tab bar — template layout: two tabs, the signature center
+          floating AI voice mic, one more tab, then "More" (opens the full drawer).
+          The center mic opens the global VoiceAssistant via an 'open-voice' event. */}
+      <nav className="bottom-nav" aria-label="Primary">
+        {visibleNav.slice(0, 2).map(renderBottomTab)}
+        <button
+          className="bn-mic"
+          onClick={() => window.dispatchEvent(new Event('open-voice'))}
+          aria-label="Open voice assistant"
+          title="Talk to the AI assistant"
+        >
+          <span className="bn-mic-btn">
+            <svg viewBox="0 0 24 24" width="25" height="25" fill="currentColor" aria-hidden="true">
+              <path d="M12 2.5 14 8.2l5.7 2-5.7 2L12 19.9l-2-5.7-5.7-2L10 8.2z" />
+              <path d="M19 13.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z" />
+            </svg>
+          </span>
+          <span className="bn-mic-label">AI</span>
+        </button>
+        {visibleNav.slice(2, 3).map(renderBottomTab)}
+        <button className="bn-item" onClick={() => setOpen(true)} aria-label="More menu">
+          <span className="bn-ic">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </span>
+          <span className="bn-label">More</span>
+        </button>
+      </nav>
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />

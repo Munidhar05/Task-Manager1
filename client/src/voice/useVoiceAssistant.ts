@@ -32,7 +32,7 @@ export interface VoiceCardData {
 // A message is either spoken text or a data card rendered inline in the panel.
 export interface VoiceMsg { role: 'user' | 'ai'; text: string; card?: VoiceCardData }
 
-interface PendingAction { kind: string; task_id?: string; summary?: string; body: any }
+interface PendingAction { kind: string; task_id?: string; to_user_id?: string; to_name?: string; text?: string; needsPassword?: boolean; summary?: string; steps?: PendingAction[]; count?: number; body?: any }
 
 const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|okey|confirm|confirmed|correct|right|go ahead|do it|please do|haan|haa|ha|ji|karo|sari|sare|avunu|cheyyi|cheyandi|cheyyandi)\b/i
 const NO_RE = /\b(no|nope|nah|cancel|cancelled|don'?t|stop|nahi|nahin|mat|vddu|venda|vodhu|leave it|never mind|nevermind)\b/i
@@ -45,6 +45,9 @@ export function useVoiceAssistant() {
   const [level, setLevel] = useState(0)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [ttsOn, setTtsOnState] = useState(isTtsEnabled())
+  // Minimized = the session stays live in a small bar (page visible) so the user
+  // can keep giving commands without re-triggering the wake word.
+  const [minimized, setMinimized] = useState(false)
 
   // Refs mirror state for use inside the async turn loop (avoids stale closures).
   const sessionRef = useRef(0)          // bump to invalidate an in-flight loop
@@ -53,9 +56,11 @@ export function useVoiceAssistant() {
   const msgsRef = useRef<VoiceMsg[]>([])
   const emptyStreakRef = useRef(0)
   const openRef = useRef(false)
+  const minimizedRef = useRef(false)
   msgsRef.current = messages
   pendingRef.current = pending
   openRef.current = open
+  minimizedRef.current = minimized
 
   const push = (m: VoiceMsg) => setMessages((ms) => [...ms.slice(-20), m])
   const setPend = (p: PendingAction | null) => { pendingRef.current = p; setPending(p) }
@@ -81,24 +86,52 @@ export function useVoiceAssistant() {
   // ---- execute a confirmed mutation via the existing task endpoints --------
   // Every kind maps to an endpoint the app already exposes, so permissions and
   // notifications behave exactly as they do from the UI.
-  const execute = async (action: PendingAction) => {
-    setState('processing')
-    try {
-      switch (action.kind) {
-        case 'create_task': await api.post('/tasks', action.body); break
-        case 'set_status': await api.post(`/tasks/${action.task_id}/status`, action.body); break
-        case 'add_comment': await api.post(`/tasks/${action.task_id}/comments`, action.body); break
-        case 'delete_task': await api.del(`/tasks/${action.task_id}`); break
-        // update_task / assign_task / set_priority / set_due_date all PATCH fields
-        default: await api.patch(`/tasks/${action.task_id}`, action.body)
+  // Run ONE action against the app's real endpoints (permissions/notifications
+  // behave exactly as they do from the UI).
+  const executeOne = async (action: PendingAction, password?: string) => {
+    switch (action.kind) {
+      case 'create_task': await api.post('/tasks', action.body); break
+      case 'set_status': await api.post(`/tasks/${action.task_id}/status`, action.body); break
+      case 'add_comment': await api.post(`/tasks/${action.task_id}/comments`, action.body); break
+      case 'delete_task': await api.del(`/tasks/${action.task_id}`); break
+      case 'send_message': {
+        // Find/create the direct thread, then post the message.
+        const conv: any = await api.post('/chat/conversations', { type: 'direct', userId: action.to_user_id })
+        await api.post(`/chat/conversations/${conv.id}/messages`, { body: action.text })
+        break
       }
-      push({ role: 'ai', text: `✓ ${action.summary || 'Done'}` })
-      await say('Done.')
-      // Refresh whatever list is showing and surface the result.
-      window.dispatchEvent(new CustomEvent('tasks-changed'))
-      navigate('/tasks')
+      case 'remove_user': {
+        // Gate the destructive account removal behind the manager's password.
+        await api.post('/auth/verify-password', { password })
+        await api.del(`/users/${action.to_user_id}`)
+        break
+      }
+      // update_task / assign_task / set_priority / set_due_date all PATCH fields
+      default: await api.patch(`/tasks/${action.task_id}`, action.body)
+    }
+  }
+
+  const execute = async (action: PendingAction, password?: string) => {
+    setState('processing')
+    // A plan runs each step in order; a single action is just a 1-step plan.
+    const steps = action.kind === 'plan' ? (action.steps || []) : [action]
+    try {
+      let done = 0
+      for (const step of steps) {
+        await executeOne(step, password)
+        done++
+        // Narrate progress so a multi-step plan doesn't feel frozen.
+        if (steps.length > 1) push({ role: 'ai', text: `✓ (${done}/${steps.length}) ${step.summary || 'done'}` })
+      }
+      if (steps.length === 1) push({ role: 'ai', text: `✓ ${action.summary || 'Done'}` })
+      await say(steps.length > 1 ? `Done — ${done} ${done === 1 ? 'step' : 'steps'} completed.` : 'Done.')
+      // Refresh the relevant lists and jump to the most relevant section.
+      const kinds = new Set(steps.map((s) => s.kind))
+      if (kinds.has('remove_user')) { window.dispatchEvent(new CustomEvent('users-changed')); navigate('/admin') }
+      else if (kinds.size === 1 && kinds.has('send_message')) { window.dispatchEvent(new Event('chat-unread-changed')); navigate('/chats') }
+      else { window.dispatchEvent(new CustomEvent('tasks-changed')); if (kinds.has('send_message')) window.dispatchEvent(new Event('chat-unread-changed')); navigate('/tasks') }
     } catch (e: any) {
-      const m = `Sorry, that didn't work: ${e?.message || 'please try again'}`
+      const m = `Sorry, that didn't fully work: ${e?.message || 'please try again'}`
       push({ role: 'ai', text: m }); await say(m)
     }
   }
@@ -109,26 +142,40 @@ export function useVoiceAssistant() {
     await speak(text)
   }
 
+  // The loop went quiet: a minimized (background) session just closes; a full
+  // open session parks at idle so the user can tap the orb to talk again.
+  const endOnSilence = () => {
+    if (minimizedRef.current) { setMinimized(false); setOpen(false) }
+    else setState('idle')
+  }
+
   const handleResponse = async (resp: any) => {
     const sayText = String(resp?.say || '').trim()
     // Attach any figures to the reply so the panel can show them, not just speak them.
     if (sayText) push({ role: 'ai', text: sayText, card: resp?.data || undefined })
     switch (resp?.mode) {
       case 'confirm':
+        setMinimized(false)  // expand so the confirmation card is visible
         if (resp.action) { setPend(resp.action); setState('confirming') }
         await say(sayText || 'Shall I go ahead?')
         break
       case 'navigate':
-        await say(sayText || 'Opening that.')
         if (resp.navigate?.url) navigate(resp.navigate.url)
+        // The full-screen panel would hide the page we just opened. Shrink to the
+        // minimized bar instead of closing — the session stays live, so the next
+        // command needs no wake word (just speak or tap the bar). Await the reply
+        // so the mic doesn't re-open (and echo the TTS) until it finishes.
+        setMinimized(true)
+        await say(sayText || 'Opening that.')
         break
       case 'answer':
-        // Read tools may report a number AND open the matching list.
+        setMinimized(false)  // expand to show any figures/cards
         await say(sayText || "I don't have anything on that.")
         if (resp.navigate?.url) navigate(resp.navigate.url)
         break
       case 'clarify':
       default:
+        setMinimized(false)
         await say(sayText || "Sorry, I didn't understand.")
         break
     }
@@ -159,13 +206,13 @@ export function useVoiceAssistant() {
       // 2. Transcribe. Silence ends the loop → armed; any pending confirmation
       // stays on screen so its yes/no buttons still work.
       setState('processing'); setLevel(0)
-      if (!blob.size) { setState('idle'); return }
+      if (!blob.size) { endOnSilence(); return }
       let text = ''
       try { text = await transcribeBlob(blob) } catch { /* treat as empty */ }
       if (!alive()) return
       if (!text) {
         emptyStreakRef.current++
-        if (emptyStreakRef.current >= 2) { setState('idle'); return }
+        if (emptyStreakRef.current >= 2) { endOnSilence(); return }
         await say("Sorry, I didn't catch that.")
         continue
       }
@@ -193,6 +240,7 @@ export function useVoiceAssistant() {
 
   // ---- public controls -----------------------------------------------------
   const start = useCallback(() => {
+    setMinimized(false)
     if (!canRecord()) { push({ role: 'ai', text: 'Voice needs microphone access on this device.' }); setOpen(true); return }
     setOpen(true)
     emptyStreakRef.current = 0
@@ -207,6 +255,7 @@ export function useVoiceAssistant() {
     recRef.current = null
     stopSpeaking()
     setPend(null)
+    setMinimized(false)
     setState('idle')
   }, [])
 
@@ -222,13 +271,14 @@ export function useVoiceAssistant() {
     }
   }, [state, runTurn])
 
-  // Manual confirm / cancel buttons for the pending action card.
-  const confirmPending = useCallback(async () => {
+  // Manual confirm / cancel buttons for the pending action card. `password` is
+  // supplied only for actions that require re-auth (e.g. removing a teammate).
+  const confirmPending = useCallback(async (password?: string) => {
     const p = pendingRef.current
     if (!p) return
     setPend(null); sessionRef.current++
     try { recRef.current?.cancel() } catch {}
-    await execute(p)
+    await execute(p, password)
     sessionRef.current++; openRef.current = true; runTurn()
   }, [runTurn])
 
@@ -241,8 +291,8 @@ export function useVoiceAssistant() {
   useEffect(() => () => { sessionRef.current++; try { recRef.current?.cancel() } catch {}; stopSpeaking() }, [])
 
   return {
-    open, state, messages, level, pending, ttsOn,
+    open, state, messages, level, pending, ttsOn, minimized,
     start, stop, close, micButton, confirmPending, cancelPending, setTtsOn,
-    setOpen,
+    setOpen, setMinimized,
   }
 }

@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { subscribeConfirm, resolveConfirm, PendingConfirm } from '../lib/confirm'
 
-// Renders the active confirm dialog (one at a time). Esc cancels, Enter confirms.
+// Renders the active confirm dialog (one at a time). Esc cancels. Enter confirms
+// only for benign dialogs — on a danger dialog a stray Enter must never delete,
+// so there Enter is inert and Cancel takes the initial focus instead.
 export default function ConfirmHost() {
   const [c, setC] = useState<PendingConfirm | null>(null)
   useEffect(() => subscribeConfirm(setC), [])
@@ -9,7 +11,7 @@ export default function ConfirmHost() {
     if (!c) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); resolveConfirm(false) }
-      else if (e.key === 'Enter') { e.preventDefault(); resolveConfirm(true) }
+      else if (e.key === 'Enter' && !c.danger) { e.preventDefault(); resolveConfirm(true) }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -30,8 +32,8 @@ export default function ConfirmHost() {
           </div>
         </div>
         <div className="confirm-actions">
-          <button className="btn" onClick={() => resolveConfirm(false)}>{c.cancelText || 'Cancel'}</button>
-          <button className={'btn ' + (c.danger ? 'btn-danger-solid' : 'btn-primary')} onClick={() => resolveConfirm(true)} autoFocus>
+          <button className="btn" onClick={() => resolveConfirm(false)} autoFocus={!!c.danger}>{c.cancelText || 'Cancel'}</button>
+          <button className={'btn ' + (c.danger ? 'btn-danger-solid' : 'btn-primary')} onClick={() => resolveConfirm(true)} autoFocus={!c.danger}>
             {c.confirmText || 'Confirm'}
           </button>
         </div>

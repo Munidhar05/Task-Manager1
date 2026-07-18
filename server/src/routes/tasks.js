@@ -1,12 +1,16 @@
 import { Router } from 'express'
 import multer from 'multer'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
-import { authRequired, requireRole } from '../auth.js'
+import { authRequired, requireRole, verifyToken } from '../auth.js'
 import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../util.js'
 import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
 import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
 import { interpretVoiceSearch } from '../ai/voiceSearch.js'
+import { resolveCategory, normalizeCategory } from '../categories.js'
 import { recordUsage } from '../ai/usage.js'
 
 // The configured speech-to-text provider, for usage attribution.
@@ -15,6 +19,48 @@ import { parseDueDate } from '../ai/dates.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 
 const r = Router()
+
+// --- Task attachments (reference images / PDFs / videos) ---------------------
+// Files live on disk in data/task_uploads; the DB row carries the metadata. We
+// follow the chat-file model: an authenticated streaming route (below) serves
+// them, so nothing under data/ is ever exposed via static middleware.
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ATTACH_DIR = path.join(__dirname, '..', '..', 'data', 'task_uploads')
+fs.mkdirSync(ATTACH_DIR, { recursive: true })
+const ATTACH_MAX = Number(process.env.TASK_ATTACH_MAX_MB || 50) * 1024 * 1024
+// Only reference material makes sense here: images, PDFs, and videos.
+const ATTACH_OK = (mime) => /^(image\/|video\/)/.test(mime) || mime === 'application/pdf'
+const attachUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, ATTACH_DIR),
+    filename: (req, file, cb) => cb(null, id('att') + path.extname(file.originalname || '').slice(0, 12)),
+  }),
+  limits: { fileSize: ATTACH_MAX },
+  fileFilter: (req, file, cb) => cb(null, ATTACH_OK(file.mimetype || '')),
+})
+
+// SERVE / DOWNLOAD an attachment. Declared BEFORE authRequired so <img>/<video>
+// tags (which can't send an Authorization header) can authenticate via ?token=.
+// Enforces that the viewer is in the SAME org as the task the file belongs to.
+r.get('/attachments/:attId/file', (req, res) => {
+  const user = (req.headers.authorization || '').startsWith('Bearer ')
+    ? verifyToken(req.headers.authorization.slice(7))
+    : verifyToken(req.query.token)
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
+  const a = db.prepare('SELECT * FROM attachments WHERE id=?').get(req.params.attId)
+  if (!a || !a.stored_name) return res.status(404).json({ error: 'Not found' })
+  // Org check (org_id was backfilled onto newer rows; fall back to the task's org).
+  const taskOrg = a.org_id || db.prepare('SELECT org_id FROM tasks WHERE id=?').get(a.task_id)?.org_id
+  if (taskOrg && taskOrg !== user.org_id) return res.status(403).json({ error: 'Out of organization' })
+  const abs = path.join(ATTACH_DIR, a.stored_name)
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
+  if (a.file_type) res.type(a.file_type)
+  const dl = req.query.download === '1' ? 'attachment' : 'inline'
+  res.setHeader('Content-Disposition', `${dl}; filename="${encodeURIComponent(a.filename || 'file')}"`)
+  res.setHeader('Cache-Control', 'private, max-age=300')
+  fs.createReadStream(abs).pipe(res)
+})
+
 r.use(authRequired)
 
 // Voice dictation for the "Speak" button records ONE short audio clip (≤ ~30s)
@@ -23,16 +69,42 @@ const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 const VALID_STATUS = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
+const userBrief = (uid) => (uid ? db.prepare('SELECT id,name,avatar_color FROM users WHERE id=?').get(uid) : null)
+
+// How this task came to its current owner, so the UI can label it:
+//   split       — it is one part of a task somebody divided up
+//   reassigned  — it was moved off a previous owner
+//   assigned    — somebody else handed it over directly
+//   self        — the owner created it for themselves (no hand-off to show)
+function taskOrigin(t) {
+  if (t.parent_task_id) return 'split'
+  if (t.reassigned_at) return 'reassigned'
+  if (t.assigned_by_id && t.assignee_id && t.assigned_by_id !== t.assignee_id) return 'assigned'
+  return 'self'
+}
+
 function hydrate(t) {
   if (!t) return t
   const assignee = t.assignee_id ? db.prepare('SELECT id,name,avatar_color,role FROM users WHERE id=?').get(t.assignee_id) : null
-  const assignedBy = t.assigned_by_id ? db.prepare('SELECT id,name FROM users WHERE id=?').get(t.assigned_by_id) : null
+  const assignedBy = userBrief(t.assigned_by_id)
+  const reassignedBy = userBrief(t.reassigned_by_id)
+  const previousAssignee = userBrief(t.previous_assignee_id)
   const project = t.project_id ? db.prepare('SELECT id,name FROM projects WHERE id=?').get(t.project_id) : null
   const subtasks = db.prepare('SELECT * FROM tasks WHERE parent_task_id=? ORDER BY created_at').all(t.id)
+  // A split part needs to name its parent — it's shown out of context in lists
+  // and dashboards now, where "part of X" is the only thing that makes it read.
+  const parent = t.parent_task_id
+    ? db.prepare('SELECT id,title,assignee_id FROM tasks WHERE id=?').get(t.parent_task_id)
+    : null
   const comments = db.prepare(`SELECT c.*, u.name AS user_name, u.avatar_color FROM task_comments c JOIN users u ON u.id=c.user_id WHERE c.task_id=? ORDER BY c.created_at`).all(t.id)
   const deps = db.prepare(`SELECT d.depends_on_task_id AS id, t2.title, t2.status FROM task_dependencies d JOIN tasks t2 ON t2.id=d.depends_on_task_id WHERE d.task_id=?`).all(t.id)
   const attachments = db.prepare('SELECT * FROM attachments WHERE task_id=?').all(t.id)
-  return { ...t, assignee, assignedBy, project, subtasks, comments, dependencies: deps, attachments }
+  return {
+    ...t, assignee, assignedBy, reassignedBy, previousAssignee, parent, project,
+    subtasks, comments, dependencies: deps, attachments,
+    origin: taskOrigin(t),
+    is_split_parent: subtasks.length > 0,
+  }
 }
 
 // Roll a split parent's status up from its children: once every shared part is
@@ -59,10 +131,23 @@ function syncParentStatus(parentId) {
 
 // LIST with filters: ?status=&priority=&assignee=&project=&meeting=&mine=1&q=
 r.get('/', (req, res) => {
-  const { status, priority, assignee, project, meeting, mine, q, confidence } = req.query
-  let sql = `SELECT t.* FROM tasks t WHERE t.org_id=? AND t.parent_task_id IS NULL`
+  const { status, priority, assignee, project, meeting, mine, q, confidence, assigned_by_me } = req.query
+  // NOTE: split parts (rows with a parent_task_id) used to be excluded here. That
+  // made them unreachable — the assignee got a notification for a task that
+  // appeared in no list, and couldn't open the parent either since it wasn't
+  // theirs. Parts are ordinary tasks to the person doing them, so they're listed
+  // like any other and carry a "Part of X" badge for context.
+  let sql = `SELECT t.* FROM tasks t WHERE t.org_id=?`
   const args = [req.user.org_id]
-  if (req.user.role === 'employee') {
+  if (assigned_by_me) {
+    // Work I handed to someone else — lets the dashboard's "Assigned by me"
+    // section link through to the full list. This REPLACES the usual visibility
+    // clause rather than adding to it: an employee's is `assignee_id = me`, which
+    // can never also be `!= me`. Safe, because being the assigner (or the person
+    // who moved it) is itself the grounds for seeing it.
+    sql += ' AND t.assignee_id IS NOT NULL AND t.assignee_id != ? AND (t.assigned_by_id=? OR t.reassigned_by_id=?)'
+    args.push(req.user.id, req.user.id, req.user.id)
+  } else if (req.user.role === 'employee') {
     // Employees see all of their own tasks (including private drafts).
     sql += ' AND t.assignee_id=?'; args.push(req.user.id)
   } else {
@@ -221,17 +306,19 @@ r.post('/', (req, res) => {
   const priority = b.priority || 'Medium'
   // Auto-fill the due date from priority when the caller didn't supply one.
   const dueDate = b.due_date || dueDateForPriority(priority)
+  // Category: an explicit choice wins, else auto-detect from the task's text.
+  const category = resolveCategory({ text: `${b.title} ${b.description || ''} ${b.source_quote || ''}`, explicit: b.category })
   const tid = id('task')
   db.prepare(`INSERT INTO tasks
     (id, org_id, title, description, assignee_id, assigned_by_id, due_date, due_date_raw, priority, status,
      project_id, department_id, meeting_id, ownership_confidence, parent_task_id, progress, approval_status, source_quote,
-     assigned_at, visible_to_manager, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     category, assigned_at, visible_to_manager, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     tid, req.user.org_id, b.title, b.description || '', assignee?.id || null, req.user.id,
     dueDate, b.due_date_raw || null, priority, b.status || 'To Do',
     b.project_id || null, b.department_id || req.user.department_id || null, b.meeting_id || null,
     confidence, b.parent_task_id || null,
-    0, 'none', b.source_quote || null, assignee ? now() : null, visible, now(), now())
+    0, 'none', b.source_quote || null, category, assignee ? now() : null, visible, now(), now())
   audit(req.user.org_id, req.user.id, 'task.create', 'task', tid, b.title)
   // Notify the assignee when someone assigns them a task (not their own).
   if (assignee && assignee.id !== req.user.id) {
@@ -249,13 +336,25 @@ r.patch('/:id', (req, res) => {
   const fields = ['title', 'description', 'priority', 'due_date', 'due_date_raw', 'project_id', 'department_id', 'progress', 'ownership_confidence']
   const sets = [], args = []
   for (const f of fields) if (f in b) { sets.push(`${f}=?`); args.push(b[f]) }
+  // Category override: normalise to a known label, or null to clear (Uncategorized).
+  if ('category' in b) { sets.push('category=?'); args.push(normalizeCategory(b.category)) }
   let newlyAssigned = null
+  let takenFrom = null
   if ('assignee_id' in b) {
     sets.push('assignee_id=?'); args.push(b.assignee_id || null)
     sets.push('ownership_confidence=?'); args.push(b.assignee_id ? 'high' : 'needs_confirmation')
     if (b.assignee_id && b.assignee_id !== t.assignee_id) {
       newlyAssigned = b.assignee_id
       sets.push('assigned_at=?'); args.push(now())
+      // Moving a task OFF someone is a reassignment, not a fresh assignment.
+      // Record it: the row is overwritten in place, so this is the only trace
+      // that the task ever belonged to anyone else.
+      if (t.assignee_id) {
+        takenFrom = t.assignee_id
+        sets.push('reassigned_at=?'); args.push(now())
+        sets.push('reassigned_by_id=?'); args.push(req.user.id)
+        sets.push('previous_assignee_id=?'); args.push(t.assignee_id)
+      }
     }
   }
   if ('status' in b) {
@@ -274,8 +373,15 @@ r.patch('/:id', (req, res) => {
   sets.push('updated_at=?'); args.push(now())
   args.push(t.id)
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id=?`).run(...args)
-  audit(req.user.org_id, req.user.id, 'task.update', 'task', t.id, b)
+  // Reassignment gets its own audit action so it can be told apart from an
+  // ordinary field edit — 'task.update' is excluded from the activity feed.
+  audit(req.user.org_id, req.user.id, takenFrom ? 'task.reassign' : 'task.update', 'task', t.id, b)
   if (newlyAssigned) notify(t.org_id, newlyAssigned, 'task_assigned', `${req.user.name} assigned you "${t.title}"`, t.id)
+  // Tell whoever lost the task. Without this it simply disappears from their
+  // dashboard with no explanation.
+  if (takenFrom && takenFrom !== req.user.id) {
+    notify(t.org_id, takenFrom, 'task_reassigned', `${req.user.name} reassigned "${t.title}" to someone else`, t.id)
+  }
   if (t.parent_task_id && 'status' in b) syncParentStatus(t.parent_task_id)
   indexTask(t.id) // re-index on edit (title/desc/assignee/status may have changed)
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
@@ -328,15 +434,17 @@ r.post('/:id/split', (req, res) => {
     const assignee = db.prepare('SELECT id, name FROM users WHERE id=? AND org_id=?').get(p.assignee_id, req.user.org_id)
     if (!assignee) continue
     const cid = id('task')
+    // Inherit the parent's category unless the part's own title points elsewhere.
+    const childCategory = resolveCategory({ text: p.title, aiSuggested: parent.category })
     db.prepare(`INSERT INTO tasks
       (id, org_id, title, description, assignee_id, assigned_by_id, due_date, due_date_raw, priority, status,
        project_id, department_id, meeting_id, ownership_confidence, parent_task_id, progress, approval_status, source_quote,
-       assigned_at, visible_to_manager, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+       category, assigned_at, visible_to_manager, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       cid, parent.org_id, p.title, '', assignee.id, req.user.id,
       parent.due_date, parent.due_date_raw, parent.priority, 'To Do',
       parent.project_id, parent.department_id, parent.meeting_id,
-      'high', parent.id, 0, 'none', null, now(), 1, now(), now())
+      'high', parent.id, 0, 'none', null, childCategory, now(), 1, now(), now())
     audit(parent.org_id, req.user.id, 'task.split', 'task', cid, p.title)
     indexTask(cid)
     if (assignee.id !== req.user.id) {
@@ -390,6 +498,40 @@ r.post('/:id/comments', (req, res) => {
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
 
+// ATTACHMENTS — upload a reference image / PDF / video onto a task. One file per
+// request (the client loops for multiple). Anyone in the task's org may attach.
+const runAttachUpload = (req, res, next) => attachUpload.single('file')(req, res, (err) => {
+  if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400)
+    .json({ error: err.code === 'LIMIT_FILE_SIZE' ? `File too large (max ${Math.round(ATTACH_MAX / 1024 / 1024)} MB)` : 'Upload failed' })
+  next()
+})
+r.post('/:id/attachments', runAttachUpload, (req, res) => {
+  const cleanup = () => { if (req.file) try { fs.unlinkSync(req.file.path) } catch {} }
+  if (!req.file) return res.status(400).json({ error: 'Only images, PDFs, and videos are allowed' })
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) { cleanup(); return res.status(404).json({ error: 'Not found' }) }
+  const aid = id('att')
+  db.prepare(`INSERT INTO attachments (id, task_id, org_id, filename, stored_name, file_type, file_size, uploaded_by, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(
+    aid, t.id, t.org_id, req.file.originalname || 'file', req.file.filename, req.file.mimetype || null, req.file.size || 0, req.user.id, now())
+  audit(req.user.org_id, req.user.id, 'task.attach', 'task', t.id, req.file.originalname || '')
+  db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(now(), t.id)
+  res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+})
+
+// Remove an attachment (uploader, or any manager/admin). Deletes the file too.
+r.delete('/attachments/:attId', (req, res) => {
+  const a = db.prepare('SELECT * FROM attachments WHERE id=?').get(req.params.attId)
+  if (!a) return res.status(404).json({ error: 'Not found' })
+  const taskOrg = a.org_id || db.prepare('SELECT org_id FROM tasks WHERE id=?').get(a.task_id)?.org_id
+  if (taskOrg !== req.user.org_id) return res.status(403).json({ error: 'Out of organization' })
+  const isManager = req.user.role === 'manager' || req.user.role === 'admin'
+  if (!isManager && a.uploaded_by !== req.user.id) return res.status(403).json({ error: 'Only the uploader or a manager can remove this.' })
+  if (a.stored_name) try { fs.unlinkSync(path.join(ATTACH_DIR, a.stored_name)) } catch {}
+  db.prepare('DELETE FROM attachments WHERE id=?').run(a.id)
+  res.json({ ok: true })
+})
+
 // DEPENDENCIES
 r.post('/:id/dependencies', (req, res) => {
   const { depends_on } = req.body || {}
@@ -410,6 +552,13 @@ r.delete('/:id', (req, res) => {
   const isOwnPrivateDraft = t.assignee_id === req.user.id && t.assigned_by_id === req.user.id && !t.visible_to_manager
   if (!isManager && !isOwnPrivateDraft) {
     return res.status(403).json({ error: 'You can only delete your own tasks before submitting them.' })
+  }
+  // Unlink attachment files for this task AND its subtasks before the row cascade
+  // removes their DB rows (the DB cascade doesn't touch the files on disk).
+  const subIds = db.prepare('SELECT id FROM tasks WHERE parent_task_id=?').all(t.id).map((s) => s.id)
+  const ph = [t.id, ...subIds].map(() => '?').join(',')
+  for (const a of db.prepare(`SELECT stored_name FROM attachments WHERE task_id IN (${ph})`).all(t.id, ...subIds)) {
+    if (a.stored_name) try { fs.unlinkSync(path.join(ATTACH_DIR, a.stored_name)) } catch {}
   }
   db.prepare('DELETE FROM tasks WHERE id=?').run(t.id)
   audit(req.user.org_id, req.user.id, 'task.delete', 'task', t.id)

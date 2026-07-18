@@ -21,7 +21,9 @@ export default function ToastHost() {
   return (
     <div className="toast-host" role="region" aria-live="polite" aria-label="Notifications">
       {items.map((t) => (
-        <button key={t.id} className={'toast toast-' + t.kind} onClick={() => dismissToast(t.id)} title="Dismiss">
+        // Errors are announced assertively so screen readers hear failures promptly.
+        <button key={t.id} className={'toast toast-' + t.kind} onClick={() => dismissToast(t.id)} title="Dismiss"
+          role={t.kind === 'error' ? 'alert' : undefined}>
           <span className="toast-icon">{ICON[t.kind]}</span>
           <span className="toast-text">{t.text}</span>
         </button>

@@ -14,6 +14,7 @@ const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone:
   task_approved: { name: 'check', tone: 'success' },
   task_reopened: { name: 'refresh', tone: 'warning' },
   task_assigned: { name: 'user', tone: 'primary' },
+  task_reassigned: { name: 'refresh', tone: 'warning' },
   task_comment: { name: 'chat', tone: 'info' },
   chat_message: { name: 'chat', tone: 'info' },
 }
@@ -30,7 +31,7 @@ const BellIcon = ({ size = 33 }: { size?: number }) => (
     <defs>
       <linearGradient id="nb-circ" x1="20" y1="2" x2="20" y2="38" gradientUnits="userSpaceOnUse">
         <stop offset="0" stopColor="#e8853c" />
-        <stop offset=".5" stopColor="#c5560f" />
+        <stop offset=".5" stopColor="#f2622e" />
         <stop offset="1" stopColor="#a3450b" />
       </linearGradient>
     </defs>
@@ -120,15 +121,22 @@ export default function NotificationBell() {
 
   useEffect(() => {
     load()
-    const iv = setInterval(load, 15000) // poll every 15s
-    return () => clearInterval(iv)
+    // Poll every 15s, but never while the tab is hidden — a background tab (or a
+    // pocketed phone in the wrapped app) shouldn't burn network and battery.
+    // Catch up immediately when the user comes back.
+    const iv = setInterval(() => { if (!document.hidden) load() }, 15000)
+    const onVisible = () => { if (!document.hidden) load() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
 
-  // close on outside click
+  // close on outside click or Escape
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', h); document.removeEventListener('keydown', onKey) }
   }, [])
 
   const toggle = async () => {
@@ -147,7 +155,9 @@ export default function NotificationBell() {
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <button className="btn btn-ghost bell-btn" onClick={toggle} title="Notifications" style={{ position: 'relative', lineHeight: 1, padding: 6 }}>
+      <button className="btn btn-ghost bell-btn" onClick={toggle} title="Notifications"
+        aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+        aria-expanded={open} style={{ position: 'relative', lineHeight: 1, padding: 6 }}>
         <span className={vibrating ? 'bell-vibrate' : ''} style={{ display: 'inline-flex' }}><BellIcon /></span>
         {unread > 0 && (
           <span style={{ position: 'absolute', top: -2, right: -2, background: '#ef4444', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'grid', placeItems: 'center', padding: '0 4px' }}>
@@ -185,7 +195,7 @@ export default function NotificationBell() {
                 role={actionable ? 'button' : undefined}
                 tabIndex={actionable ? 0 : undefined}
                 onKeyDown={actionable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNotif(n) } } : undefined}
-                style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(197,86,15,.08)', fontSize: 13, display: 'flex', gap: 11, alignItems: 'flex-start' }}
+                style={{ padding: '11px 14px', borderTop: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'rgba(242,98,46,.08)', fontSize: 13, display: 'flex', gap: 11, alignItems: 'flex-start' }}
               >
                 <NotifIcon type={n.type} />
                 <div style={{ minWidth: 0, flex: 1 }}>

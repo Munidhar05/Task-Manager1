@@ -36,7 +36,7 @@ export default function ResetPassword() {
         <form className="login-card login-card--panda" onSubmit={submit}>
           <div className="brand" style={{ padding: 0, marginBottom: 14, marginTop: 26, justifyContent: 'space-between', width: '100%' }}>
             <div>
-              <div className="brand-name" style={{ color: '#1f1a16' }}>Choose a new password</div>
+              <div className="brand-name" style={{ color: '#16191d' }}>Choose a new password</div>
               <div className="muted" style={{ fontSize: 12 }}>Pick something you'll remember</div>
             </div>
             <img src="/logo.png" alt="Befach" className="brand-logo-img" />
@@ -61,7 +61,7 @@ export default function ResetPassword() {
                 </div>
                 <PasswordStrength password={password} />
               </div>
-              {err && <div className="login-err">{err}</div>}
+              {err && <div className="login-err" role="alert">{err}</div>}
               <button className="btn btn-primary login-btn" disabled={busy}>
                 {busy ? <span className="spinner" /> : 'UPDATE PASSWORD'}
               </button>
