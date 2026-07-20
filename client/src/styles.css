@@ -5,33 +5,41 @@
      (background → text → neutrals → semantics) so nothing reads as a template.
      ============================================================================ */
 
-  /* Brand — clean light canvas, coral-orange as the single action colour. */
-  --bg: #f2f4f7;            /* light cool-gray canvas */
-  --surface: #ffffff;
-  --border: #dbe0e8;        /* visible enough to define cards/buttons on white */
-  --text: #16191d;          /* charcoal */
-  --primary: #f2622e;       /* coral-orange — the one action colour */
-  --primary-dark: #d94e1c;
-  --accent: #f5a623;        /* amber */
-  --sidebar: #ffffff;       /* light rail */
-  --sidebar-muted: #8a9199;
+  /* Type families — Befach's own voice. Switzer for UI (neutral, premium),
+     Clash Grotesk for display/headings (confident character). Indic scripts
+     (Telugu/Hindi) fall through to Noto via the system stack. */
+  --font-ui: 'Switzer', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Nirmala UI', 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Telugu', system-ui, sans-serif;
+  --font-display: 'Clash Grotesk', var(--font-ui);
 
-  /* Cool neutral ramp — soft slate-grays that sit under white cards. */
-  --n-50:  #f7f8fa;
-  --n-100: #f1f3f6;
-  --n-200: #e7eaf0;
-  --n-300: #d5dae1;
-  --n-400: #a3aab5;
-  --n-500: #78808c;   /* secondary text (== legacy --muted) */
-  --n-600: #545c68;
-  --n-700: #333a43;
+  /* Brand — warm stone canvas, coral-orange as the single action colour. */
+  --bg: #f5f4f1;            /* warm stone canvas */
+  --surface: #ffffff;
+  --border: #e7e4de;        /* warm hairline — defines cards/buttons on white */
+  --border-strong: #d8d3ca;
+  --text: #1b1a17;          /* warm near-black */
+  --primary: #ef5f2b;       /* coral-orange — the one action colour */
+  --primary-dark: #d54a19;
+  --accent: #e0951f;        /* amber */
+  --sidebar: #ffffff;       /* light rail */
+  --sidebar-muted: #928c82;
+
+  /* Warm neutral ramp — soft stone-grays that sit under white cards. */
+  --n-50:  #f8f7f4;
+  --n-100: #f1efea;
+  --n-200: #e7e3dc;
+  --n-300: #d7d2c9;
+  --n-400: #a9a397;
+  --n-500: #78736a;   /* secondary text (== legacy --muted) */
+  --n-600: #545049;
+  --n-700: #34312c;
   --muted: var(--n-500);
 
   /* Semantic colours — clean, on white. */
-  --success: #16a34a;  --success-bg: #e9f9f0;  --success-border: #b3ecca;  --success-ink: #0b7a43;
-  --danger:  #ef4444;  --danger-bg:  #fdecec;  --danger-border:  #f7bcbc;  --danger-ink:  #c02626;
-  --warning: #f59e0b;  --warning-bg: #fef3e2;  --warning-border: #f8d79a;  --warning-ink: #a3690a;
-  --info:    #3b82f6;  --info-bg:    #eaf2fe;  --info-border:    #bcd6fb;  --info-ink:    #1d5cc4;
+  --success: #16a34a;  --success-bg: #ebf7ef;  --success-border: #bfe8cd;  --success-ink: #0d7a41;
+  --danger:  #e5484d;  --danger-bg:  #fdeded;  --danger-border:  #f6c3c4;  --danger-ink:  #c02a2f;
+  --warning: #e0951f;  --warning-bg: #fbf2e1;  --warning-border: #f2d9a3;  --warning-ink: #96650c;
+  --info:    #3b6fd6;  --info-bg:    #ecf1fc;  --info-border:    #c3d4f5;  --info-ink:    #2452a8;
 
   /* Spacing — 4px base. Use these, not arbitrary px. */
   --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:24px; --s-6:32px; --s-7:48px;
@@ -39,17 +47,17 @@
   /* Type scale — 6 sizes, no half-pixels. */
   --t-xs:11px; --t-sm:12px; --t-md:14px; --t-lg:16px; --t-xl:20px; --t-2xl:28px;
 
-  /* Radius — softer/rounder to match the template's pill-and-card language. */
-  --r-sm:8px;   /* chips, badges, inputs      */
-  --r-md:12px;  /* buttons, list rows         */
-  --r-lg:16px;  /* cards, panels              */
-  --r-xl:22px;  /* modals, drawers            */
+  /* Radius — precise, engineered (tighter than template-round). */
+  --r-sm:6px;   /* chips, badges, inputs      */
+  --r-md:9px;   /* buttons, list rows         */
+  --r-lg:13px;  /* cards, panels              */
+  --r-xl:18px;  /* modals, drawers            */
   --radius: var(--r-lg);  /* legacy alias */
 
-  /* Elevation — 3 steps, soft cool shadow. */
-  --e-1: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.04);
-  --e-2: 0 6px 16px rgba(16,24,40,.08), 0 2px 5px rgba(16,24,40,.04);
-  --e-3: 0 18px 44px rgba(16,24,40,.14), 0 5px 14px rgba(16,24,40,.06);
+  /* Elevation — 3 steps, soft warm shadow. Restraint reads as premium. */
+  --e-1: 0 1px 2px rgba(28,26,23,.04), 0 1px 3px rgba(28,26,23,.03);
+  --e-2: 0 4px 14px rgba(28,26,23,.07), 0 2px 5px rgba(28,26,23,.04);
+  --e-3: 0 16px 40px rgba(28,26,23,.12), 0 5px 14px rgba(28,26,23,.05);
   --shadow: var(--e-1);      /* legacy alias */
   --shadow-lg: var(--e-3);   /* legacy alias */
 
@@ -62,20 +70,21 @@
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
-  /* System UI stack with EXPLICIT Indic coverage — the app renders Telugu (te) &
-     Hindi (hi) transcripts, and these fallbacks (Nirmala UI on Windows, the Noto
-     family on Android/Linux) are already optically tracked for UI. We do NOT ship
-     Inter: it was declared but never loaded, so its negative tracking was making
-     the real (fallback) font look cramped. */
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Nirmala UI',
-    'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Telugu', system-ui, sans-serif;
+  /* Switzer (via --font-ui) with EXPLICIT Indic coverage in the fallback — the
+     app renders Telugu (te) & Hindi (hi) transcripts, so Nirmala UI / Noto stay
+     in the stack. If Fontshare is unreachable, the system stack takes over. */
+  font-family: var(--font-ui);
   /* --app-wallpaper is set by the profile wallpaper picker; falls back to --bg. */
   background: var(--app-wallpaper, var(--bg)); background-attachment: fixed; color: var(--text); font-size: 14px; line-height: 1.5;
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  font-feature-settings: 'ss01', 'cv01';
 }
 a { color: var(--primary); text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
-h1,h2,h3,h4 { margin: 0 0 .2em; font-weight: 700; letter-spacing: -.005em; }
+h1,h2,h3,h4 { margin: 0 0 .2em; font-family: var(--font-display); font-weight: 600; letter-spacing: -.015em; }
+/* Numeric surfaces get tabular figures so columns and KPIs align precisely. */
+.kpi-val, .stat-value, .task-stat-val, .vc-tile-value, .lb-rating-num, .lb-winscore-num,
+.lb-stat-num, .conf-chip-pct, .day-group-count, td, th, .hbar-val { font-variant-numeric: tabular-nums; }
 input, textarea, select {
   font-family: inherit; font-size: 14px; padding: 9px 12px; border: 1px solid var(--border);
   border-radius: 8px; background: #fff; color: var(--text); width: 100%;
@@ -87,9 +96,9 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--n-300); background: var(--n-50); color: var(--n-700); font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
 .btn:hover { background: var(--n-100); border-color: var(--n-400); color: var(--text); }
 .btn:active { transform: translateY(1px); }
-.btn-primary { background: linear-gradient(135deg, #d4631a, var(--primary)); color: #fff; border-color: var(--primary); box-shadow: 0 2px 7px rgba(242,98,46,.28); }
-.btn-primary:hover { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); border-color: var(--primary-dark); box-shadow: 0 5px 14px rgba(242,98,46,.36); transform: translateY(-1px); }
-.btn-primary:active { transform: translateY(0); box-shadow: 0 2px 6px rgba(242,98,46,.3); }
+.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary-dark); box-shadow: 0 1px 2px rgba(239,95,43,.28); }
+.btn-primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); box-shadow: 0 4px 12px rgba(239,95,43,.30); transform: translateY(-1px); }
+.btn-primary:active { transform: translateY(0); box-shadow: 0 1px 2px rgba(239,95,43,.3); }
 .btn-ghost { border-color: transparent; background: transparent; box-shadow: none; }
 .btn-ghost:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); border-color: transparent; }
 .btn-sm { padding: 6px 11px; font-size: 12px; }
@@ -173,7 +182,7 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .sidebar { width: 240px; background: var(--sidebar); color: var(--text); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 20px 14px; position: sticky; top: 0; height: 100vh; flex-shrink: 0; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; }
 .brand-logo { width: 34px; height: 34px; border-radius: 9px; background: #fff; object-fit: cover; flex-shrink: 0; }
-.brand-name { font-weight: 800; font-size: 15px; white-space: nowrap; }
+.brand-name { font-family: var(--font-display); font-weight: 600; font-size: 15px; white-space: nowrap; letter-spacing: -.01em; }
 .brand-sub { font-size: 11px; color: var(--sidebar-muted); }
 .nav { display: flex; flex-direction: column; gap: 6px; flex: 1; margin-top: 8px; }
 .nav a { color: var(--n-600); background: transparent; border: 1px solid transparent; padding: 11px 13px; border-radius: var(--r-md); display: flex; align-items: center; gap: 11px; font-weight: 600; font-size: 13.5px; transition: .12s; }
@@ -242,7 +251,7 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 
 /* ---- stat cards ---- */
 .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
-.stat-value { font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -.02em; }
+.stat-value { font-size: 30px; font-weight: 600; line-height: 1; letter-spacing: -.02em; font-family: var(--font-display); }
 .stat-label { color: var(--muted); font-size: 12.5px; margin-top: 8px; font-weight: 600; }
 .stat-hint { color: var(--muted); font-size: 11px; margin-top: 2px; }
 
@@ -336,7 +345,7 @@ tbody tr:hover { background: var(--n-50); }
 .kpi > div { min-width: 0; }
 /* One uniform colour for every KPI number (the per-card accent still shows in the
    icon chip + side rail). Keep each number on a single line. */
-.kpi-val { font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -.02em; color: var(--text); white-space: nowrap; }
+.kpi-val { font-size: 28px; font-weight: 600; line-height: 1; letter-spacing: -.02em; color: var(--text); white-space: nowrap; font-family: var(--font-display); }
 .kpi-label { font-size: 12px; font-weight: 600; margin-top: 5px; color: var(--muted); white-space: nowrap; }
 
 /* Clickable KPI cards (deep-link to the matching Tasks view) */
@@ -433,18 +442,21 @@ tbody tr:hover { background: var(--n-50); }
 .auth-brand {
   position: relative; display: flex; flex-direction: column; justify-content: space-between;
   padding: var(--s-7) var(--s-6); color: #fff; overflow: hidden;
-  background: linear-gradient(150deg, #201a16 0%, #8f3d0a 62%, #f2622e 100%);
+  background:
+    linear-gradient(0deg, rgba(255,255,255,.028) 1px, transparent 1px) 0 0 / 100% 44px,
+    linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px) 0 0 / 44px 100%,
+    linear-gradient(155deg, #17120e 0%, #35210f 38%, #7a350f 72%, #b34817 100%);
 }
 /* soft warm bloom, not a gimmick — adds depth without motion */
 .auth-brand::after {
   content: ''; position: absolute; right: -18%; top: -12%; width: 60%; aspect-ratio: 1;
-  background: radial-gradient(circle, rgba(212,160,23,.20) 0%, transparent 68%); pointer-events: none;
+  background: radial-gradient(circle, rgba(224,149,31,.22) 0%, transparent 66%); pointer-events: none;
 }
 .auth-brand-top { display: flex; align-items: center; gap: var(--s-3); position: relative; z-index: 1; }
 .auth-brand-logo { width: 40px; height: 40px; border-radius: var(--r-md); object-fit: contain; background: #fff; padding: 4px; }
-.auth-brand-name { font-size: var(--t-xl); font-weight: 800; letter-spacing: -.01em; }
+.auth-brand-name { font-family: var(--font-display); font-size: var(--t-xl); font-weight: 600; letter-spacing: -.015em; }
 .auth-brand-body { position: relative; z-index: 1; max-width: 460px; }
-.auth-headline { font-size: clamp(26px, 3vw, 36px); line-height: 1.12; font-weight: 800; letter-spacing: -.02em; margin: 0 0 var(--s-4); }
+.auth-headline { font-family: var(--font-display); font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; font-weight: 600; letter-spacing: -.025em; margin: 0 0 var(--s-4); }
 .auth-sub { font-size: var(--t-lg); line-height: 1.6; color: rgba(255,255,255,.82); margin: 0 0 var(--s-5); }
 .auth-trust { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-3); }
 .auth-trust li { display: flex; align-items: center; gap: var(--s-3); font-size: var(--t-md); font-weight: 500; color: rgba(255,255,255,.92); }
@@ -467,7 +479,10 @@ tbody tr:hover { background: var(--n-50); }
    is reserved for the primary sign-in. `--panda` / `login-stage` remain as inert
    aliases so those pages keep working unchanged. */
 .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: var(--s-5);
-  background: linear-gradient(150deg, #201a16 0%, #8f3d0a 62%, #f2622e 100%); }
+  background:
+    linear-gradient(0deg, rgba(255,255,255,.028) 1px, transparent 1px) 0 0 / 100% 44px,
+    linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px) 0 0 / 44px 100%,
+    linear-gradient(155deg, #17120e 0%, #35210f 38%, #7a350f 72%, #b34817 100%); }
 .login-stage { position: relative; width: 100%; max-width: 420px; }
 .login-card { background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--e-3); padding: var(--s-6); width: 100%; max-width: 420px; }
 .login-card h1 { font-size: var(--t-xl); }
@@ -1262,6 +1277,16 @@ tbody tr:hover { background: var(--n-50); }
 .search-active-clear { border: none; background: transparent; color: var(--primary); font-size: 14px; line-height: 1; cursor: pointer; padding: 9px 11px 9px 6px; flex-shrink: 0; }
 .search-active-clear:hover { color: var(--primary-dark); }
 .meetings-actions { margin-left: auto; } /* right-aligned on desktop; centered on phones (see below) */
+
+/* ---- Meetings (hero) cards — stronger hierarchy + hover-reveal accent ---- */
+.meeting-card { position: relative; overflow: hidden; transition: transform .16s ease, box-shadow .18s ease, border-color .16s ease; }
+.meeting-card::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: linear-gradient(90deg, var(--primary), var(--accent)); opacity: 0; transition: opacity .2s ease; }
+.meeting-card:hover { transform: translateY(-3px); box-shadow: var(--e-2); border-color: var(--border-strong); }
+.meeting-card:hover::before { opacity: 1; }
+.meeting-card h3 { font-family: var(--font-display); letter-spacing: -.01em; }
+.meeting-engine { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; color: var(--primary); background: color-mix(in srgb, var(--primary) 9%, var(--surface)); border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border)); }
+.meeting-review { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; color: var(--warning-ink); background: var(--warning-bg); border: 1px solid var(--warning-border); }
+.meeting-tasks { font-size: 12.5px; font-weight: 700; color: var(--n-600); }
 .comment { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--n-100); }
 .comment .body { background: var(--n-50); border-radius: 10px; padding: 8px 12px; flex: 1; }
 
