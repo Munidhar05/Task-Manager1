@@ -40,3 +40,16 @@ Keep the orange accent as identity but stop using it "everywhere".
 - P1: Deeper polish of Admin (Control Center) & Platform pages, Chat, Task drawer.
 - P2: Dashboard KPI cards — optionally calm the radial wash further.
 - P2: Empty/loading/skeleton states audit across every page.
+
+## Google Sign-In (2026-06 — added)
+- Enabled the app's existing GIS + `google-auth-library` flow by configuring the Web
+  OAuth Client ID (`GOOGLE_CLIENT_ID` / `VITE_GOOGLE_CLIENT_ID`).
+- Changed `POST /api/auth/google` from login-only to ALSO auto-create a personal
+  (solo) workspace for first-time Google users (org-of-one, manager role, verified,
+  empty password_hash). Existing users still just log in. Returns 201 on create.
+- Same endpoint serves web + Android; `capacitor.config.ts` GoogleAuth plugin enabled,
+  serverClientId read from `VITE_GOOGLE_CLIENT_ID`.
+- Verified: button renders with correct client id; endpoint returns 401 on bogus
+  token (verifying) instead of 501. Real OAuth popup needs human click to fully test.
+- Android still needs: separate Android OAuth client (SHA-1) → `GOOGLE_CLIENT_IDS_EXTRA`,
+  plus install `@codetrix-studio/capacitor-google-auth` + `npx cap sync android`.
