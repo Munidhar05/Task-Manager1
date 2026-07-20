@@ -89,11 +89,11 @@ export default function Meetings() {
       </div>
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
         {meetings.map((m) => (
-          <div key={m.id} className="card clickable" onClick={() => nav('/meetings/' + m.id)}>
+          <div key={m.id} className="card clickable meeting-card" onClick={() => nav('/meetings/' + m.id)}>
             <div className="card-pad">
               <div className="spread">
                 <h3 style={{ fontSize: 15 }}>{m.title}</h3>
-                <span className="badge" style={{ background: '#fbe9d6', color: '#f2622e' }}>{m.engine}</span>
+                <span className="meeting-engine"><Ic name="ai" size={11} /> {m.engine}</span>
               </div>
               <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{(m.meeting_date || '').slice(0, 10)}</div>
               <p className="muted" style={{ fontSize: 13, marginTop: 10, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -103,9 +103,9 @@ export default function Meetings() {
                 <span className="tag-list">
                   {(m.detected_languages || []).map((l: string) => <span key={l} className="lang-tag">{LANG_LABEL[l] || l}</span>)}
                 </span>
-                <strong style={{ fontSize: 13 }}>
-                  {m.pending_count ? <span style={{ color: '#f2622e' }}>{m.pending_count} pending review</span> : `${m.task_count} tasks`}
-                </strong>
+                {m.pending_count
+                  ? <span className="meeting-review">{m.pending_count} pending review</span>
+                  : <span className="meeting-tasks">{m.task_count} tasks</span>}
               </div>
               {isManager && (
                 <div className="row" style={{ gap: 6, marginTop: 12 }} onClick={(e) => e.stopPropagation()}>
