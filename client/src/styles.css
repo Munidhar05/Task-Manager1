@@ -1360,9 +1360,30 @@ tbody tr:hover { background: var(--n-50); }
   .modal .split-part > .split-part-who { flex: 1 1 auto; max-width: none; }
   .modal .split-part > .btn { flex: 0 0 auto; }
 
-  /* dashboard: let the overdue table scroll inside its card rather than the page */
-  .pbi-overdue .pbi-scroll { overflow-x: auto; }
-  .pbi-overdue table { min-width: 420px; }
+  /* Dashboard overdue list: this was a 3-column table pinned to min-width 420px
+     inside a ~330px card, so the due date sat off the right edge behind a
+     horizontal scroll. Stack each row instead, the way the Tasks list already
+     does on phones:
+       line 1: title
+       line 2: assignee ................. due  */
+  .pbi-overdue table { min-width: 0; }
+  .pbi-overdue tbody tr {
+    display: grid; grid-template-columns: 1fr auto;
+    align-items: baseline; column-gap: 10px; row-gap: 3px;
+    padding: 11px 14px;
+  }
+  .pbi-overdue tbody tr + tr { border-top: 1px solid var(--border); }
+  .pbi-overdue tbody td { border: 0; padding: 0; min-width: 0; }
+  .pbi-overdue tbody td:first-child { grid-column: 1 / -1; }
+  /* A long name ellipsis-truncates rather than shoving the due date off. */
+  .pbi-overdue tbody td:nth-child(2) {
+    justify-self: start; max-width: 100%; font-size: 12.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pbi-overdue tbody td:nth-child(3) { justify-self: end; font-size: 12.5px; white-space: nowrap; }
+  /* The card is titled "Overdue tasks" and the date is already red, so the word
+     is redundant here — and it's what pushed the date past the edge. */
+  .pbi-overdue .due-overdue { display: none; }
 }
 
 /* belt-and-suspenders: never let any page scroll sideways in the app shell */
