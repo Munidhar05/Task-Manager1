@@ -30,3 +30,11 @@ client/android/keystore.properties
 # Play Store listing assets (screenshots, feature graphic, store icon).
 # Marketing artefacts regenerated from the app, not source — kept out of the repo.
 play-screenshots/
+
+# Keys and service-account files — never commit. (The .env rules above are
+# deliberately specific: client/.env.production IS committed, so no blanket
+# .env glob here.)
+credentials.json
+*.pem
+*.key
+.credentials
