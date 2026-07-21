@@ -1208,6 +1208,20 @@ tbody tr:hover { background: var(--n-50); }
 /* small unread marker on the right of a row */
 .notif-unread-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-top: 6px; }
 
+/* Notifications dropdown, hung under the bell and aligned to its right edge. */
+.notif-panel {
+  position: absolute; right: 0; top: calc(100% + 8px);
+  width: 330px; max-height: 420px; overflow-y: auto;
+  z-index: 100; box-shadow: 0 10px 30px rgba(0, 0, 0, .15);
+}
+/* On phones the bell is ~60px in from the screen edge (the profile avatar sits
+   to its right), so a 330px panel anchored to it hangs off the LEFT edge —
+   29px of it at 360px wide. Shift it out over that unused gutter, and let it
+   shrink on very narrow devices so it always stays fully on screen. */
+@media (max-width: 420px) {
+  .notif-panel { right: -44px; width: min(330px, calc(100vw - 20px)); }
+}
+
 /* Clickable notification rows open their related task / chat */
 .notif-item.actionable { cursor: pointer; transition: background .12s ease; }
 .notif-item.actionable:hover { background: var(--bg) !important; }
