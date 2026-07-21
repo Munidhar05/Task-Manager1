@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Task } from '../api'
 import { useAuth } from '../auth'
-import { Bar, PriorityBadge, Avatar, EmptyState, Ic, dueLabel, STATUS_COLORS } from '../ui'
+import { Bar, PriorityBadge, Avatar, EmptyState, Ic, dueLabel, STATUS_COLORS, Donut, PRIORITY_COLORS } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskOriginBadge, { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { presetRange, todayYmd, ReportRange, downloadManagerReport } from '../report'
@@ -446,6 +446,11 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
     </div>
   )
   const maxWl = Math.max(...data.workload.map((w: any) => w.open_count), 1)
+  // Open (not Done) tasks per priority — the server already returns the four
+  // levels in Critical→Low order, so the ring and legend share one array.
+  const donutData = data.by_priority.map((p: any) => ({ label: p.priority, value: p.count, color: PRIORITY_COLORS[p.priority] }))
+  // Clicking a slice or a legend row drills into that priority's open tasks.
+  const openPriority = (label: string) => navigate(`/tasks?priority=${encodeURIComponent(label)}&view=active`)
   return (
     <div className="pbi" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
       {toolbar}
@@ -499,6 +504,33 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: showAllWorkload ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
               </button>
             )}
+          </div>
+        </div>
+
+        <div className="pbi-card">
+          <div className="pbi-head"><h3>Open by priority</h3></div>
+          <div className="pbi-scroll pbi-donut-wrap">
+            <Donut data={donutData} size={140} onSegmentClick={openPriority} />
+            <div className="pbi-legend">
+              {donutData.map((p: any) => {
+                const clickable = p.value > 0
+                return (
+                  <div
+                    key={p.label}
+                    className={'lg' + (clickable ? ' clickable' : '')}
+                    onClick={clickable ? () => openPriority(p.label) : undefined}
+                    role={clickable ? 'button' : undefined}
+                    tabIndex={clickable ? 0 : undefined}
+                    onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPriority(p.label) } } : undefined}
+                    title={clickable ? `Open ${p.label} tasks (${p.value})` : undefined}
+                  >
+                    <span className="dot" style={{ background: p.color }} />
+                    <span>{p.label}</span>
+                    <b>{p.value}</b>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
 
