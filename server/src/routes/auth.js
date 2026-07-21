@@ -117,12 +117,12 @@ r.post('/login', (req, res) => {
   res.json({ token: signToken(user), user: userWithWorkspace(user) })
 })
 
-// GOOGLE SIGN-IN. The client obtains a Google ID token — from the Identity
-// Services button on the web, or the native plugin on Android — and posts it here.
-// We verify the token with Google, then: (a) log in the EXISTING account whose
-// email matches, or (b) AUTO-CREATE a new personal (solo) workspace for a
-// first-time Google user (an org-of-one where they are the manager). On first
-// Google login we stamp google_id and mark the email verified (Google vouched).
+// GOOGLE SIGN-IN (login-only). The client obtains a Google ID token — from the
+// Identity Services button on the web, or the native plugin on mobile — and posts
+// it here. We verify the token with Google, then log in the EXISTING account whose
+// email matches. We deliberately never create an org/account from Google: unknown
+// emails are told to sign up or ask for an invite. On first Google login we stamp
+// the user's google_id and mark their email verified (Google already vouched for it).
 r.post('/google', async (req, res) => {
   if (!GOOGLE_CLIENT_ID) {
     return res.status(501).json({ error: 'Google Sign-In is not configured on the server.' })
@@ -146,46 +146,13 @@ r.post('/google', async (req, res) => {
     return res.status(401).json({ error: 'Your Google account has no verified email address.' })
   }
 
-  let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
-  let created = false
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
   if (!user) {
-    // First-time Google user, no existing account → auto-provision a personal
-    // (solo) workspace: org-of-one + default departments + a manager account.
-    // Mirrors the `personal` branch of /signup. Same endpoint serves web & native,
-    // so account creation works identically on Android. password_hash is left
-    // empty (password login stays disabled until they set one via reset).
-    const fullName = String(payload?.name || '').trim() || (email.split('@')[0] || 'New user')
-    const workspaceName = `${(fullName.split(' ')[0] || fullName)}'s workspace`
-    const provision = db.transaction(() => {
-      const orgId = id('org')
-      db.prepare('INSERT INTO organizations (id, name, is_personal, allowed_domains, created_at) VALUES (?,?,?,?,?)')
-        .run(orgId, workspaceName, 1, null, now())
-      let mgmtDeptId = null
-      for (const dept of DEFAULT_DEPARTMENTS) {
-        const did = id('dep')
-        db.prepare('INSERT INTO departments (id, org_id, name) VALUES (?,?,?)').run(did, orgId, dept)
-        if (dept === 'Management') mgmtDeptId = did
-      }
-      const uid = id('usr')
-      db.prepare(`INSERT INTO users
-        (id, org_id, department_id, name, email, password_hash, role, aliases, preferred_language, avatar_color, google_id, email_verified, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        uid, orgId, mgmtDeptId, fullName, email, '', 'manager', '', 'en', '#6366f1', payload.sub, 1, now())
-      return db.prepare('SELECT * FROM users WHERE id = ?').get(uid)
-    })
-    try { user = provision() }
-    catch (err) {
-      console.error('[auth] google signup failed:', err.message)
-      // Race: account created between the lookup and the insert — fall back to it.
-      if (String(err.message).includes('UNIQUE')) user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
-      if (!user) return res.status(500).json({ error: 'Could not create your account. Please try again.' })
-    }
-    created = true
-    audit(user.org_id, user.id, 'account.signup_google', 'organization', user.org_id, workspaceName)
+    // Login-only: no account, no auto-provisioning.
+    return res.status(404).json({ error: 'No account found for this Google email. Ask an admin for an invite, or sign up first.' })
   }
 
-  // First-time link on an EXISTING account: stamp the Google id and trust Google's
-  // verified email. (Auto-created accounts already have both set.)
+  // First-time link: stamp the Google id and trust Google's verified email.
   if (!user.google_id) {
     db.prepare('UPDATE users SET google_id = ? WHERE id = ?').run(payload.sub, user.id)
     user.google_id = payload.sub
@@ -201,8 +168,8 @@ r.post('/google', async (req, res) => {
     user.platform_admin = isPlatform
   }
 
-  audit(user.org_id, user.id, created ? 'auth.signup_google' : 'auth.login_google', 'user', user.id)
-  res.status(created ? 201 : 200).json({ token: signToken(user), user: userWithWorkspace(user) })
+  audit(user.org_id, user.id, 'auth.login_google', 'user', user.id)
+  res.json({ token: signToken(user), user: userWithWorkspace(user) })
 })
 
 r.get('/me', authRequired, (req, res) => {

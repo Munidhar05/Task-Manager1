@@ -166,7 +166,7 @@ export default function NotificationBell() {
         )}
       </button>
       {open && (
-        <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 330, maxHeight: 420, overflowY: 'auto', zIndex: 100, boxShadow: '0 10px 30px rgba(0,0,0,.15)' }}>
+        <div className="card notif-panel">
           <div className="card-head spread">
             <h3 style={{ fontSize: 14, margin: 0 }}>Notifications</h3>
             <button

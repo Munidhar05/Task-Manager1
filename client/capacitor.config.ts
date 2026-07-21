@@ -21,20 +21,16 @@ const config: CapacitorConfig = {
   // (No config needed; the web build falls back to speechSynthesis. See
   // docs/VOICE_ASSISTANT_SETUP.md.)
   //
-  // Native Google Sign-In (@codetrix-studio/capacitor-google-auth). serverClientId
-  // MUST be your WEB OAuth client id (same value as the backend's GOOGLE_CLIENT_ID);
-  // it is read from VITE_GOOGLE_CLIENT_ID so nothing is hardcoded. To finish Android:
-  //   npm install @codetrix-studio/capacitor-google-auth && npx cap sync android
-  // and add your Android OAuth client (package io.smarttask.app + signing SHA-1) in
-  // Google Cloud, listing that Android client id in the backend's GOOGLE_CLIENT_IDS_EXTRA.
-  // See docs/GOOGLE_SIGNIN_SETUP.md.
-  plugins: {
-    GoogleAuth: {
-      scopes: ['profile', 'email'],
-      serverClientId: process.env.VITE_GOOGLE_CLIENT_ID || '',
-      forceCodeForRefreshToken: false,
-    },
-  },
+  // Native Google Sign-In (@codetrix-studio/capacitor-google-auth). Uncomment and
+  // set serverClientId to your WEB OAuth client id (the same value as the backend's
+  // GOOGLE_CLIENT_ID) once the plugin is installed. See docs/GOOGLE_SIGNIN_SETUP.md.
+  // plugins: {
+  //   GoogleAuth: {
+  //     scopes: ['profile', 'email'],
+  //     serverClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+  //     forceCodeForRefreshToken: false,
+  //   },
+  // },
 }
 
 export default config
