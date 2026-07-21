@@ -30,10 +30,3 @@ client/android/keystore.properties
 # Play Store listing assets (screenshots, feature graphic, store icon).
 # Marketing artefacts regenerated from the app, not source — kept out of the repo.
 play-screenshots/
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials

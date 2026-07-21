@@ -52,12 +52,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), dropWakeWordAssets(wakeWord)],
     server: {
-      port: 3000,
-      host: true,
-      allowedHosts: true,
+      port: 5173,
       proxy: {
         '/api': {
-          target: 'http://localhost:8001',
+          target: 'http://localhost:4000',
           changeOrigin: true,
           ws: true, // forward the /api/meetings/live WebSocket upgrade to the backend
         },

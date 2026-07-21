@@ -492,7 +492,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                     {overloaded && <span style={{ color: 'var(--danger)', display: 'inline-flex' }} title="Overloaded"><Ic name="warning" size={12} /></span>}
                   </span>
                   <span className="hbar-track">
-                    <span className="hbar-fill" style={{ width: `${pct}%`, background: overloaded ? 'var(--danger)' : 'var(--n-400)' }} />
+                    <span className="hbar-fill" style={{ width: `${pct}%`, background: overloaded ? '#ef4444' : '#f2622e' }} />
                   </span>
                   <span className="hbar-val">{w.open_count}</span>
                 </div>
