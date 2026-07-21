@@ -1113,8 +1113,9 @@ tbody tr:hover { background: var(--n-50); }
    three quick chips split the row evenly so none (e.g. Completed) overflows. */
 @media (max-width: 720px) {
   .viewbar { margin-left: 12px; }                 /* nudge List/Board + Active to the right */
-  .viewbar .chip { min-height: 44px; }            /* match the .seg toggle height */
-  .chips-quick .chip { flex: 1 1 0; min-width: 0; padding: 4px 5px; font-size: 10.5px; min-height: 34px; }
+  /* Heights come from --ctl-h (see "Toolbar control system") so the toggle and
+     the chip stay locked together; only the 3-across quick chips opt out. */
+  .chips-quick .chip { flex: 1 1 0; min-width: 0; height: 34px; padding: 0 5px; font-size: 10.5px; }
   .chips-quick .chip-count { margin-left: 3px; }
 }
 /* Tasks quick-view stat cards (match the template's stat row; also act as filters). */
@@ -1258,6 +1259,160 @@ tbody tr:hover { background: var(--n-50); }
 .search-box input { border: none !important; background: transparent; padding: 9px 0; min-width: 200px; outline: none; }
 .search-box-clear { border: none; background: transparent; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer; padding: 4px; border-radius: 6px; flex-shrink: 0; }
 .search-box-clear:hover { color: var(--primary); background: var(--bg); }
+
+/* ===== Toolbar control system ==============================================
+   Search, Sort, Filter, the List/Board toggle and the quick chips had grown
+   four different heights (40 / 38 / 30 / 27px) and four different radii
+   (10 / 11 / 9 / 999px), which is what made the toolbar read as unaligned.
+   They now share one height, one radius, and one glow language: a warm coral
+   halo that stays quiet at rest, lifts on hover, and burns brightest on the
+   selected control so the active filter is the obvious focal point.
+   The glow recipe — layered outer halo + inset hot edge + text shadow + the
+   pooled reflection underneath — is adapted from the Uiverse glow button,
+   retuned from its neon purple to the brand coral and dialled back to
+   something that can sit in a work tool all day. */
+:root {
+  --ctl-h: 38px;                          /* one height for every control */
+  --ctl-r: 11px;                          /* one radius                   */
+  --glow: rgb(255, 158, 116);             /* the warm coral halo          */
+  --glow-spread: rgba(242, 98, 46, .48);  /* the wide, diffuse bloom      */
+  --glow-bright: rgb(255, 219, 205);      /* the hot inner edge           */
+}
+
+/* One shell for every toolbar control. */
+.icon-btn,
+.sortmenu-btn,
+.viewbar .seg,
+.viewbar .chip {
+  height: var(--ctl-h);
+  border-radius: var(--ctl-r);
+  box-sizing: border-box;
+  transition: color .18s, background .18s, border-color .18s,
+              box-shadow .22s, transform .12s;
+}
+.icon-btn { width: var(--ctl-h); }
+
+/* The desktop filter dropdowns and the primary action belong to the same row,
+   so they get the same height, radius and baseline as everything else — they
+   were 41px/8px and 30px/9px against everyone else's 38px/11px, sitting on
+   three different baselines. */
+.toolbar select,
+.toolbar .btn,
+.toolbar-newtask {
+  height: var(--ctl-h);
+  border-radius: var(--ctl-r);
+  box-sizing: border-box;
+}
+.toolbar select { padding: 0 34px 0 12px; }
+.toolbar .btn, .toolbar-newtask { padding: 0 16px; }
+/* `.icon-btn` sets display:inline-flex and is declared after `.toolbar-filterbtn`,
+   so it was overriding the hide and leaking the mobile-only filter button onto
+   desktop, right beside the three dropdowns it stands in for. */
+.toolbar-filterbtn { display: none; }
+@media (max-width: 720px) { .toolbar-filterbtn { display: inline-flex; } }
+
+/* Rest — quiet, but all on the same warm axis. */
+.icon-btn,
+.sortmenu-btn {
+  border: 1px solid var(--n-300);
+  background: var(--n-50);
+  color: var(--text);
+  box-shadow: var(--e-1);
+}
+.toolbar select:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.toolbar select:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 .5em .01em color-mix(in srgb, var(--glow) 50%, transparent),
+              0 0 1.4em .2em color-mix(in srgb, var(--glow-spread) 55%, transparent);
+}
+
+/* Hover — the halo lifts. */
+.icon-btn:hover,
+.sortmenu-btn:hover,
+.viewbar .chip:not(.active):hover {
+  color: var(--primary);
+  background: #fff;
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow:
+    0 0 .5em .01em color-mix(in srgb, var(--glow) 55%, transparent),
+    0 0 1.5em .22em color-mix(in srgb, var(--glow-spread) 60%, transparent);
+}
+.icon-btn:active,
+.sortmenu-btn:active,
+.viewbar .chip:active,
+.seg-btn:active { transform: translateY(1px); }
+
+/* The segmented toggle: a recessed track with a lit pill riding in it. */
+.viewbar .seg {
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--primary) 14%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, rgba(16, 24, 40, .045));
+}
+.seg-btn {
+  border-radius: calc(var(--ctl-r) - 3px);
+  padding: 0 13px;
+  height: 100%;
+  transition: color .18s, background .18s, box-shadow .22s;
+}
+.seg-btn.active {
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, .10),
+    0 0 .5em .01em color-mix(in srgb, var(--glow) 42%, transparent);
+}
+
+/* The selected chip carries the full glow — it is the one control that says
+   which slice of the list you are looking at. */
+.viewbar .chip { position: relative; padding: 0 15px; box-shadow: var(--e-1); }
+.viewbar .chip.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: color-mix(in srgb, var(--glow) 65%, var(--primary));
+  text-shadow: 0 0 .5em color-mix(in srgb, var(--glow-bright) 75%, transparent);
+  box-shadow:
+    0 0 .55em .04em var(--glow),
+    0 0 1.9em .32em var(--glow-spread),
+    inset 0 0 .55em .08em color-mix(in srgb, var(--glow-bright) 50%, transparent);
+}
+/* The pooled reflection under the button, from the original recipe. */
+.viewbar .chip.active::after {
+  content: ""; pointer-events: none; position: absolute;
+  left: 0; top: 116%; width: 100%; height: 100%;
+  background: var(--glow-spread);
+  filter: blur(1.3em); opacity: .5;
+  transform: perspective(1.5em) rotateX(35deg) scale(1, .48);
+}
+/* Count reads as a badge on the lit chip rather than dimmed text. */
+.viewbar .chip.active .chip-count {
+  opacity: 1; margin-left: 8px; padding: 1px 7px;
+  border-radius: 999px; background: rgba(255, 255, 255, .22);
+}
+.viewbar .chip.danger.active {
+  border-color: color-mix(in srgb, #fca5a5 65%, #ef4444);
+  box-shadow:
+    0 0 .55em .04em rgb(252, 165, 165),
+    0 0 1.9em .32em rgba(239, 68, 68, .45),
+    inset 0 0 .55em .08em rgba(254, 226, 226, .5);
+}
+.viewbar .chip.danger.active::after { background: rgba(239, 68, 68, .45); }
+
+/* The primary action picks up the same halo on hover, so the toolbar reads as
+   one family rather than a glowing chip next to a flat button. */
+.toolbar-newtask:hover {
+  box-shadow:
+    0 0 .5em .02em color-mix(in srgb, var(--glow) 60%, transparent),
+    0 0 1.6em .26em var(--glow-spread);
+}
+
+/* Touch targets grow on phones — every control follows the same variable. */
+@media (max-width: 720px) {
+  :root { --ctl-h: 42px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn, .sortmenu-btn, .viewbar .seg, .viewbar .chip, .seg-btn { transition: none; }
+}
 
 /* Search dialog (opened from the toolbar search icon) */
 .search-dialog { width: 440px; max-width: 94vw; }
