@@ -1253,6 +1253,15 @@ tbody tr:hover { background: var(--n-50); }
 .sortmenu-item:hover { background: var(--bg); }
 .sortmenu-item.active { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-weight: 700; }
 .sortmenu-check { color: var(--primary); flex-shrink: 0; }
+/* Direction arrow, on the button and on the active row. Tapping the active row
+   reverses it, so the arrow has to be visible to make that discoverable. */
+.sortmenu-dir { color: var(--primary); font-weight: 800; font-size: 13px; line-height: 1; flex-shrink: 0; }
+/* Each option says what it will actually do ("soonest first"), so you don't have
+   to pick one to find out. */
+.sortmenu-item-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sortmenu-item-hint { font-size: 11px; font-weight: 500; color: var(--muted); }
+.sortmenu-item.active .sortmenu-item-hint { color: color-mix(in srgb, var(--primary) 72%, var(--muted)); }
+.sortmenu-pop { min-width: 220px; }
 
 /* Mobile-only Filters button (desktop shows the inline filter dropdowns instead).
    The dot badge shows how many filters are currently applied. */
