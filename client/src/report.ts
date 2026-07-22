@@ -74,7 +74,7 @@ export async function downloadManagerReport(range: ReportRange, orgName = 'Befac
     `<table><thead><tr><th>Task</th><th>Assignee</th><th>Due date</th></tr></thead>
     <tbody>${rows(d.overdue_tasks, (t: any) => [esc(t.title), esc(t.assignee_name || 'Unassigned'), `<span class="overdue">${esc(t.due_date || '—')}</span>`])}</tbody></table>`}
 
-  <div class="foot">Befach · AI Execution Platform</div>
+  <div class="foot">VoTask · AI Execution Platform</div>
 </body></html>`
 
   const w = window.open('', '_blank')

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth'
 import PasswordStrength from '../components/PasswordStrength'
@@ -24,7 +24,7 @@ export default function Signup() {
   const { signup } = useAuth()
   const navigate = useNavigate()
   // 'company' = team workspace (current flow); 'personal' = a solo user managing
-  // their own tasks (an org of one — no company name needed).
+  // their own tasks (an org of one â€” no company name needed).
   const [mode, setMode] = useState<'company' | 'personal'>('company')
   const [company, setCompany] = useState('')
   const [name, setName] = useState('')
@@ -41,7 +41,7 @@ export default function Signup() {
     setErr('')
     if (!personal && !company.trim()) { setErr('Please enter your company name.'); return }
     if (password.length < 8) { setErr('Password must be at least 8 characters.'); return }
-    if (isCommonPassword(password)) { setErr('That password is too common — please choose a stronger one.'); return }
+    if (isCommonPassword(password)) { setErr('That password is too common â€” please choose a stronger one.'); return }
     if (!passwordStrength(password).ok) { setErr('Please choose a stronger password (mix letters, numbers & symbols).'); return }
     setBusy(true)
     try {
@@ -61,7 +61,7 @@ export default function Signup() {
               <div className="brand-name" style={{ color: '#16191d' }}>{personal ? 'Create your account' : 'Create your company'}</div>
               <div className="muted" style={{ fontSize: 12 }}>{personal ? 'Track and manage your own tasks' : "Set up your team's task workspace"}</div>
             </div>
-            <img src="/logo.png" alt="Befach" className="brand-logo-img" />
+            <img src="/logo.png" alt="VoTask" className="brand-logo-img" />
           </div>
 
           {/* Choose: a team company, or a personal (solo) workspace. */}

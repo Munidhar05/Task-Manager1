@@ -80,6 +80,10 @@ export interface Task {
   status: string; due_date?: string; due_date_raw?: string; progress: number; category?: string | null
   ownership_confidence: string; approval_status: string; source_quote?: string
   assignee?: User; assignedBy?: User; assignee_name_raw?: string; assigned_by_name_raw?: string
+  // Raw owner columns (hydrate() spreads the row, so these come through too).
+  // Needed to tell "I raised this for myself" — which needs no manager sign-off
+  // to complete or delete — from work someone else handed over.
+  assignee_id?: string | null; assigned_by_id?: string | null
   project?: { id: string; name: string }; meeting_id?: string
   assigned_at?: string; submitted_at?: string; completed_at?: string; created_at?: string; updated_at?: string
   visible_to_manager?: number; parent_task_id?: string | null

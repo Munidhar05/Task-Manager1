@@ -118,8 +118,15 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     <div className="overlay" onClick={onClose}><div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Loading task" onClick={(e) => e.stopPropagation()}><div className="card-pad" style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div></div></div>
   )
   const isManager = user?.role !== 'employee'
-  // Managers can delete anything; an employee can delete only their own private draft.
-  const canDelete = isManager || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
+  // A task you raised for yourself: yours to finish or bin, no manager sign-off.
+  // Mirrors isOwnSelfCreated() on the server, which enforces it — split parts and
+  // work reassigned onto you came from someone else's plan and keep the approval
+  // flow. The server is the authority here; this only decides what to render.
+  const isOwnWork = !!user
+    && !task.parent_task_id && !task.reassigned_at
+    && task.assignee?.id === user.id && task.assigned_by_id === user.id
+  // Managers can delete anything; everyone else, only what they made for themselves.
+  const canDelete = isManager || isOwnWork || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
   // The task owner (or a manager) can split a top-level task into shared parts.
   const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
   const subs = task.subtasks || []
@@ -272,6 +279,32 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
                     </button>
                     <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingStatus(task.status)}>Cancel</button>
                   </div>
+                )}
+              </>
+            ) : isOwnWork ? (
+              /* Your own task: the same direct control a manager gets, minus the
+                 approval states — there is nobody to submit it to. */
+              <>
+                <div className="row wrap">
+                  {['To Do', 'In Progress', 'Blocked', 'Done'].map((s) => (
+                    <button key={s} className={'btn btn-sm' + (pendingStatus === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setPendingStatus(s)}>{s}</button>
+                  ))}
+                </div>
+                {pendingStatus !== task.status && (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setStatus(pendingStatus)}>
+                      {busy ? <span className="spinner" /> : `✓ Accept change → ${pendingStatus}`}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingStatus(task.status)}>Cancel</button>
+                  </div>
+                )}
+                {task.status !== 'Done' && (
+                  <>
+                    <button className="btn btn-primary" style={{ marginTop: 10, width: '100%' }} disabled={busy} onClick={() => setStatus('Done')}>
+                      {busy ? <span className="spinner" /> : '✓ Mark as complete'}
+                    </button>
+                    <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>You created this task for yourself — completing it needs no approval.</p>
+                  </>
                 )}
               </>
             ) : task.status === 'Done' ? (

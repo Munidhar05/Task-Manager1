@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+﻿import React, { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
@@ -36,7 +36,7 @@ export default function AcceptInvite() {
     e.preventDefault()
     setErr('')
     if (password.length < 8) { setErr('Password must be at least 8 characters.'); return }
-    if (isCommonPassword(password)) { setErr('That password is too common — please choose a stronger one.'); return }
+    if (isCommonPassword(password)) { setErr('That password is too common â€” please choose a stronger one.'); return }
     if (!passwordStrength(password).ok) { setErr('Please choose a stronger password (mix letters, numbers & symbols).'); return }
     setBusy(true)
     try {
@@ -53,10 +53,10 @@ export default function AcceptInvite() {
             <div>
               <div className="brand-name" style={{ color: '#16191d' }}>{info ? `Join ${info.org_name}` : 'Accept invitation'}</div>
               <div className="muted" style={{ fontSize: 12 }}>
-                {info ? `Invited as ${info.role} · ${info.email}` : 'Set up your account'}
+                {info ? `Invited as ${info.role} Â· ${info.email}` : 'Set up your account'}
               </div>
             </div>
-            <img src="/logo.png" alt="Befach" className="brand-logo-img" />
+            <img src="/logo.png" alt="VoTask" className="brand-logo-img" />
           </div>
 
           {loading && <div style={{ display: 'grid', placeItems: 'center', padding: 24 }}><span className="spinner" /></div>}

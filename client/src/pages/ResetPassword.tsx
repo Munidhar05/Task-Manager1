@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import PasswordStrength from '../components/PasswordStrength'
@@ -23,7 +23,7 @@ export default function ResetPassword() {
     setErr('')
     if (!token) { setErr('This reset link is missing its token.'); return }
     if (password.length < 8) { setErr('Password must be at least 8 characters.'); return }
-    if (isCommonPassword(password)) { setErr('That password is too common — please choose a stronger one.'); return }
+    if (isCommonPassword(password)) { setErr('That password is too common â€” please choose a stronger one.'); return }
     if (!passwordStrength(password).ok) { setErr('Please choose a stronger password (mix letters, numbers & symbols).'); return }
     setBusy(true)
     try { await api.post('/auth/reset-password', { token, password }); setDone(true) }
@@ -39,7 +39,7 @@ export default function ResetPassword() {
               <div className="brand-name" style={{ color: '#16191d' }}>Choose a new password</div>
               <div className="muted" style={{ fontSize: 12 }}>Pick something you'll remember</div>
             </div>
-            <img src="/logo.png" alt="Befach" className="brand-logo-img" />
+            <img src="/logo.png" alt="VoTask" className="brand-logo-img" />
           </div>
 
           {done ? (

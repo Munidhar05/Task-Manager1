@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+﻿import React, { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
@@ -28,7 +28,7 @@ export default function VerifyEmail() {
         <div className="login-card login-card--panda">
           <div className="brand" style={{ padding: 0, marginBottom: 18, marginTop: 26, justifyContent: 'space-between', width: '100%' }}>
             <div className="brand-name" style={{ color: '#16191d' }}>Email verification</div>
-            <img src="/logo.png" alt="Befach" className="brand-logo-img" />
+            <img src="/logo.png" alt="VoTask" className="brand-logo-img" />
           </div>
 
           {state === 'working' && <div style={{ display: 'grid', placeItems: 'center', padding: 24 }}><span className="spinner" /></div>}

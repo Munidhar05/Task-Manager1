@@ -76,12 +76,12 @@ export default function Login() {
       {/* Brand panel — the value statement and trust signals a buyer reads first. */}
       <aside className="auth-brand">
         <div className="auth-brand-top">
-          <img src="/logo.png" alt="Befach Task Manager" className="auth-brand-logo" />
-          <span className="auth-brand-name">Befach Task Manager</span>
+          <img src="/logo.png" alt="VoTask" className="auth-brand-logo" />
+          <span className="auth-brand-name">VoTask</span>
         </div>
         <div className="auth-brand-body">
           <h1 className="auth-headline">Turn multilingual meetings into accountable execution.</h1>
-          <p className="auth-sub">Befach listens to your meeting, extracts the decisions and tasks, resolves owners and deadlines, and routes every item through approval to execution — with the original quote behind each one.</p>
+          <p className="auth-sub">VoTask listens to your meeting, extracts the decisions and tasks, resolves owners and deadlines, and routes every item through approval to execution — with the original quote behind each one.</p>
           <ul className="auth-trust">
             {TRUST.map((t) => (
               <li key={t.label}><span className="auth-trust-ic">{t.icon}</span>{t.label}</li>
@@ -159,7 +159,7 @@ export default function Login() {
 
           <div className="auth-links">
             <Link to="/forgot-password">Forgot password?</Link>
-            <span>New to Befach? <Link to="/signup">Create your workspace</Link></span>
+            <span>New to VoTask? <Link to="/signup">Create your workspace</Link></span>
           </div>
         </form>
         <Link to="/privacy" className="auth-legal">Privacy Policy</Link>

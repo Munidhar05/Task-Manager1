@@ -30,7 +30,7 @@ export async function registerPush() {
       // res/raw without extension, so 'default' would resolve to nothing/silent.)
       await PushNotifications.createChannel({
         id: 'smarttask_v2',
-        name: 'Befach alerts',
+        name: 'VoTask alerts',
         description: 'Task assignments and new messages',
         importance: 5,   // IMPORTANCE_HIGH → heads-up + default sound
         visibility: 1,

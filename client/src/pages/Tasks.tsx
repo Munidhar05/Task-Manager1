@@ -54,22 +54,66 @@ const MicIcon = ({ size = 14 }: { size?: number }) => (
   </svg>
 )
 
-// Sortable columns. Ranks make Priority/Status sort by logical order (not alphabetically);
-// tasks with no due date sort last. Each returns an ascending-order comparator value.
+// ---- Sorting -----------------------------------------------------------------
+// Three rules the whole sort obeys, so results never surprise:
+//   1. Ranked, not alphabetical — Priority and Status sort by their real order,
+//      so Critical beats High and Done always lands last.
+//   2. Blanks sink, in BOTH directions — a task with no due date or no assignee
+//      is never "the answer" to "what's due first?" nor to its reverse. This is
+//      why direction is applied to the value comparison alone and never to the
+//      blank check: negating a sentinel used to float blanks to the top.
+//   3. Total order — every comparison falls through to a tie-break chain ending
+//      in the task id, so equal keys can't drift with whatever order the server
+//      happened to return.
 type SortKey = 'task' | 'priority' | 'status' | 'assignee' | 'due' | 'time'
+type SortDir = 'asc' | 'desc'
 const PRIORITY_RANK: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 }
-const STATUS_RANK: Record<string, number> = { 'To Do': 0, 'In Progress': 1, 'Blocked': 2, 'In Review': 3, 'Done': 4, 'Reopened': 5 }
-const cmpAsc = (a: Task, b: Task, key: SortKey): number => {
+// Pipeline order, with the two terminal-ish states at the end and Done dead last
+// — sorting by status ascending should surface actionable work, not completed.
+const STATUS_RANK: Record<string, number> = { 'To Do': 0, 'In Progress': 1, 'Blocked': 2, 'In Review': 3, 'Reopened': 4, 'Done': 5 }
+// One collator for the whole list; `numeric` keeps "Task 2" before "Task 10".
+const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true })
+
+// The value a task sorts by for a given column. `null` means "blank" and always
+// sinks to the bottom, whichever way the column is pointing.
+const sortValue = (t: Task, key: SortKey): string | number | null => {
   switch (key) {
-    case 'task': return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
-    case 'priority': return (PRIORITY_RANK[a.priority] ?? 0) - (PRIORITY_RANK[b.priority] ?? 0)
-    case 'status': return (STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99)
-    // Unassigned tasks sort last (high sentinel) regardless of name comparison.
-    case 'assignee': return (a.assignee?.name || '￿').localeCompare(b.assignee?.name || '￿', undefined, { sensitivity: 'base' })
-    case 'due': return (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31')
-    case 'time': return givenOf(a).localeCompare(givenOf(b))
+    case 'task': return t.title?.trim() || null
+    case 'priority': return PRIORITY_RANK[t.priority] ?? null
+    case 'status': return STATUS_RANK[t.status] ?? null
+    case 'assignee': return t.assignee?.name?.trim() || null
+    case 'due': return t.due_date || null
+    case 'time': return givenOf(t) || null
   }
 }
+
+const compareTasks = (a: Task, b: Task, key: SortKey, dir: SortDir): number => {
+  const va = sortValue(a, key)
+  const vb = sortValue(b, key)
+  // Blanks sink. Deliberately outside the direction flip (see rule 2 above).
+  if (va === null || vb === null) {
+    if (va === vb) return tieBreak(a, b)
+    return va === null ? 1 : -1
+  }
+  const cmp = typeof va === 'number' && typeof vb === 'number'
+    ? va - vb
+    : collator.compare(String(va), String(vb))
+  if (cmp !== 0) return dir === 'desc' ? -cmp : cmp
+  return tieBreak(a, b)
+}
+
+// Same inputs always give the same order: newest activity first, then id.
+const tieBreak = (a: Task, b: Task): number =>
+  givenOf(b).localeCompare(givenOf(a)) || (a.id || '').localeCompare(b.id || '')
+
+// Which way a column points when you first pick it: "biggest first" for the ones
+// people scan for urgency, A→Z / soonest-first for the rest.
+const DEFAULT_DIR: Record<SortKey, SortDir> = {
+  time: 'desc', priority: 'desc', status: 'asc', assignee: 'asc', due: 'asc', task: 'asc',
+}
+// Default is the chronological feed and keeps its day headings; asking for any
+// other column means you want one ordered list, not a re-shuffle inside each day.
+const isGroupedSort = (key: SortKey) => key === 'time'
 
 // A nicely themed sort control (replaces the plain native <select>, whose popup
 // can't be styled). Shows the active option, opens a rounded menu with a check on
@@ -86,7 +130,17 @@ const SortGlyph = () => (
     <path d="m3 16 4 4 4-4" /><path d="M7 20V4" /><path d="m21 8-4-4-4 4" /><path d="M17 4v16" />
   </svg>
 )
-function SortMenu({ sortKey, onPick }: { sortKey: SortKey; onPick: (key: SortKey) => void }) {
+// What each column means in each direction, so the menu can say it in words
+// rather than making you decode an arrow.
+const DIR_HINT: Record<SortKey, { asc: string; desc: string }> = {
+  time: { asc: 'oldest first', desc: 'newest first' },
+  priority: { asc: 'Low → Critical', desc: 'Critical → Low' },
+  status: { asc: 'To Do → Done', desc: 'Done → To Do' },
+  assignee: { asc: 'A → Z', desc: 'Z → A' },
+  due: { asc: 'soonest first', desc: 'latest first' },
+  task: { asc: 'A → Z', desc: 'Z → A' },
+}
+function SortMenu({ sortKey, sortDir, onPick }: { sortKey: SortKey; sortDir: SortDir; onPick: (key: SortKey) => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -97,27 +151,43 @@ function SortMenu({ sortKey, onPick }: { sortKey: SortKey; onPick: (key: SortKey
   const current = SORT_OPTIONS.find((o) => o.key === sortKey) || SORT_OPTIONS[0]
   return (
     <div className="sortmenu toolbar-sort" ref={ref}>
-      <button className="sortmenu-btn" onClick={() => setOpen((o) => !o)} title="Sort tasks" aria-haspopup="listbox" aria-expanded={open}>
+      <button
+        className="sortmenu-btn"
+        onClick={() => setOpen((o) => !o)}
+        title={`Sorted by ${current.label.toLowerCase()}, ${DIR_HINT[sortKey][sortDir]}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
         <SortGlyph />
         <span className="sortmenu-label">Sort: {current.label}</span>
+        <span className="sortmenu-dir" aria-hidden="true">{sortDir === 'desc' ? '↓' : '↑'}</span>
         <svg className={'sortmenu-chev' + (open ? ' flip' : '')} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
       </button>
       {open && (
         <div className="sortmenu-pop" role="listbox">
-          {SORT_OPTIONS.map((o) => (
-            <button
-              key={o.key}
-              role="option"
-              aria-selected={o.key === sortKey}
-              className={'sortmenu-item' + (o.key === sortKey ? ' active' : '')}
-              onClick={() => { onPick(o.key); setOpen(false) }}
-            >
-              <span>{o.label}</span>
-              {o.key === sortKey && (
-                <svg className="sortmenu-check" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
-              )}
-            </button>
-          ))}
+          {SORT_OPTIONS.map((o) => {
+            const active = o.key === sortKey
+            return (
+              <button
+                key={o.key}
+                role="option"
+                aria-selected={active}
+                className={'sortmenu-item' + (active ? ' active' : '')}
+                // Tapping the active option reverses it; the hint tells you what
+                // you'd get, so the second tap isn't a guess.
+                title={active ? `Reverse — ${DIR_HINT[o.key][sortDir === 'asc' ? 'desc' : 'asc']}` : DIR_HINT[o.key][DEFAULT_DIR[o.key]]}
+                onClick={() => { onPick(o.key); setOpen(false) }}
+              >
+                <span className="sortmenu-item-label">
+                  {o.label}
+                  <span className="sortmenu-item-hint">{active ? DIR_HINT[o.key][sortDir] : DIR_HINT[o.key][DEFAULT_DIR[o.key]]}</span>
+                </span>
+                {active && (
+                  <span className="sortmenu-dir" aria-hidden="true">{sortDir === 'desc' ? '↓' : '↑'}</span>
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
@@ -343,9 +413,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [quickView, setQuickView] = useState<'active' | 'overdue' | 'today' | 'completed'>(initialQuick)
   const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: searchParams.get('priority') || '', status: searchParams.get('status') || '', assignee: searchParams.get('assignee') || '' })
-  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'time', dir: 'desc' })
-  // Click a header: toggle direction if it's the active column, else switch to it (default desc).
-  const toggleSort = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'time', dir: DEFAULT_DIR.time })
+  // Pick a column: reversing the one you're already on, otherwise switching to it
+  // the way round that column is normally read. Shared by the desktop column
+  // headers and the mobile Sort menu, so both behave identically.
+  const toggleSort = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: DEFAULT_DIR[key] }))
 
   const [loadError, setLoadError] = useState(false)
   // True only until the FIRST response lands. Without it, the initial fetch is
@@ -460,35 +533,27 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     return ''
   }
 
-  // Group tasks by their activity day, sort WITHIN each day by the active column,
-  // and keep the day groups newest-first — so changing the sort only reorders rows
-  // inside a date, never the dates themselves. Memoized: this grouping+sort used
-  // to recompute on every keystroke-driven re-render.
+  // Every sort produces this one fully-ordered list. Memoized: it used to
+  // recompute on every keystroke-driven re-render.
+  const sortedTasks = useMemo(
+    () => [...visibleTasks].sort((a, b) => compareTasks(a, b, sort.key, sort.dir)),
+    [visibleTasks, sort.key, sort.dir],
+  )
+
+  // On Default, that list is then cut into day headings — the chronological feed.
+  // Days run newest-first; undated tasks land in a trailing "No date" group. Any
+  // other column renders sortedTasks flat, so e.g. Due date really is
+  // soonest-first across every date rather than within one day at a time.
   const groupedByDay = useMemo(() => {
+    if (!isGroupedSort(sort.key)) return []
     const groups: Record<string, Task[]> = {}
-    for (const t of visibleTasks) {
+    for (const t of sortedTasks) {
       const day = (givenOf(t) || '').slice(0, 10) || 'No date'
       ;(groups[day] ||= []).push(t)
     }
-    for (const day in groups) {
-      groups[day].sort((a, b) => {
-        const cmp = cmpAsc(a, b, sort.key)
-        return sort.dir === 'desc' ? -cmp : cmp
-      })
-    }
     const keys = Object.keys(groups).sort((a, b) => (a === 'No date' ? 1 : b === 'No date' ? -1 : b.localeCompare(a)))
     return keys.map((day) => ({ day, items: groups[day] }))
-  }, [visibleTasks, sort.key, sort.dir])
-
-  // Priority sort is special: instead of grouping by day, mix ALL tasks across
-  // every date into one flat list ordered purely by priority (Critical → High →
-  // Medium → Low). Ties keep newest-activity-first. Only the priority column
-  // behaves this way; every other column stays day-grouped.
-  const sortedByPriority = useMemo(() => [...visibleTasks].sort((a, b) => {
-    const cmp = cmpAsc(a, b, 'priority')
-    if (cmp !== 0) return sort.dir === 'desc' ? -cmp : cmp
-    return givenOf(b).localeCompare(givenOf(a)) // tie-break: newest first
-  }), [visibleTasks, sort.dir])
+  }, [sortedTasks, sort.key])
 
   // Friendly heading for a day group, e.g. "Today · Wednesday, 11 June 2026".
   const dayHeading = (day: string) => {
@@ -517,6 +582,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // Inline approve: a manager marks an In-Review task as Done straight from the row.
   const markDone = (taskId: string) =>
     api.post(`/tasks/${taskId}/approve`, { decision: 'approved' }).then(patchTask).catch(() => load())
+
+  // A task you raised for yourself — yours to tick off without a manager. Mirrors
+  // isOwnSelfCreated() on the server, which is what actually enforces it.
+  const isOwnWork = (t: Task) => !!user
+    && !t.parent_task_id && !t.reassigned_at
+    && t.assignee?.id === user.id && t.assigned_by_id === user.id
 
   // Board drag-and-drop: optimistically move the card, then persist via the status API.
   const moveStatus = (taskId: string, status: string) => {
@@ -557,7 +628,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           {isManager && t.status === 'In Review' && (
             <button className="btn btn-sm btn-done" onClick={(e) => { e.stopPropagation(); markDone(t.id) }} title="Approve & mark as done">✓ Done</button>
           )}
-          {isManager && t.status !== 'In Review' && t.status !== 'Done' && (
+          {(isManager || isOwnWork(t)) && t.status !== 'In Review' && t.status !== 'Done' && (
             <button className="btn-tick" onClick={(e) => { e.stopPropagation(); moveStatus(t.id, 'Done') }} title="Mark as completed" aria-label="Mark as completed">✓</button>
           )}
         </span>
@@ -634,10 +705,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           {/* MOBILE-ONLY: sort the visible tasks. 'time' (newest first) is the default
               "show everything" order; the rest pick a sensible direction per column. */}
           {view === 'list' && (
-            <SortMenu
-              sortKey={sort.key}
-              onPick={(key) => setSort({ key, dir: key === 'time' || key === 'priority' ? 'desc' : 'asc' })}
-            />
+            <SortMenu sortKey={sort.key} sortDir={sort.dir} onPick={toggleSort} />
           )}
           {/* MOBILE-ONLY: the priority/status/assignee filters, in a dialog — the
               inline desktop dropdowns below are hidden on phones, which used to
@@ -789,8 +857,8 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                   {sortTh('Time', 'time')}
                 </tr></thead>
                 <tbody>
-                  {sort.key === 'priority'
-                    ? sortedByPriority.map(renderRow)
+                  {!isGroupedSort(sort.key)
+                    ? sortedTasks.map(renderRow)
                     : groupedByDay.map((g) => (
                       <React.Fragment key={g.day}>
                         <tr className="day-group-row">

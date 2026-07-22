@@ -83,6 +83,17 @@ function taskOrigin(t) {
   return 'self'
 }
 
+// A task the user raised for themselves: they own both ends of it, so finishing
+// or binning it is their call alone — no manager sign-off. Deliberately stricter
+// than taskOrigin()'s 'self', which also covers unassigned tasks and would hand
+// an employee rights over work nobody owns yet. Split parts and tasks reassigned
+// onto someone come out of another person's plan, so they keep the approval flow
+// even when the ids happen to line up.
+function isOwnSelfCreated(t, userId) {
+  return !!userId && !t.parent_task_id && !t.reassigned_at &&
+    !!t.assignee_id && t.assignee_id === userId && t.assigned_by_id === userId
+}
+
 function hydrate(t) {
   if (!t) return t
   const assignee = t.assignee_id ? db.prepare('SELECT id,name,avatar_color,role FROM users WHERE id=?').get(t.assignee_id) : null
@@ -389,7 +400,7 @@ r.patch('/:id', (req, res) => {
 
 // STATUS transitions with workflow semantics
 r.post('/:id/status', (req, res) => {
-  const { status } = req.body || {}
+  let { status } = req.body || {} // may be rewritten below for own self-created work
   if (!VALID_STATUS.includes(status)) return res.status(400).json({ error: 'invalid status' })
   const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!t) return res.status(404).json({ error: 'Not found' })
@@ -398,8 +409,13 @@ r.post('/:id/status', (req, res) => {
   let submittedAt = t.submitted_at
   let completedAt = t.completed_at
   let visible = t.visible_to_manager
+  // Your own self-created task has no approver, so it never enters the approval
+  // flow: completing it is final, and a stray "submit for review" just marks it
+  // done rather than parking it in a queue nobody is watching.
+  const ownWork = isOwnSelfCreated(t, req.user.id)
+  if (ownWork && status === 'In Review') status = 'Done'
   if (status === 'In Review') { approval = 'pending'; submittedAt = now(); visible = 1 } // surface private drafts on submit
-  if (status === 'Done') { progress = 100; completedAt = now() }
+  if (status === 'Done') { progress = 100; completedAt = now(); if (ownWork) approval = 'none' }
   if (status === 'Reopened') { approval = 'none'; progress = Math.min(progress, 80); completedAt = null }
   db.prepare('UPDATE tasks SET status=?, approval_status=?, progress=?, submitted_at=?, completed_at=?, visible_to_manager=?, updated_at=? WHERE id=?')
     .run(status, approval, progress, submittedAt, completedAt, visible, now(), t.id)
@@ -550,8 +566,11 @@ r.delete('/:id', (req, res) => {
   if (!t) return res.status(404).json({ error: 'Not found' })
   const isManager = req.user.role === 'manager' || req.user.role === 'admin'
   const isOwnPrivateDraft = t.assignee_id === req.user.id && t.assigned_by_id === req.user.id && !t.visible_to_manager
-  if (!isManager && !isOwnPrivateDraft) {
-    return res.status(403).json({ error: 'You can only delete your own tasks before submitting them.' })
+  // Own self-created work can be binned whether or not managers can see it —
+  // it was never their task to sign off. Anything handed to you by someone else
+  // still needs a manager.
+  if (!isManager && !isOwnSelfCreated(t, req.user.id) && !isOwnPrivateDraft) {
+    return res.status(403).json({ error: 'You can only delete tasks you created for yourself.' })
   }
   // Unlink attachment files for this task AND its subtasks before the row cascade
   // removes their DB rows (the DB cascade doesn't touch the files on disk).

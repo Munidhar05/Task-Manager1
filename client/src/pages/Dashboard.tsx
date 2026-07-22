@@ -437,7 +437,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
             </svg>
           </div>
           <div className="empty-state-title">Turn your first meeting into tracked work</div>
-          <div className="empty-state-hint">Upload a recording or paste a transcript — Befach extracts the decisions, owners, and deadlines, and you approve them into tasks. Your dashboard fills in from there.</div>
+          <div className="empty-state-hint">Upload a recording or paste a transcript — VoTask extracts the decisions, owners, and deadlines, and you approve them into tasks. Your dashboard fills in from there.</div>
           <div className="empty-state-action">
             <button className="btn btn-primary" onClick={() => navigate('/meetings')}>Upload your first meeting</button>
           </div>

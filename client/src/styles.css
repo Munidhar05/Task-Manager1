@@ -1112,7 +1112,13 @@ tbody tr:hover { background: var(--n-50); }
 /* MOBILE ONLY: align the Active chip to the List/Board toggle's height, and make the
    three quick chips split the row evenly so none (e.g. Completed) overflows. */
 @media (max-width: 720px) {
-  .viewbar { margin-left: 12px; }                 /* nudge List/Board + Active to the right */
+  /* Same treatment as the toolbar row above: fill the width rather than sit as
+     a tight cluster with dead space either side. The List/Board track takes the
+     slack (its two buttons splitting it evenly) and Active holds the right end. */
+  .viewbar { margin-left: 0; gap: 12px; }
+  .viewbar .seg { flex: 1 1 auto; min-width: 0; }
+  .viewbar .seg .seg-btn { flex: 1 1 0; min-width: 0; justify-content: center; }
+  .viewbar .chip { flex: 0 0 auto; }
   .viewbar .chip { min-height: 44px; }            /* match the .seg toggle height */
   .chips-quick .chip { flex: 1 1 0; min-width: 0; padding: 4px 5px; font-size: 10.5px; min-height: 34px; }
   .chips-quick .chip-count { margin-left: 3px; }
@@ -1177,13 +1183,18 @@ tbody tr:hover { background: var(--n-50); }
 .toolbar-newtask { order: 2; }
 .toolbar-view { order: 3; }
 @media (max-width: 720px) {
-  /* Keep search + sort + new task together on one centered, non-wrapping line. */
-  .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; justify-content: center; width: 100%; }
+  /* Search + sort + filter on one non-wrapping line that FILLS the row. Centring
+     a natural-width cluster left ~110px dead at the edges of a 390px screen
+     while the buttons sat 8px apart — which is what read as cramped. The Sort
+     control (the only one with a label) absorbs the slack instead, so the row
+     spans the same width as the stat cards below and the gaps do the spacing. */
+  .toolbar-actions { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; justify-content: center; width: 100%; }
   .toolbar-actions .search-box { flex: 0 1 auto; min-width: 0; }
   .toolbar-actions .search-box input { min-width: 0; }
   .toolbar-actions .toolbar-newtask { flex-shrink: 0; padding: 9px 14px; }
   .toolbar-filters { display: none; }
-  .toolbar-sort { display: inline-block; }
+  .toolbar-sort { display: inline-block; flex: 1 1 auto; min-width: 0; }
+  .toolbar-sort .sortmenu-btn { width: 100%; justify-content: center; }
   /* Center the List/Board toggle on its own row instead of pinning it right. */
   .toolbar-view { margin-left: 0 !important; width: 100%; justify-content: center; }
 }
@@ -1242,6 +1253,15 @@ tbody tr:hover { background: var(--n-50); }
 .sortmenu-item:hover { background: var(--bg); }
 .sortmenu-item.active { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-weight: 700; }
 .sortmenu-check { color: var(--primary); flex-shrink: 0; }
+/* Direction arrow, on the button and on the active row. Tapping the active row
+   reverses it, so the arrow has to be visible to make that discoverable. */
+.sortmenu-dir { color: var(--primary); font-weight: 800; font-size: 13px; line-height: 1; flex-shrink: 0; }
+/* Each option says what it will actually do ("soonest first"), so you don't have
+   to pick one to find out. */
+.sortmenu-item-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sortmenu-item-hint { font-size: 11px; font-weight: 500; color: var(--muted); }
+.sortmenu-item.active .sortmenu-item-hint { color: color-mix(in srgb, var(--primary) 72%, var(--muted)); }
+.sortmenu-pop { min-width: 220px; }
 
 /* Mobile-only Filters button (desktop shows the inline filter dropdowns instead).
    The dot badge shows how many filters are currently applied. */

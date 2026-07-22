@@ -43,7 +43,7 @@ export function buildDigest(user) {
   const lines = [`Good morning ${user.name},`, '']
   lines.push(mine.length ? `You have ${mine.length} open task(s):` : 'You have no open tasks today. 🎉')
   mine.forEach((t) => lines.push(fmtTask(t)))
-  lines.push('', '— Befach Task Manager')
+  lines.push('', '— VoTask')
   return { subject: `Your tasks for ${today()} — ${mine.length} open`, text: lines.join('\n') }
 }
 
