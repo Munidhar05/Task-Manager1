@@ -12,15 +12,15 @@ export default function PrivacyPolicy() {
   return (
     <div className="legal-wrap" style={{ maxWidth: 820, margin: '0 auto', padding: '32px 20px 64px' }}>
       <div className="row" style={{ gap: 12, alignItems: 'center', marginBottom: 18 }}>
-        <img src="/logo.png" alt="Befach" style={{ width: 40, height: 40, borderRadius: 9, objectFit: 'cover', background: '#fff' }} />
+        <img src="/logo.png" alt="VoTask" style={{ width: 40, height: 40, borderRadius: 9, objectFit: 'cover', background: '#fff' }} />
         <div>
           <h1 style={{ margin: 0, fontSize: 24 }}>Privacy Policy</h1>
-          <div className="muted" style={{ fontSize: 13 }}>Befach · Effective {EFFECTIVE_DATE}</div>
+          <div className="muted" style={{ fontSize: 13 }}>VoTask · Effective {EFFECTIVE_DATE}</div>
         </div>
       </div>
 
       <div className="card" style={{ padding: '22px 24px', lineHeight: 1.65, fontSize: 14.5 }}>
-        <p>This Privacy Policy explains how <strong>Befach</strong> ("the App", "we", "us") collects,
+        <p>This Privacy Policy explains how <strong>VoTask</strong> ("the App", "we", "us") collects,
           uses, and protects your information when you use the application and related services. By creating an
           account or using the App, you agree to the practices described here.</p>
 

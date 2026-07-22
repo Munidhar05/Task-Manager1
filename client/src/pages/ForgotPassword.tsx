@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 
@@ -27,13 +27,13 @@ export default function ForgotPassword() {
               <div className="brand-name" style={{ color: '#16191d' }}>Reset password</div>
               <div className="muted" style={{ fontSize: 12 }}>We'll email you a reset link</div>
             </div>
-            <img src="/logo.png" alt="Befach" className="brand-logo-img" />
+            <img src="/logo.png" alt="VoTask" className="brand-logo-img" />
           </div>
 
           {sent ? (
             <>
               <div className="muted" style={{ fontSize: 13.5, lineHeight: 1.5, background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8, padding: '12px 14px' }}>
-                If an account exists for <b>{email}</b>, a password‑reset link is on its way. Check your inbox (and spam). The link expires in 24 hours.
+                If an account exists for <b>{email}</b>, a passwordâ€‘reset link is on its way. Check your inbox (and spam). The link expires in 24 hours.
               </div>
               <div className="muted" style={{ fontSize: 12.5, marginTop: 16, textAlign: 'center' }}>
                 <Link to="/login" style={{ color: 'var(--primary)', fontWeight: 600 }}>Back to login</Link>
