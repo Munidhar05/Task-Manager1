@@ -1112,7 +1112,9 @@ tbody tr:hover { background: var(--n-50); }
 /* MOBILE ONLY: align the Active chip to the List/Board toggle's height, and make the
    three quick chips split the row evenly so none (e.g. Completed) overflows. */
 @media (max-width: 720px) {
-  .viewbar { margin-left: 12px; }                 /* nudge List/Board + Active to the right */
+  /* Sits on the shared left rail with the toolbar above and the stat cards
+     below — the old 12px nudge left it a hair out of line with both. */
+  .viewbar { margin-left: 0; }
   .viewbar .chip { min-height: 44px; }            /* match the .seg toggle height */
   .chips-quick .chip { flex: 1 1 0; min-width: 0; padding: 4px 5px; font-size: 10.5px; min-height: 34px; }
   .chips-quick .chip-count { margin-left: 3px; }
@@ -1177,8 +1179,11 @@ tbody tr:hover { background: var(--n-50); }
 .toolbar-newtask { order: 2; }
 .toolbar-view { order: 3; }
 @media (max-width: 720px) {
-  /* Keep search + sort + new task together on one centered, non-wrapping line. */
-  .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; justify-content: center; width: 100%; }
+  /* Keep search + sort + new task together on one non-wrapping line, starting at
+     the same left edge as the List/Board row and the stat cards below. Centring
+     this row put its left edge at 56px on a 360px screen and 91px on a 430px one
+     — a moving target that lined up with nothing. */
+  .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; justify-content: flex-start; width: 100%; }
   .toolbar-actions .search-box { flex: 0 1 auto; min-width: 0; }
   .toolbar-actions .search-box input { min-width: 0; }
   .toolbar-actions .toolbar-newtask { flex-shrink: 0; padding: 9px 14px; }
