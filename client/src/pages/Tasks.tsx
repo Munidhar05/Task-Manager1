@@ -583,6 +583,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const markDone = (taskId: string) =>
     api.post(`/tasks/${taskId}/approve`, { decision: 'approved' }).then(patchTask).catch(() => load())
 
+  // A task you raised for yourself — yours to tick off without a manager. Mirrors
+  // isOwnSelfCreated() on the server, which is what actually enforces it.
+  const isOwnWork = (t: Task) => !!user
+    && !t.parent_task_id && !t.reassigned_at
+    && t.assignee?.id === user.id && t.assigned_by_id === user.id
+
   // Board drag-and-drop: optimistically move the card, then persist via the status API.
   const moveStatus = (taskId: string, status: string) => {
     setTasks((ts) => ts.map((t) => (t.id === taskId ? { ...t, status } : t)))
@@ -622,7 +628,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           {isManager && t.status === 'In Review' && (
             <button className="btn btn-sm btn-done" onClick={(e) => { e.stopPropagation(); markDone(t.id) }} title="Approve & mark as done">✓ Done</button>
           )}
-          {isManager && t.status !== 'In Review' && t.status !== 'Done' && (
+          {(isManager || isOwnWork(t)) && t.status !== 'In Review' && t.status !== 'Done' && (
             <button className="btn-tick" onClick={(e) => { e.stopPropagation(); moveStatus(t.id, 'Done') }} title="Mark as completed" aria-label="Mark as completed">✓</button>
           )}
         </span>
