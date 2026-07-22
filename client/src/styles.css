@@ -1112,9 +1112,13 @@ tbody tr:hover { background: var(--n-50); }
 /* MOBILE ONLY: align the Active chip to the List/Board toggle's height, and make the
    three quick chips split the row evenly so none (e.g. Completed) overflows. */
 @media (max-width: 720px) {
-  /* Centered to match the toolbar row above. The old 12px left nudge put it on
-     neither the centre line nor the cards' left edge. */
-  .viewbar { margin-left: 0; justify-content: center; }
+  /* Same treatment as the toolbar row above: fill the width rather than sit as
+     a tight cluster with dead space either side. The List/Board track takes the
+     slack (its two buttons splitting it evenly) and Active holds the right end. */
+  .viewbar { margin-left: 0; gap: 12px; }
+  .viewbar .seg { flex: 1 1 auto; min-width: 0; }
+  .viewbar .seg .seg-btn { flex: 1 1 0; min-width: 0; justify-content: center; }
+  .viewbar .chip { flex: 0 0 auto; }
   .viewbar .chip { min-height: 44px; }            /* match the .seg toggle height */
   .chips-quick .chip { flex: 1 1 0; min-width: 0; padding: 4px 5px; font-size: 10.5px; min-height: 34px; }
   .chips-quick .chip-count { margin-left: 3px; }
@@ -1179,15 +1183,18 @@ tbody tr:hover { background: var(--n-50); }
 .toolbar-newtask { order: 2; }
 .toolbar-view { order: 3; }
 @media (max-width: 720px) {
-  /* Keep search + sort + new task together on one centered, non-wrapping line.
-     The List/Board row below is centered to match, so the two control rows
-     share a centre line. */
-  .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; justify-content: center; width: 100%; }
+  /* Search + sort + filter on one non-wrapping line that FILLS the row. Centring
+     a natural-width cluster left ~110px dead at the edges of a 390px screen
+     while the buttons sat 8px apart — which is what read as cramped. The Sort
+     control (the only one with a label) absorbs the slack instead, so the row
+     spans the same width as the stat cards below and the gaps do the spacing. */
+  .toolbar-actions { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; justify-content: center; width: 100%; }
   .toolbar-actions .search-box { flex: 0 1 auto; min-width: 0; }
   .toolbar-actions .search-box input { min-width: 0; }
   .toolbar-actions .toolbar-newtask { flex-shrink: 0; padding: 9px 14px; }
   .toolbar-filters { display: none; }
-  .toolbar-sort { display: inline-block; }
+  .toolbar-sort { display: inline-block; flex: 1 1 auto; min-width: 0; }
+  .toolbar-sort .sortmenu-btn { width: 100%; justify-content: center; }
   /* Center the List/Board toggle on its own row instead of pinning it right. */
   .toolbar-view { margin-left: 0 !important; width: 100%; justify-content: center; }
 }
