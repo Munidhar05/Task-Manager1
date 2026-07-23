@@ -553,14 +553,13 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                   tabIndex={0}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/tasks?assignee=${w.id}`) } }}
                 >
+                  {/* No role badge here: the label column is only 124px, so an
+                      "Admin"/"Manager" pill ate most of it and left names
+                      truncated to a letter or two. The name is what identifies
+                      the row, so it gets the width. */}
                   <span className="hbar-label">
                     <Avatar name={w.name} color={w.avatar_color} size={22} />
                     <span className="hbar-name">{w.name}</span>
-                    {w.role && w.role !== 'employee' && (
-                      <span className="hbar-role" title={`${w.name} is ${w.role === 'admin' ? 'an admin' : 'a manager'}`}>
-                        {w.role === 'admin' ? 'Admin' : 'Manager'}
-                      </span>
-                    )}
                     {overloaded && <span style={{ color: 'var(--danger)', display: 'inline-flex' }} title="Overloaded"><Ic name="warning" size={12} /></span>}
                   </span>
                   <span className="hbar-track">
