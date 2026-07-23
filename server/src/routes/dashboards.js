@@ -117,6 +117,14 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
       overdue_count: mine.filter((t) => t.due_date && t.due_date < today() && t.status !== 'Done').length,
     }
   }).sort((a, b) => b.open_count - a.open_count)
+  // Work submitted for approval — the manager's own queue. Deliberately built
+  // from allTasks, NOT the date-scoped set: an approval is a to-do, and one made
+  // outside the selected window is still waiting. Scoping it would mean a manager
+  // on the "Today" tab silently misses last week's submissions — which is exactly
+  // how these went unnoticed. Oldest submission first, so the longest wait leads.
+  const inReview = allTasks
+    .filter((t) => t.status === 'In Review')
+    .sort((a, b) => String(a.submitted_at || a.updated_at || '').localeCompare(String(b.submitted_at || b.updated_at || '')))
   const projects = db.prepare(`
     SELECT p.id, p.name,
       COUNT(t.id) AS total,
@@ -143,6 +151,8 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
       overdue: overdue.length,
       blocked: tasks.filter((t) => t.status === 'Blocked').length,
       needs_confirmation: tasks.filter((t) => t.ownership_confidence === 'needs_confirmation').length,
+      // Unscoped, to match the in_review list below.
+      in_review: inReview.length,
       meetings,
     },
     by_priority: ['Critical', 'High', 'Medium', 'Low'].map((p) => ({ priority: p, count: tasks.filter((t) => t.priority === p && t.status !== 'Done').length })),
@@ -150,6 +160,7 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
     workload,
     projects: projects.map((p) => ({ ...p, progress: p.total ? Math.round((p.done / p.total) * 100) : 0 })),
     overdue: overdue.slice(0, 8),
+    in_review: inReview.slice(0, 8),
     recent_activity: recentActivity,
   })
 })
