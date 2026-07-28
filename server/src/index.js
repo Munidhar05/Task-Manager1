@@ -21,6 +21,7 @@ import chatRoutes from './routes/chat.js'
 import platformRoutes from './routes/platform.js'
 import usageRoutes from './routes/usage.js'
 import scoreRoutes from './routes/scores.js'
+import feedbackRoutes from './routes/feedback.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -71,6 +72,7 @@ app.use('/api/chat', chatRoutes)
 app.use('/api/platform', platformRoutes)
 app.use('/api/usage', usageRoutes)
 app.use('/api/scores', scoreRoutes)
+app.use('/api/feedback', feedbackRoutes)
 
 // --- Serve the built web client (client/dist) from this SAME service ----------
 // So one URL hosts BOTH the website (for people without the Android app) AND the

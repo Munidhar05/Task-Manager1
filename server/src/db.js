@@ -415,6 +415,21 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_perf_org_day ON performance_daily(org_id, day);
   CREATE INDEX IF NOT EXISTS idx_perf_user_day ON performance_daily(user_id, day);
+
+  -- In-app feedback: a star rating (1-5) + optional comment about the app itself.
+  -- One current row per user (they update their own), so the org sees each
+  -- member's latest opinion rather than a pile of duplicates.
+  CREATE TABLE IF NOT EXISTS app_feedback (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL UNIQUE,
+    rating INTEGER NOT NULL,                    -- 1..5 stars
+    comment TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_feedback_org ON app_feedback(org_id);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.

@@ -195,8 +195,11 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .sidebar-sync.offline .sidebar-sync-dot { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 24%, transparent); animation: sync-pulse 1.4s ease-in-out infinite; }
 @keyframes sync-pulse { 50% { opacity: .4; } }
 @media (prefers-reduced-motion: reduce) { .sidebar-sync.offline .sidebar-sync-dot { animation: none; } }
+.sidebar-legal-row { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; }
 .sidebar-legal { flex-shrink: 0; font-size: var(--t-xs); font-weight: 600; color: var(--sidebar-muted); text-decoration: none; }
 .sidebar-legal:hover { color: var(--primary); text-decoration: underline; }
+.sidebar-legal-btn { border: 0; background: none; cursor: pointer; padding: 0; font-family: inherit; }
+.sidebar-legal-sep { color: var(--sidebar-muted); font-size: var(--t-xs); }
 /* Scoped with .sidebar-user for higher specificity than the mobile `.btn`
    padding override (which otherwise squeezes/clips this fixed-size icon button
    on phones). box-sizing keeps it square regardless of inherited padding. */
@@ -1649,6 +1652,41 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   .lb-card { grid-template-columns: 30px 34px 1fr auto; row-gap: 6px; }
   .lb-name { flex-wrap: wrap; }
 }
+
+/* ---- App feedback (rate this app) ------------------------------------------- */
+.fb-modal { width: 480px; max-width: 94vw; }
+.fb-modal .card-pad { max-height: min(78vh, 720px); overflow-y: auto; }
+.fb-rate { display: flex; flex-direction: column; gap: 12px; }
+.fb-rate-q { font-weight: 700; font-size: 14.5px; }
+.fb-stars { display: inline-flex; gap: 4px; }
+.fb-star { border: 0; background: none; padding: 2px; line-height: 0; color: var(--n-300); cursor: default; }
+.fb-star.on { color: #f5a623; }
+.fb-star.interactive { cursor: pointer; transition: transform .1s, color .12s; }
+.fb-star.interactive:hover { transform: scale(1.12); }
+.fb-comment { width: 100%; resize: vertical; min-height: 64px; font-family: inherit; font-size: 13.5px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.fb-comment:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
+.fb-rate .btn-primary { align-self: flex-start; }
+
+.fb-reviews { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 16px; }
+.fb-section-lbl { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 12px; }
+.fb-summary { display: flex; gap: 18px; align-items: center; margin-bottom: 16px; }
+.fb-avg { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
+.fb-avg-num { font-size: 34px; font-weight: 800; line-height: 1; }
+.fb-dist { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fb-dist-row { display: grid; grid-template-columns: 24px 1fr 18px; align-items: center; gap: 8px; }
+.fb-dist-star { font-size: 11px; color: var(--muted); }
+.fb-dist-track { height: 7px; background: var(--n-100); border-radius: 20px; overflow: hidden; }
+.fb-dist-fill { display: block; height: 100%; background: #f5a623; border-radius: 20px; min-width: 0; transition: width .4s; }
+.fb-dist-n { font-size: 11px; text-align: right; }
+
+.fb-list { display: flex; flex-direction: column; gap: 12px; }
+.fb-review { display: flex; gap: 10px; }
+.fb-review-body { min-width: 0; flex: 1; }
+.fb-review-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fb-review-name { font-weight: 700; font-size: 13px; }
+.fb-review-time { font-size: 11px; margin-left: auto; }
+.fb-review-comment { font-size: 13px; color: var(--text); margin-top: 3px; line-height: 1.45; word-break: break-word; }
 
 /* ---- Task attachments -------------------------------------------------------- */
 /* Staged files in the New Task form (before upload) */
