@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useVoiceAssistant } from '../voice/useVoiceAssistant'
 import { useWakeWord, wakeWordConfigured, wakeWordPhrase, WakeStatus } from '../voice/wakeword'
+import { useDraggable } from '../lib/useDraggable'
 import VoiceCard from './VoiceCard'
+
+// Where the draggable "Ask BTM" card remembers its spot (per device).
+const FAB_POS_KEY = 'befach_voice_fab_pos'
+// The card is only shown — and so only draggable — on desktop/tablet; phones use
+// the bottom-nav centre mic instead (see the `.va-fab-pill { display: none }` rule).
+const CARD_MQ = '(min-width: 721px)'
 
 const MicIcon = ({ size = 24 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -67,6 +74,15 @@ const VOICE_STEPS: { key: string; label: string; icon: React.ReactNode }[] = [
   { key: 'complete', label: 'Complete', icon: <CheckIcon /> },
 ]
 const STEP_INDEX: Record<string, number> = { listening: 0, processing: 1, speaking: 2 }
+// Six-dot grip — the standard "you can move this" affordance. Decorative only:
+// the whole card is the drag handle, this just advertises it on hover.
+const GripIcon = () => (
+  <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">
+    <circle cx="2.5" cy="3" r="1.35" /><circle cx="7.5" cy="3" r="1.35" />
+    <circle cx="2.5" cy="8" r="1.35" /><circle cx="7.5" cy="8" r="1.35" />
+    <circle cx="2.5" cy="13" r="1.35" /><circle cx="7.5" cy="13" r="1.35" />
+  </svg>
+)
 
 export default function VoiceAssistant() {
   const v = useVoiceAssistant()
@@ -79,6 +95,17 @@ export default function VoiceAssistant() {
   // so a fresh sign-in shows it again. Dismissed by Try it / Got it / ✕, by opening
   // the assistant, or automatically after a while.
   const [coach, setCoach] = useState(false)
+
+  // The "Ask BTM" card is a free-floating dock the user can park anywhere on the
+  // page — dragging is gated to the widths where the card is actually rendered.
+  const [canDrag, setCanDrag] = useState(() => window.matchMedia(CARD_MQ).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(CARD_MQ)
+    const sync = () => setCanDrag(mq.matches)
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  const dock = useDraggable({ storageKey: FAB_POS_KEY, enabled: canDrag })
 
   // Wake word ("hey btm") — starts a session when heard. No-op until configured;
   // paused while a session is already open so it doesn't retrigger mid-conversation.
@@ -121,7 +148,19 @@ export default function VoiceAssistant() {
 
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [v.messages, v.state])
 
+  // The coachmark hangs off the card, so it has to flip sides once the card is
+  // parked near an edge — otherwise it would point off-screen. Approximate sizes
+  // cover the first paint, before the dock has been measured.
+  const dockAnchor = (() => {
+    if (!dock.pos) return ''  // default corner: coachmark above the card, right-aligned
+    const w = dock.ref.current?.offsetWidth || 232
+    const h = dock.ref.current?.offsetHeight || 62
+    return (dock.pos.x + w / 2 < window.innerWidth / 2 ? ' va-dock--left' : '')
+      + (dock.pos.y + h / 2 < window.innerHeight / 2 ? ' va-dock--top' : '')
+  })()
+
   return (
+    <>
     <div className="va-root">
       {/* Minimized bar — the session stays live over the page, so the user can
           keep giving commands (speak or tap) without re-triggering the wake word. */}
@@ -254,7 +293,16 @@ export default function VoiceAssistant() {
           </div>
         </div>
       )}
+    </div>
 
+    {/* The floating "Ask BTM" card — a dock the user can drag anywhere on screen
+        (position remembered per device). It carries the coachmark with it, so the
+        tip always points at wherever the card currently sits. */}
+    <div
+      ref={dock.ref}
+      className={'va-dock' + dockAnchor + (dock.dragging ? ' va-dock--dragging' : '')}
+      style={dock.style}
+    >
       {/* One-time first-visit coachmark, sitting just above the pill and pointing
           at it, so people discover voice — the product's main feature. */}
       {!v.open && coach && (
@@ -277,17 +325,22 @@ export default function VoiceAssistant() {
       {!v.open && (
         <button
           className="va-fab-pill"
-          onClick={v.start}
-          title="Control the app with your voice"
-          aria-label="Open voice assistant"
+          // A press that travels more than a few px is a drag, not a tap — the hook
+          // reports that so the trailing click doesn't also open the assistant.
+          onClick={() => { if (dock.consumeClick()) return; v.start() }}
+          title={canDrag ? 'Control the app with your voice · drag to move it anywhere' : 'Control the app with your voice'}
+          aria-label={canDrag ? 'Open voice assistant. Drag, or use the arrow keys, to move this card.' : 'Open voice assistant'}
+          {...dock.handleProps}
         >
           <span className="va-fab-ic"><MicIcon size={24} /><span className="va-fab-spark"><SparkleIcon size={12} /></span></span>
           <span className="va-fab-label">
             <span className="va-fab-title">Ask BTM</span>
             <span className="va-fab-sub">AI voice assistant</span>
           </span>
+          {canDrag && <span className="va-fab-grip"><GripIcon /></span>}
         </button>
       )}
     </div>
+    </>
   )
 }
