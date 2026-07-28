@@ -4,46 +4,40 @@
 import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
-import { getLeaderboard, getUserDetail, calibrateDailyTarget, advancePerformance } from '../performance.js'
+import { getLeaderboard, getUserDetail, rebuildPerformance } from '../performance.js'
 
 const r = Router()
 r.use(authRequired)
 
-const clampWindow = (v, def) => { const n = Number(v); return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.floor(n) : def }
+// day | month | all — anything else falls back to month.
+const PERIODS = ['day', 'month', 'all']
+const clampPeriod = (v) => (PERIODS.includes(v) ? v : 'month')
 
-// Whole-org leaderboard. ?window=7|30|90 selects the recent averaging window.
+// Whole-org leaderboard. ?period=day|month|all selects daily / monthly / all-time.
 r.get('/leaderboard', (req, res) => {
-  const windowDays = clampWindow(req.query.window, 30)
-  res.json(getLeaderboard(req.user.org_id, { windowDays }))
-})
-
-// Suggested throughput target from live data (managers tune PERF_DAILY_TARGET).
-r.get('/calibration', requireRole('manager', 'admin'), (req, res) => {
-  res.json(calibrateDailyTarget(req.user.org_id))
+  res.json(getLeaderboard(req.user.org_id, { period: clampPeriod(req.query.period) }))
 })
 
 // The signed-in user's own detail.
 r.get('/me', (req, res) => {
-  const windowDays = clampWindow(req.query.window, 30)
-  const detail = getUserDetail(req.user.id, { windowDays })
+  const detail = getUserDetail(req.user.id, { period: clampPeriod(req.query.period) })
   if (!detail) return res.status(404).json({ error: 'No score yet' })
   res.json(detail)
 })
 
-// Any employee's detail — same org only.
+// Any user's detail — same org only.
 r.get('/:userId', (req, res) => {
   const target = db.prepare('SELECT org_id FROM users WHERE id=?').get(req.params.userId)
   if (!target) return res.status(404).json({ error: 'User not found' })
   if (target.org_id !== req.user.org_id) return res.status(403).json({ error: 'Out of organization' })
-  const windowDays = clampWindow(req.query.window, 30)
-  const detail = getUserDetail(req.params.userId, { windowDays })
+  const detail = getUserDetail(req.params.userId, { period: clampPeriod(req.query.period) })
   if (!detail) return res.status(404).json({ error: 'No score yet' })
   res.json(detail)
 })
 
-// Manager-triggered recompute of any not-yet-scored days (normally automatic).
+// Manager-triggered full rebuild of the scores from history (normally automatic).
 r.post('/recompute', requireRole('manager', 'admin'), (req, res) => {
-  res.json(advancePerformance())
+  res.json(rebuildPerformance())
 })
 
 export default r

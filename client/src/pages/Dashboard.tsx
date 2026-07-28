@@ -133,6 +133,75 @@ function RecentActivity({ items }: { items: any[] }) {
   )
 }
 
+// Work employees have submitted and that is waiting on THIS manager. Nothing
+// else on the dashboard surfaced it, so submissions sat unapproved. Decide right
+// here — approve, or send back for changes — without opening each task.
+function ReviewQueue({ items, onOpen, onDecided }: { items: any[]; onOpen: (id: string) => void; onDecided: () => void }) {
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const decide = async (e: React.MouseEvent, id: string, decision: 'approved' | 'rejected') => {
+    e.stopPropagation() // the row itself opens the task
+    setBusyId(id)
+    try {
+      await api.post(`/tasks/${id}/approve`, { decision })
+      toast.success(decision === 'approved' ? 'Task approved' : 'Sent back for changes')
+      onDecided()
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not update the task')
+    } finally {
+      setBusyId(null)
+    }
+  }
+  return (
+    <div className="pbi-card pbi-review">
+      <div className="pbi-head">
+        <h3>Awaiting your approval</h3>
+        {items.length > 0 && <span className="badge" style={{ marginLeft: 'auto', background: 'var(--warning-bg)', color: 'var(--warning-ink)' }}>{items.length}</span>}
+      </div>
+      <div className="pbi-scroll" style={{ padding: 0 }}>
+        {items.length === 0 ? (
+          <div className="muted" style={{ padding: '14px 16px', fontSize: 13 }}>Nothing waiting on you.</div>
+        ) : items.map((t: any) => (
+          <div
+            key={t.id}
+            className="rev-row clickable"
+            role="button"
+            tabIndex={0}
+            aria-label={`Open ${t.title}`}
+            onClick={() => onOpen(t.id)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(t.id) } }}
+          >
+            <div className="rev-main">
+              <div className="rev-title">{t.title}</div>
+              <div className="rev-meta muted">
+                {t.assignee_name || 'Unassigned'}
+                {t.submitted_at && <> · submitted {timeAgo(t.submitted_at)}</>}
+              </div>
+            </div>
+            <div className="rev-actions">
+              <button
+                className="btn btn-sm btn-done"
+                disabled={busyId === t.id}
+                onClick={(e) => decide(e, t.id, 'approved')}
+                title="Approve and mark as done"
+              >
+                {busyId === t.id ? <span className="spinner" /> : '✓ Approve'}
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={busyId === t.id}
+                onClick={(e) => decide(e, t.id, 'rejected')}
+                title="Send back to the assignee for changes"
+              >
+                Changes
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function useDrawer() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -463,6 +532,9 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
       </div>
 
       <div className="pbi-body">
+        {/* First card: it's the one thing here that's waiting on the manager. */}
+        <ReviewQueue items={data.in_review || []} onOpen={d.setOpenId} onDecided={loadDash} />
+
         <div className="pbi-card pbi-workload">
           <div className="pbi-head"><h3>Team workload</h3><span className="muted" style={{ marginLeft: 'auto', fontSize: 11.5 }}>open tasks per person</span></div>
           <div className="pbi-scroll">
@@ -481,14 +553,13 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                   tabIndex={0}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/tasks?assignee=${w.id}`) } }}
                 >
+                  {/* No role badge here: the label column is only 124px, so an
+                      "Admin"/"Manager" pill ate most of it and left names
+                      truncated to a letter or two. The name is what identifies
+                      the row, so it gets the width. */}
                   <span className="hbar-label">
                     <Avatar name={w.name} color={w.avatar_color} size={22} />
                     <span className="hbar-name">{w.name}</span>
-                    {w.role && w.role !== 'employee' && (
-                      <span className="hbar-role" title={`${w.name} is ${w.role === 'admin' ? 'an admin' : 'a manager'}`}>
-                        {w.role === 'admin' ? 'Admin' : 'Manager'}
-                      </span>
-                    )}
                     {overloaded && <span style={{ color: 'var(--danger)', display: 'inline-flex' }} title="Overloaded"><Ic name="warning" size={12} /></span>}
                   </span>
                   <span className="hbar-track">
