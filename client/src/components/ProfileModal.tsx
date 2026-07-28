@@ -7,7 +7,7 @@ import { useEscape } from '../lib/useEscape'
 
 // A self-service profile hub: change photo, edit name, change password, pick an app
 // wallpaper, and set the preferred language. Opens from the sidebar avatar.
-export default function ProfileModal({ onClose }: { onClose: () => void }) {
+export default function ProfileModal({ onClose, onFeedback }: { onClose: () => void; onFeedback?: () => void }) {
   const { user, refresh, logout } = useAuth()
   useEscape(onClose)
   if (!user) return null
@@ -144,6 +144,17 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               {busy === 'password' ? <span className="spinner" /> : 'Update password'}
             </button>
           </section>
+
+          {/* Rate the app */}
+          {onFeedback && (
+            <section className="profile-section">
+              <h4>Rate this app</h4>
+              <p className="muted" style={{ margin: '0 0 10px', fontSize: 12.5 }}>Tell us how VoTask is working for you.</p>
+              <button className="btn btn-sm row" style={{ gap: 7 }} onClick={onFeedback}>
+                <Ic name="star" size={15} /> Rate &amp; give feedback
+              </button>
+            </section>
+          )}
 
           {/* Sign out */}
           <button className="btn profile-logout" onClick={() => { onClose(); logout() }}>Log out</button>

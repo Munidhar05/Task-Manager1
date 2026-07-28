@@ -390,13 +390,11 @@ export function initSchema() {
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
-  -- Employee performance: one row per user per calendar DAY they were active.
-  -- day_score (0-100) is that day's execution score; rating_after (0-1000) is the
-  -- cumulative self-correcting all-time rating AFTER applying that day. The current
-  -- all-time rating is simply the latest row's rating_after. Written by the daily
-  -- advance job (performance.js), which is idempotent per (user_id, day). Extra
-  -- columns cache the component figures so the UI can explain a score without
-  -- recomputing. See scoring.js for the maths.
+  -- LEGACY / UNUSED. Held the old 0-100 daily-rating history. Leaderboard points
+  -- are now a flat count of actions (assign / complete / comment / status change)
+  -- counted live from tasks, task_comments and audit_logs on every read, so nothing
+  -- writes or reads this table any more — see performance.js and scoring.js.
+  -- Kept (empty) rather than dropped so an existing database needs no migration.
   CREATE TABLE IF NOT EXISTS performance_daily (
     user_id TEXT NOT NULL,
     org_id TEXT NOT NULL,
@@ -415,6 +413,21 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_perf_org_day ON performance_daily(org_id, day);
   CREATE INDEX IF NOT EXISTS idx_perf_user_day ON performance_daily(user_id, day);
+
+  -- In-app feedback: a star rating (1-5) + optional comment about the app itself.
+  -- One current row per user (they update their own), so the org sees each
+  -- member's latest opinion rather than a pile of duplicates.
+  CREATE TABLE IF NOT EXISTS app_feedback (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL UNIQUE,
+    rating INTEGER NOT NULL,                    -- 1..5 stars
+    comment TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_feedback_org ON app_feedback(org_id);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.

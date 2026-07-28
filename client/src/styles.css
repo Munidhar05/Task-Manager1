@@ -195,8 +195,11 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .sidebar-sync.offline .sidebar-sync-dot { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 24%, transparent); animation: sync-pulse 1.4s ease-in-out infinite; }
 @keyframes sync-pulse { 50% { opacity: .4; } }
 @media (prefers-reduced-motion: reduce) { .sidebar-sync.offline .sidebar-sync-dot { animation: none; } }
+.sidebar-legal-row { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; }
 .sidebar-legal { flex-shrink: 0; font-size: var(--t-xs); font-weight: 600; color: var(--sidebar-muted); text-decoration: none; }
 .sidebar-legal:hover { color: var(--primary); text-decoration: underline; }
+.sidebar-legal-btn { border: 0; background: none; cursor: pointer; padding: 0; font-family: inherit; }
+.sidebar-legal-sep { color: var(--sidebar-muted); font-size: var(--t-xs); }
 /* Scoped with .sidebar-user for higher specificity than the mobile `.btn`
    padding override (which otherwise squeezes/clips this fixed-size icon button
    on phones). box-sizing keeps it square regardless of inherited padding. */
@@ -567,17 +570,40 @@ tbody tr:hover { background: var(--n-50); }
    and COLOUR, not motion: a large solid gradient orb-pill with a mic in an inset
    orb and a two-line label. No ambient animation (it was reading as a ghosty halo);
    it only reacts to hover, and shows a live dot when actually armed. */
+/* The card's dock. Sits in the bottom-right corner by default; once the user
+   drags it, useDraggable writes inline left/top (and clears right/bottom) so it
+   can be parked anywhere. Its box is exactly the card's — the coachmark is
+   absolutely positioned off it, so it never shifts what we clamp to the viewport. */
+.va-dock { position: fixed; right: 20px; bottom: 20px; z-index: 1200; display: inline-flex; }
+.va-dock--dragging { z-index: 1310; }  /* stay on top of whatever it's dragged over */
+
 .va-fab-pill {
   position: relative; display: inline-flex; align-items: center; gap: 12px;
-  height: 62px; padding: 0 24px 0 8px; border: none; border-radius: 999px;
-  color: #fff; letter-spacing: .01em; cursor: pointer;
+  height: 62px; padding: 0 28px 0 8px; border: none; border-radius: 999px;
+  color: #fff; letter-spacing: .01em; cursor: grab;
   background: linear-gradient(135deg, #ff8a2b 0%, #ff6a00 45%, #f2622e 100%);
   box-shadow: 0 12px 28px rgba(242,98,46,.42), inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 1px rgba(255,255,255,.1);
   transition: transform .16s cubic-bezier(.16,.84,.44,1), box-shadow .2s ease;
+  touch-action: none;  /* a touch-drag moves the card instead of scrolling the page */
+  user-select: none; -webkit-user-select: none;
 }
 .va-fab-pill:hover { transform: translateY(-2px); box-shadow: 0 16px 36px rgba(242,98,46,.5), inset 0 1px 0 rgba(255,255,255,.28), inset 0 0 0 1px rgba(255,255,255,.16); }
 .va-fab-pill:active { transform: translateY(0); }
 .va-fab-pill:focus-visible { outline: 3px solid rgba(255,255,255,.85); outline-offset: 3px; }
+/* While being dragged: lifted off the page, and no hover transform fighting the
+   pointer position. No transition either — it must track the cursor exactly. */
+.va-dock--dragging .va-fab-pill,
+.va-dock--dragging .va-fab-pill:hover {
+  cursor: grabbing; transform: none; transition: none;
+  box-shadow: 0 22px 48px rgba(16,24,40,.3), 0 12px 28px rgba(242,98,46,.5), inset 0 1px 0 rgba(255,255,255,.28), inset 0 0 0 1px rgba(255,255,255,.18);
+}
+/* Grip dots — quiet at rest, visible on hover/focus so the card reads as movable. */
+.va-fab-grip {
+  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; color: #fff; opacity: 0; transition: opacity .16s ease;
+}
+.va-fab-pill:hover .va-fab-grip, .va-fab-pill:focus-visible .va-fab-grip,
+.va-dock--dragging .va-fab-grip { opacity: .6; }
 /* Mic in an inset translucent orb — the focal point. */
 .va-fab-ic { position: relative; width: 46px; height: 46px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
   background: rgba(255,255,255,.2); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.32), 0 2px 6px rgba(16,24,40,.18); }
@@ -595,9 +621,13 @@ tbody tr:hover { background: var(--n-50); }
   .va-fab-sub { display: none; }
 }
 
-/* First-visit coachmark — a dark card above the pill with a tail pointing at it. */
+/* First-visit coachmark — a dark card above the pill with a tail pointing at it.
+   Absolutely positioned off the dock so it travels with the card without changing
+   the dock's own box; the --top/--left modifiers flip it when the card has been
+   parked near an edge, so it can never point off-screen. */
 .va-coach {
-  position: relative; width: min(288px, calc(100vw - 40px)); align-self: flex-end;
+  position: absolute; bottom: calc(100% + 12px); right: 0;
+  width: min(288px, calc(100vw - 40px));
   background: linear-gradient(160deg, #2a221c 0%, #1c1713 100%); color: #fff;
   border: 1px solid rgba(255,255,255,.1); border-radius: var(--r-lg);
   padding: 15px 16px 16px; box-shadow: var(--e-3);
@@ -608,6 +638,17 @@ tbody tr:hover { background: var(--n-50); }
   background: #1c1713; border-right: 1px solid rgba(255,255,255,.1); border-bottom: 1px solid rgba(255,255,255,.1);
   transform: rotate(45deg);
 }
+/* Card parked in the top half → hang the tip below it, tail pointing up. */
+.va-dock--top .va-coach { bottom: auto; top: calc(100% + 12px); }
+.va-dock--top .va-coach::after {
+  bottom: auto; top: -7px;
+  border-right: 0; border-bottom: 0;
+  border-left: 1px solid rgba(255,255,255,.1); border-top: 1px solid rgba(255,255,255,.1);
+  background: #2a221c;
+}
+/* Card parked in the left half → align the tip to the card's left edge. */
+.va-dock--left .va-coach { right: auto; left: 0; }
+.va-dock--left .va-coach::after { right: auto; left: 30px; }
 @keyframes va-coach-in { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .va-coach { animation: none; } }
 .va-coach-badge { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .08em; color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, transparent); border-radius: var(--r-sm); padding: 2px 7px; margin-bottom: 9px; }
@@ -1613,7 +1654,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 /* Volume side-badge (top completer / most assigned) — shown, not scored. */
 .lb-badge { flex-shrink: 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
   padding: 2px 7px; border-radius: 999px; color: var(--bc); background: color-mix(in srgb, var(--bc) 13%, transparent); border: 1px solid color-mix(in srgb, var(--bc) 30%, transparent); }
-.lb-sub { font-size: 12px; text-transform: capitalize; }
+/* The actions behind a person's total (3 tasks assigned · 2 completed …), one
+   chip per scoring rule, colour-coded to match the detail bars. */
+.lb-sub { font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.lb-chip { flex-shrink: 0; font-size: 11px; font-weight: 600; white-space: nowrap;
+  padding: 1px 8px; border-radius: 999px; color: var(--bc);
+  background: color-mix(in srgb, var(--bc) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bc) 26%, transparent); }
+@media (max-width: 560px) {
+  /* Keep the card one line tall on phones: show the first two chips only. */
+  .lb-sub { flex-wrap: nowrap; overflow: hidden; }
+  .lb-chip:nth-child(n+3) { display: none; }
+}
 .lb-rating { text-align: center; }
 .lb-rating-num { font-size: 22px; font-weight: 800; line-height: 1; }
 .lb-rating-lbl, .lb-winscore-lbl { font-size: 10.5px; letter-spacing: .02em; }
@@ -1649,6 +1701,41 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   .lb-card { grid-template-columns: 30px 34px 1fr auto; row-gap: 6px; }
   .lb-name { flex-wrap: wrap; }
 }
+
+/* ---- App feedback (rate this app) ------------------------------------------- */
+.fb-modal { width: 480px; max-width: 94vw; }
+.fb-modal .card-pad { max-height: min(78vh, 720px); overflow-y: auto; }
+.fb-rate { display: flex; flex-direction: column; gap: 12px; }
+.fb-rate-q { font-weight: 700; font-size: 14.5px; }
+.fb-stars { display: inline-flex; gap: 4px; }
+.fb-star { border: 0; background: none; padding: 2px; line-height: 0; color: var(--n-300); cursor: default; }
+.fb-star.on { color: #f5a623; }
+.fb-star.interactive { cursor: pointer; transition: transform .1s, color .12s; }
+.fb-star.interactive:hover { transform: scale(1.12); }
+.fb-comment { width: 100%; resize: vertical; min-height: 64px; font-family: inherit; font-size: 13.5px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.fb-comment:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
+.fb-rate .btn-primary { align-self: flex-start; }
+
+.fb-reviews { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 16px; }
+.fb-section-lbl { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 12px; }
+.fb-summary { display: flex; gap: 18px; align-items: center; margin-bottom: 16px; }
+.fb-avg { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
+.fb-avg-num { font-size: 34px; font-weight: 800; line-height: 1; }
+.fb-dist { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fb-dist-row { display: grid; grid-template-columns: 24px 1fr 18px; align-items: center; gap: 8px; }
+.fb-dist-star { font-size: 11px; color: var(--muted); }
+.fb-dist-track { height: 7px; background: var(--n-100); border-radius: 20px; overflow: hidden; }
+.fb-dist-fill { display: block; height: 100%; background: #f5a623; border-radius: 20px; min-width: 0; transition: width .4s; }
+.fb-dist-n { font-size: 11px; text-align: right; }
+
+.fb-list { display: flex; flex-direction: column; gap: 12px; }
+.fb-review { display: flex; gap: 10px; }
+.fb-review-body { min-width: 0; flex: 1; }
+.fb-review-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fb-review-name { font-weight: 700; font-size: 13px; }
+.fb-review-time { font-size: 11px; margin-left: auto; }
+.fb-review-comment { font-size: 13px; color: var(--text); margin-top: 3px; line-height: 1.45; word-break: break-word; }
 
 /* ---- Task attachments -------------------------------------------------------- */
 /* Staged files in the New Task form (before upload) */
@@ -1732,8 +1819,11 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   /* Reserve room so page content and floating UI clear the bar. */
   .content { padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
   .va-root { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+  .va-dock { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
   .toast-host { bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
-  /* The bottom-nav center mic replaces the floating voice pill on phones. */
+  /* The bottom-nav center mic replaces the floating voice pill on phones, so the
+     card (and with it the drag affordance) is desktop/tablet only — the dock
+     stays put here purely to anchor the coachmark above the tab bar. */
   .va-fab-pill { display: none; }
 
   /* --- Floating "New task" action ----------------------------------------- */

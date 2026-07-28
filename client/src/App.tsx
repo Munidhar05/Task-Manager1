@@ -7,6 +7,7 @@ import { api, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal from './components/ProfileModal'
+import FeedbackModal from './components/FeedbackModal'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
@@ -84,6 +85,7 @@ function syncAgo(ts: number) {
 function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth()
   const [showProfile, setShowProfile] = useState(false)
+  const [showFeedback, setShowFeedback] = useState(false)
   const loc = useLocation()
   // No explicit in-app back button: Android handles "back" via the hardware
   // button / swipe gesture (see useAndroidBackButton), and browsers have their own.
@@ -162,7 +164,11 @@ function Layout({ children }: { children: React.ReactNode }) {
               ? <span>Synced{lastSync ? ` ${syncAgo(lastSync)}` : ''}</span>
               : <span>Reconnecting…</span>}
           </div>
-          <NavLink to="/privacy" className="sidebar-legal" onClick={() => setOpen(false)}>Privacy</NavLink>
+          <div className="sidebar-legal-row">
+            <button className="sidebar-legal sidebar-legal-btn" onClick={() => { setOpen(false); setShowFeedback(true) }}>Rate this app</button>
+            <span className="sidebar-legal-sep">·</span>
+            <NavLink to="/privacy" className="sidebar-legal" onClick={() => setOpen(false)}>Privacy</NavLink>
+          </div>
         </div>
       </aside>
       {open && <div className="sidebar-backdrop" onClick={() => setOpen(false)} />}
@@ -216,7 +222,8 @@ function Layout({ children }: { children: React.ReactNode }) {
           <span className="bn-label">More</span>
         </button>
       </nav>
-      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
+      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} onFeedback={() => { setShowProfile(false); setShowFeedback(true) }} />}
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />
     </div>
