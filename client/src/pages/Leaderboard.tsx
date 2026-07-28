@@ -3,28 +3,32 @@ import { api, userAvatarUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Ic, EmptyState, Bar } from '../ui'
 
-// Engagement leaderboard. Everyone in the org is listed and scored 0-100 by their
-// ROLE's rubric (employees on execution, managers on orchestration), then ranked.
-// Daily / monthly / all-time; monthly & all-time are averages of daily scores, so
-// consistency beats raw volume. Clicking a card shows the section breakdown —
-// exactly which parts of the 100 the person earned. Scores come from /api/scores.
+// Points leaderboard. One point per action, no weighting:
+//   assign a task · complete a task · comment on a task · change a task's status
+// Assign 10 tasks and you have 10 points. Today / last 30 days / all-time are the
+// same count over a different window. Clicking a card shows which actions earned
+// the points. Everything comes from /api/scores, counted live from the task tables.
 
 const PERIODS = [
-  { k: 'day', label: 'Daily', hint: "latest scored day" },
-  { k: 'month', label: 'Monthly', hint: '30-day average' },
-  { k: 'all', label: 'All-time', hint: 'average of every scored day' },
+  { k: 'day', label: 'Today', hint: 'points earned today' },
+  { k: 'month', label: 'Monthly', hint: 'points earned in the last 30 days' },
+  { k: 'all', label: 'All-time', hint: 'every point ever earned' },
 ]
 
-// Score → hue. Green strong, amber middling, red weak. Concrete colours so they
-// work in inline SVG/gradient contexts (matches ui.tsx convention).
-function scoreColor(s: number | null): string {
-  if (s == null) return '#94a3b8'
-  if (s >= 75) return '#0f9d6e'
-  if (s >= 55) return '#2f9e6e'
-  if (s >= 40) return '#d98a0b'
-  if (s >= 20) return '#e07a0b'
-  return '#e2483a'
+// One colour per rule, reused by the card chips and the detail bars so a rule is
+// recognisable at a glance. Concrete values (matches the ui.tsx convention).
+const RULE_COLORS: Record<string, string> = {
+  assigned: '#2f6fd0',
+  completed: '#0f9d6e',
+  commented: '#8b5cf6',
+  status: '#d98a0b',
 }
+const ruleColor = (k: string) => RULE_COLORS[k] || '#64748b'
+
+// "status change" + 2 → "status changes". Only the noun-phrase rules need it —
+// "assigned"/"completed"/"commented" are past participles and never pluralise.
+const PLURALISE = new Set(['status change'])
+const plural = (word: string, n: number) => (n === 1 || !PLURALISE.has(word) ? word : word + 's')
 
 const medalColor = ['#d4af37', '#a8b3c4', '#c8823c'] // gold / silver / bronze
 
@@ -34,21 +38,21 @@ const Trophy = ({ size = 16, color = '#d4af37' }: { size?: number; color?: strin
   </svg>
 )
 
-// Sparkline of daily score over time.
-function Spark({ points, color = '#2f6fd0', w = 120, h = 30 }: { points: number[]; color?: string; w?: number; h?: number }) {
-  if (!points.length) return <svg width={w} height={h} />
-  const min = Math.min(...points, 0), max = Math.max(...points, 100)
-  const span = max - min || 1
-  const step = points.length > 1 ? w / (points.length - 1) : 0
-  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${(i * step).toFixed(1)} ${(h - 4 - ((p - min) / span) * (h - 8)).toFixed(1)}`).join(' ')
+// Points-per-day bars for the detail view.
+function DayBars({ history, w = 320, h = 54 }: { history: { day: string; points: number }[]; w?: number; h?: number }) {
+  const max = Math.max(1, ...history.map((d) => d.points))
+  const gap = 2
+  const bw = Math.max(2, (w - gap * (history.length - 1)) / history.length)
   return (
     <svg width={w} height={h} className="lb-spark" aria-hidden="true">
-      <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      {history.map((d, i) => {
+        const bh = d.points ? Math.max(2, (d.points / max) * (h - 6)) : 1
+        return <rect key={d.day} x={i * (bw + gap)} y={h - bh} width={bw} height={bh} rx={1.5}
+          fill={d.points ? '#f2622e' : 'var(--n-300)'} />
+      })}
     </svg>
   )
 }
-
-const isManager = (u: any) => u?.role !== 'employee'
 
 export default function Leaderboard() {
   const { user } = useAuth()
@@ -65,15 +69,12 @@ export default function Leaderboard() {
   useEffect(load, [period])
 
   if (!user) return null
-  const periodLabel = PERIODS.find((p) => p.k === period)?.label ?? ''
-  // Active-days is a manager-only stat (how much someone shows up), not scored.
-  const showActiveDays = isManager(user)
 
   return (
     <>
       <div className="lb-toolbar section">
         <div className="muted" style={{ fontSize: 13 }}>
-          Everyone scored 0–100 by their role. {period === 'day' ? 'Latest scored day.' : 'Average of daily scores — consistency, not volume.'}
+          1 point each: assign a task · complete a task · comment on a task · change a status.
         </div>
         <div className="lb-winsel" role="tablist" aria-label="Time period">
           {PERIODS.map((p) => (
@@ -93,17 +94,14 @@ export default function Leaderboard() {
       )}
 
       {!error && data && data.scored_count === 0 && (
-        <div className="card section"><EmptyState icon={<Trophy size={40} color="#94a3b8" />} title="No scores yet"
-          hint="Scores appear once people start completing, commenting on, and assigning work. Come back after a day of activity." /></div>
+        <div className="card section"><EmptyState icon={<Trophy size={40} color="#94a3b8" />} title="No points yet"
+          hint="Points appear as soon as someone assigns, completes or comments on a task — or moves one along." /></div>
       )}
 
       {!error && data && data.scored_count > 0 && (
         <div className="lb-list section" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
           {data.ranked.map((r: any) => (
-            <RankCard key={r.id} row={r} period={period} periodLabel={periodLabel}
-              showActiveDays={showActiveDays}
-              topReceived={data.top_received} topCompleted={data.top_completed}
-              onOpen={() => setDetailId(r.id)} />
+            <RankCard key={r.id} row={r} rules={data.rules} onOpen={() => setDetailId(r.id)} />
           ))}
         </div>
       )}
@@ -113,14 +111,11 @@ export default function Leaderboard() {
   )
 }
 
-function RankCard({ row, period, periodLabel, showActiveDays, topReceived, topCompleted, onOpen }: {
-  row: any; period: string; periodLabel: string; showActiveDays: boolean; topReceived: any; topCompleted: any; onOpen: () => void
-}) {
-  const ranked = row.score != null
+function RankCard({ row, rules, onOpen }: { row: any; rules: any[]; onOpen: () => void }) {
+  const ranked = row.score > 0
   const top3 = ranked && row.rank <= 3
-  const badges = []
-  if (topCompleted && topCompleted.user_id === row.id && topCompleted.count > 0) badges.push({ t: `Top completer · ${topCompleted.count}`, c: '#0f9d6e' })
-  if (topReceived && topReceived.user_id === row.id && topReceived.count > 0) badges.push({ t: `Most assigned · ${topReceived.count}`, c: '#2f6fd0' })
+  // The actions behind the total, so the card shows WHY without opening the modal.
+  const chips = (rules || []).map((r: any) => ({ ...r, count: row.breakdown?.[r.key]?.count || 0 })).filter((r: any) => r.count > 0)
   return (
     <button className={'lb-card' + (row.rank === 1 ? ' champ' : '') + (ranked ? '' : ' idle')} onClick={onOpen}>
       <span className="lb-rank" style={{ color: top3 ? medalColor[row.rank - 1] : undefined }}>
@@ -128,18 +123,20 @@ function RankCard({ row, period, periodLabel, showActiveDays, topReceived, topCo
       </span>
       <Avatar name={row.name} color={row.avatar_color} size={40} src={row.avatar_file ? userAvatarUrl(row.id, row.avatar_file) : undefined} />
       <div className="lb-who">
-        <div className="lb-name">
-          {row.name}
-          {badges.map((b) => <span key={b.t} className="lb-badge" style={{ ['--bc' as any]: b.c }}>{b.t}</span>)}
-        </div>
-        <div className="lb-sub muted" style={{ textTransform: 'capitalize' }}>
-          {row.role}
-          {showActiveDays && row.active_days > 0 ? ` · active ${row.active_days} day${row.active_days === 1 ? '' : 's'}` : ''}
+        <div className="lb-name">{row.name}</div>
+        <div className="lb-sub muted">
+          {chips.length === 0
+            ? <span style={{ textTransform: 'capitalize' }}>{row.role}</span>
+            : chips.map((c: any) => (
+              <span key={c.key} className="lb-chip" style={{ ['--bc' as any]: ruleColor(c.key) }}>
+                {c.count} {plural(c.short || c.label.toLowerCase(), c.count)}
+              </span>
+            ))}
         </div>
       </div>
       <div className="lb-winscore">
-        <div className="lb-winscore-num" style={{ color: scoreColor(row.score) }}>{row.score ?? '–'}<span className="muted" style={{ fontSize: 11 }}>/100</span></div>
-        <div className="muted lb-winscore-lbl">{period === 'day' ? 'today' : periodLabel.toLowerCase()}</div>
+        <div className="lb-winscore-num" style={{ color: ranked ? '#f2622e' : '#94a3b8' }}>{row.score}</div>
+        <div className="muted lb-winscore-lbl">{row.score === 1 ? 'point' : 'points'}</div>
       </div>
     </button>
   )
@@ -153,19 +150,20 @@ function DetailModal({ userId, period, onClose }: { userId: string; period: stri
     api.get(`/scores/${userId}?period=${period}`).then(setD).catch(() => setError(true))
   }, [userId, period])
 
-  const latest = d?.latest
-  const bd = latest?.breakdown || {}
-  // Section rows from the person's own rubric, filled with the latest day's points.
-  const sections = (d?.sections || []).map((s: any) => ({
-    key: s.key, label: s.label, cap: s.cap,
-    capped: bd[s.key]?.capped ?? 0,
+  // One row per rule: how many times they did it, and the points that earned.
+  const rows = (d?.rules || []).map((r: any) => ({
+    key: r.key, label: r.label, hint: r.hint,
+    count: d?.breakdown?.[r.key]?.count || 0,
+    points: d?.breakdown?.[r.key]?.points || 0,
   }))
+  const maxPoints = Math.max(1, ...rows.map((r: any) => r.points))
+  const periodLabel = period === 'day' ? 'today' : period === 'all' ? 'all-time' : 'last 30 days'
 
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal lb-modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread">
-          <h3>Performance detail</h3>
+          <h3>Points detail</h3>
           <button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="card-pad">
@@ -177,33 +175,34 @@ function DetailModal({ userId, period, onClose }: { userId: string; period: stri
               <Avatar name={d.user.name} color={d.user.avatar_color} size={48} src={d.user.avatar_file ? userAvatarUrl(d.user.id, d.user.avatar_file) : undefined} />
               <div style={{ minWidth: 0 }}>
                 <div className="lb-modal-name">{d.user.name}</div>
-                <div className="muted" style={{ fontSize: 12.5, textTransform: 'capitalize' }}>{d.user.role} · scored on the {isManagerRole(d.user.role) ? 'manager' : 'employee'} rubric</div>
+                <div className="muted" style={{ fontSize: 12.5, textTransform: 'capitalize' }}>{d.user.role}</div>
               </div>
               <div className="lb-modal-rating">
-                <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1, color: scoreColor(d.period_score) }}>{d.period_score ?? '–'}</div>
-                <div className="muted" style={{ fontSize: 11 }}>{period === 'day' ? 'latest day' : period === 'all' ? 'all-time avg' : '30-day avg'}</div>
+                <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1, color: '#f2622e' }}>{d.points}</div>
+                <div className="muted" style={{ fontSize: 11 }}>{periodLabel}</div>
               </div>
             </div>
 
             <div className="lb-modal-stats">
-              <div className="lb-stat"><div className="lb-stat-num">{latest ? latest.day_score : '–'}</div><div className="muted lb-stat-lbl">latest day</div></div>
-              <div className="lb-stat"><div className="lb-stat-num">{d.active_days}</div><div className="muted lb-stat-lbl">active days</div></div>
-              <div className="lb-stat"><div className="lb-stat-num">{d.tasks_done_total}</div><div className="muted lb-stat-lbl">tasks completed</div></div>
+              <div className="lb-stat"><div className="lb-stat-num">{d.points}</div><div className="muted lb-stat-lbl">{periodLabel}</div></div>
+              <div className="lb-stat"><div className="lb-stat-num">{d.all_time_points}</div><div className="muted lb-stat-lbl">all-time</div></div>
+              <div className="lb-stat"><div className="lb-stat-num">{d.breakdown?.completed?.count ?? 0}</div><div className="muted lb-stat-lbl">tasks completed</div></div>
             </div>
 
-            <div className="lb-section-lbl">Daily score over time</div>
-            {d.history.length > 1
-              ? <div className="lb-trajectory"><Spark points={d.history.map((h: any) => h.day_score)} color={scoreColor(d.period_score)} w={320} h={54} /></div>
-              : <div className="muted" style={{ fontSize: 12.5 }}>Not enough history yet to chart.</div>}
+            <div className="lb-section-lbl">Points per day (last 30 days)</div>
+            {d.history?.some((h: any) => h.points > 0)
+              ? <div className="lb-trajectory"><DayBars history={d.history} /></div>
+              : <div className="muted" style={{ fontSize: 12.5 }}>No points earned in the last 30 days.</div>}
 
-            <div className="lb-section-lbl">Latest day — where the points came from{latest ? ` (${latest.day})` : ''}</div>
-            {sections.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>No scored day yet.</div>}
+            <div className="lb-section-lbl">Where the points came from — {periodLabel}</div>
             <div className="lb-comps">
-              {sections.map((s: any) => (
+              {rows.map((s: any) => (
                 <div key={s.key} className="lb-comp">
-                  <div className="lb-comp-top"><span className="lb-comp-key">{s.label}</span>
-                    <span className="lb-comp-val">{s.capped} / {s.cap}</span></div>
-                  <Bar value={s.capped} max={s.cap} color="#f2622e" />
+                  <div className="lb-comp-top">
+                    <span className="lb-comp-key" title={s.hint}>{s.label}</span>
+                    <span className="lb-comp-val">{s.count} × 1 = <b>{s.points}</b></span>
+                  </div>
+                  <Bar value={s.points} max={maxPoints} color={ruleColor(s.key)} />
                 </div>
               ))}
             </div>
@@ -214,5 +213,3 @@ function DetailModal({ userId, period, onClose }: { userId: string; period: stri
     </div>
   )
 }
-
-const isManagerRole = (role: string) => role !== 'employee'

@@ -3,8 +3,8 @@
 // blocked. The heavy lifting lives in performance.js / scoring.js.
 import { Router } from 'express'
 import { db } from '../db.js'
-import { authRequired, requireRole } from '../auth.js'
-import { getLeaderboard, getUserDetail, rebuildPerformance } from '../performance.js'
+import { authRequired } from '../auth.js'
+import { getLeaderboard, getUserDetail } from '../performance.js'
 
 const r = Router()
 r.use(authRequired)
@@ -13,7 +13,7 @@ r.use(authRequired)
 const PERIODS = ['day', 'month', 'all']
 const clampPeriod = (v) => (PERIODS.includes(v) ? v : 'month')
 
-// Whole-org leaderboard. ?period=day|month|all selects daily / monthly / all-time.
+// Whole-org leaderboard. ?period=day|month|all selects today / last 30 days / all-time.
 r.get('/leaderboard', (req, res) => {
   res.json(getLeaderboard(req.user.org_id, { period: clampPeriod(req.query.period) }))
 })
@@ -35,9 +35,7 @@ r.get('/:userId', (req, res) => {
   res.json(detail)
 })
 
-// Manager-triggered full rebuild of the scores from history (normally automatic).
-r.post('/recompute', requireRole('manager', 'admin'), (req, res) => {
-  res.json(rebuildPerformance())
-})
+// No /recompute any more: points are counted live from tasks / task_comments /
+// audit_logs on every read, so there is no stored history that can go stale.
 
 export default r

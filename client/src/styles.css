@@ -1654,7 +1654,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 /* Volume side-badge (top completer / most assigned) — shown, not scored. */
 .lb-badge { flex-shrink: 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
   padding: 2px 7px; border-radius: 999px; color: var(--bc); background: color-mix(in srgb, var(--bc) 13%, transparent); border: 1px solid color-mix(in srgb, var(--bc) 30%, transparent); }
-.lb-sub { font-size: 12px; text-transform: capitalize; }
+/* The actions behind a person's total (3 tasks assigned · 2 completed …), one
+   chip per scoring rule, colour-coded to match the detail bars. */
+.lb-sub { font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.lb-chip { flex-shrink: 0; font-size: 11px; font-weight: 600; white-space: nowrap;
+  padding: 1px 8px; border-radius: 999px; color: var(--bc);
+  background: color-mix(in srgb, var(--bc) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bc) 26%, transparent); }
+@media (max-width: 560px) {
+  /* Keep the card one line tall on phones: show the first two chips only. */
+  .lb-sub { flex-wrap: nowrap; overflow: hidden; }
+  .lb-chip:nth-child(n+3) { display: none; }
+}
 .lb-rating { text-align: center; }
 .lb-rating-num { font-size: 22px; font-weight: 800; line-height: 1; }
 .lb-rating-lbl, .lb-winscore-lbl { font-size: 10.5px; letter-spacing: .02em; }

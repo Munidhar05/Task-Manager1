@@ -3,7 +3,6 @@
 // restart can't double-send.
 import { db } from './db.js'
 import { sendDailyDigests } from './digest.js'
-import { advancePerformance } from './performance.js'
 
 const SEND_HOUR = Number(process.env.DIGEST_HOUR || 8) // local server time, 0-23
 
@@ -21,19 +20,12 @@ async function tick() {
   if (now.getHours() === SEND_HOUR && getMeta('digest_last_sent') !== todayStr) {
     setMeta('digest_last_sent', todayStr) // mark first so a crash mid-send won't loop
     try { await sendDailyDigests() } catch (e) { console.error('[scheduler] digest failed:', e.message) }
-    // Roll performance ratings forward for any newly-completed day(s). Idempotent,
-    // so pairing it with the once-a-day digest window is enough (reads also lazily
-    // catch up). Runs after the digest so a slow digest can't delay it.
-    try { const r = advancePerformance(); if (r.days) console.log(`[scheduler] performance: scored ${r.days} day(s) through ${r.through}`) }
-    catch (e) { console.error('[scheduler] performance advance failed:', e.message) }
+    // Leaderboard points need no scheduled work: performance.js counts them live
+    // from tasks / task_comments / audit_logs on every read.
   }
 }
 
 export function startScheduler() {
   console.log(`  Daily task digest scheduled for ${String(SEND_HOUR).padStart(2, '0')}:00 (local time)`)
   setInterval(tick, 60 * 1000) // check every minute
-  // Backfill/catch-up once at boot so the leaderboard has history immediately,
-  // without waiting for the first scheduled tick. Best-effort.
-  try { const r = advancePerformance(); if (r.days) console.log(`  Performance: backfilled ${r.days} day(s) through ${r.through}`) }
-  catch (e) { console.error('[scheduler] performance backfill failed:', e.message) }
 }

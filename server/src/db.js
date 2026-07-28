@@ -390,13 +390,11 @@ export function initSchema() {
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
-  -- Employee performance: one row per user per calendar DAY they were active.
-  -- day_score (0-100) is that day's execution score; rating_after (0-1000) is the
-  -- cumulative self-correcting all-time rating AFTER applying that day. The current
-  -- all-time rating is simply the latest row's rating_after. Written by the daily
-  -- advance job (performance.js), which is idempotent per (user_id, day). Extra
-  -- columns cache the component figures so the UI can explain a score without
-  -- recomputing. See scoring.js for the maths.
+  -- LEGACY / UNUSED. Held the old 0-100 daily-rating history. Leaderboard points
+  -- are now a flat count of actions (assign / complete / comment / status change)
+  -- counted live from tasks, task_comments and audit_logs on every read, so nothing
+  -- writes or reads this table any more — see performance.js and scoring.js.
+  -- Kept (empty) rather than dropped so an existing database needs no migration.
   CREATE TABLE IF NOT EXISTS performance_daily (
     user_id TEXT NOT NULL,
     org_id TEXT NOT NULL,
