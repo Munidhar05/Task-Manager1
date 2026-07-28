@@ -1,143 +1,119 @@
-// Employee performance scoring — pure math, no DB access.
+// Engagement scoring — pure math, no DB access.
 //
-// Two layers:
-//   1. A DAILY SCORE (0-100) for one employee on one calendar day, built from how
-//      they handled their tasks that day (on-time, throughput, quality, engagement,
-//      minus a penalty for overdue work sitting open).
-//   2. An ALL-TIME RATING (0-1000, self-correcting) that is nudged up or down each
-//      active day by that day's score vs a neutral baseline. Good days raise it,
-//      bad days lower it; moves shrink near the 0/1000 bounds so it stays bounded
-//      and stays comparable across employees regardless of tenure.
+// One idea, stated once: a person's day is 100 points, split into fixed SECTIONS
+// that reflect their ROLE's job. You earn a section's points by doing that kind of
+// work, weighted by task priority, until the section's budget is full. Sum the
+// filled sections → the day's score (0-100). There are no negatives and nothing
+// can exceed 100, because the section budgets sum to exactly 100 and each is
+// individually capped.
 //
-// Everything here is a pure function of its inputs so it can be tested in isolation
-// and so a past day can be recomputed deterministically. The DB-facing service
-// (performance.js) gathers the rows and feeds them in.
+//   Employee (execution):   complete 35 · comment 25 · status 20 · delegate 20
+//   Manager  (orchestration): review 30 · assign 25 · comment+status 20 ·
+//                             meetings 15 · complete-own 10
+//
+// Per-task points are priority-weighted so difficulty matters, not raw count:
+// one well-handled Critical task nearly fills a section on its own, so a diligent
+// person given few tasks still scores well (the whole reason this replaced the old
+// rate-average engine, which quietly rewarded doing less).
+//
+// Everything here is a pure function of its inputs, so a past day recomputes
+// deterministically. performance.js gathers the rows and feeds them in.
 
-export const PRIORITY_WEIGHT = { Critical: 4, High: 3, Medium: 2, Low: 1 }
-export const priorityWeight = (p) => PRIORITY_WEIGHT[p] || PRIORITY_WEIGHT.Medium
+// Bump when the scoring POLICY changes in a way that makes stored days stale.
+// performance.js compares this against a stored marker and rebuilds history when
+// they differ, so a deploy re-scores cleanly instead of mixing old and new maths.
+export const SCORING_VERSION = 'sections-v1'
 
-// --- Daily score component weights (sum to 100 when all are present) ----------
-// Absent components (e.g. no due-dated task resolved that day) drop out and the
-// remaining weights renormalise, so a missing signal never unfairly zeroes a day.
-const W = { onTime: 40, throughput: 25, quality: 20, engagement: 15 }
+export const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
+// Fallback for a task whose priority is missing/unknown (e.g. deleted task joined
+// from the audit log) — treated as Medium, the product's own default.
+const norm = (p) => (PRIORITIES.includes(p) ? p : 'Medium')
 
-// Throughput target: the weighted output that maxes out the throughput component.
-// Expressed PER DAY. Team pace is ~1 task/day for an active employee, so ~1.5
-// weighted/day (a single Medium-to-High task) caps it. Auto-calibrated by the
-// service from the active-team median; this is the cold-start fallback.
-export const DEFAULT_DAILY_TARGET = 1.5
+// Per-priority point tables. A section is either PRIORITY-weighted (an object of
+// per-priority points) or FLAT (a single number per event, e.g. meetings).
+const P = (crit, high, med, low) => ({ Critical: crit, High: high, Medium: med, Low: low })
 
-// Overdue penalty: up to this many points come off the daily score for tasks that
-// are past due and still open. Scales with priority weight and how late they are.
-const MAX_PENALTY = 10
-const LATE_RAMP_DAYS = 14 // days overdue at which the penalty ramp maxes out
+// role → section → { cap, points|flat, label }. The caps sum to 100 per role.
+export const RUBRICS = {
+  employee: {
+    complete: { cap: 35, points: P(12, 10, 8, 5), label: 'Completing tasks' },
+    comment: { cap: 25, points: P(8, 6, 5, 3), label: 'Comments' },
+    status: { cap: 20, points: P(8, 6, 5, 3), label: 'Status updates' },
+    delegate: { cap: 20, points: P(5, 4, 3, 2), label: 'Delegating' },
+  },
+  manager: {
+    review: { cap: 30, points: P(10, 8, 6, 5), label: 'Reviewing / approving' },
+    assign: { cap: 25, points: P(5, 4, 3, 2), label: 'Assigning tasks' },
+    commstatus: { cap: 20, points: P(5, 4, 3, 2), label: 'Comments & status' },
+    meetings: { cap: 15, flat: 5, label: 'Running meetings' },
+    complete: { cap: 10, points: P(10, 8, 6, 5), label: 'Completing own tasks' },
+  },
+}
+// Admins are scored on the manager rubric (an admin is the org's manager here).
+export const rubricForRole = (role) => (role === 'employee' ? RUBRICS.employee : RUBRICS.manager)
 
-// --- Rating (all-time) parameters --------------------------------------------
-export const RATING_MIN = 0
-export const RATING_MAX = 1000
-export const RATING_START = 600 // everyone begins here (neutral, room to rise/fall)
-const RATING_BASELINE = 60 // a daily score above this raises the rating, below lowers it
-const RATING_K = 3 // base sensitivity; larger = the rating moves faster
-
-// Clamp helper.
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
-
-// Engagement sub-score (0..1) for a single day. Sparse by nature, so each channel
-// is capped and they sum toward 1. Rewards showing up and collaborating without
-// letting chatter dominate the overall score (engagement is only 15% anyway).
-export function engagementScore({ meetingsAttended = 0, messagesSent = 0, commentsPosted = 0, tasksDelegated = 0 } = {}) {
-  const meeting = meetingsAttended > 0 ? 0.5 : 0
-  const chat = Math.min(0.3, messagesSent * 0.03)
-  const comments = Math.min(0.2, commentsPosted * 0.05)
-  const initiative = Math.min(0.2, tasksDelegated * 0.1)
-  return Math.min(1, meeting + chat + comments + initiative)
+// Which raw contribution feeds each section, per role. A section may draw from
+// more than one contribution stream (manager's comment+status is one section fed
+// by both). Contribution streams are named the same across roles so performance.js
+// can gather once and route here:
+//   completions, firstComments, statusChanges, delegations, approvals, meetings
+export const SECTION_SOURCES = {
+  employee: {
+    complete: ['completions'],
+    comment: ['firstComments'],
+    status: ['statusChanges'],
+    delegate: ['delegations'],
+  },
+  manager: {
+    review: ['approvals'],
+    assign: ['delegations'],
+    commstatus: ['firstComments', 'statusChanges'],
+    meetings: ['meetings'],
+    complete: ['completions'],
+  },
 }
 
-// Penalty points (0..MAX_PENALTY) for a set of currently-overdue open tasks.
-// Each contributes priorityWeight × howLate; the sum is capped so one rough
-// stretch can't erase an entire day.
-export function overduePenalty(overdueTasks = []) {
-  let raw = 0
-  for (const t of overdueTasks) {
-    const late = clamp((t.daysLate || 0) / LATE_RAMP_DAYS, 0, 1)
-    raw += priorityWeight(t.priority) * late
-  }
-  return Math.min(MAX_PENALTY, raw)
+// Value of one contribution item in a given section.
+function itemPoints(section, item) {
+  if (section.flat != null) return section.flat // flat sections ignore priority
+  return section.points[norm(item)]
 }
 
-// Compute one employee's DAILY score (0-100) from that day's activity.
+// Score one day for one user.
 //
-// input:
-//   doneOnTime          — # tasks completed that day, on/before their due date
-//   doneLate            — # tasks completed that day, after their due date
-//   doneNoDue           — # tasks completed that day with no due date (throughput only)
-//   weightedThroughput  — Σ priorityWeight over ALL tasks completed that day
-//   resolved            — # tasks that reached a terminal state that day (done + reopened/rejected)
-//   reopenedOrRejected  — # of those that were reopened/rejected (quality misses)
-//   engagement          — 0..1 from engagementScore()
-//   overdueTasks        — [{priority, daysLate}] open past-due tasks as of that day
-//   dailyTarget         — weighted output that caps throughput (defaults to DEFAULT_DAILY_TARGET)
+//   role          — 'employee' | 'manager' | 'admin'
+//   contributions — { completions:[priority,…], firstComments:[…], statusChanges:[…],
+//                     delegations:[…], approvals:[…], meetings:<count> }
+//                   Priority-weighted streams are arrays of priority strings; the
+//                   flat stream (meetings) is a count.
 //
-// Returns { score, breakdown } where breakdown holds each component's 0..1 rate,
-// its point contribution, and whether it was present (for the UI "why" view).
-export function dailyScore(input = {}) {
-  const {
-    doneOnTime = 0,
-    doneLate = 0,
-    weightedThroughput = 0,
-    resolved = 0,
-    reopenedOrRejected = 0,
-    engagement = 0,
-    overdueTasks = [],
-    dailyTarget = DEFAULT_DAILY_TARGET,
-  } = input
-
-  const dueResolved = doneOnTime + doneLate // completions that HAD a due date
-  const parts = []
-
-  // On-time: only counts when at least one due-dated task was completed that day.
-  if (dueResolved > 0) {
-    const rate = doneOnTime / dueResolved
-    parts.push({ key: 'onTime', weight: W.onTime, rate, present: true })
-  }
-  // Throughput: always present (0 when nothing was completed).
-  const throughputRate = dailyTarget > 0 ? Math.min(1, weightedThroughput / dailyTarget) : 0
-  parts.push({ key: 'throughput', weight: W.throughput, rate: throughputRate, present: true })
-  // Quality: only when something reached a terminal state that day.
-  if (resolved > 0) {
-    const rate = 1 - reopenedOrRejected / resolved
-    parts.push({ key: 'quality', weight: W.quality, rate: clamp(rate, 0, 1), present: true })
-  }
-  // Engagement: always present (0 when idle on all channels).
-  parts.push({ key: 'engagement', weight: W.engagement, rate: clamp(engagement, 0, 1), present: true })
-
-  const totalWeight = parts.reduce((s, p) => s + p.weight, 0)
-  const weighted = parts.reduce((s, p) => s + p.weight * p.rate, 0)
-  const base = totalWeight > 0 ? (weighted / totalWeight) * 100 : 0
-
-  const penalty = overduePenalty(overdueTasks)
-  const score = clamp(base - penalty, 0, 100)
-
-  // Point contribution of each component AFTER renormalisation, for display.
+// Returns { score, breakdown } where breakdown[section] = { raw, capped, cap }
+// for the UI "why" view. score = Σ capped, already ≤ 100.
+export function dailyScore(role, contributions = {}) {
+  const rubric = rubricForRole(role)
+  const sources = role === 'employee' ? SECTION_SOURCES.employee : SECTION_SOURCES.manager
   const breakdown = {}
-  for (const p of parts) breakdown[p.key] = { rate: p.rate, points: (p.weight / totalWeight) * p.rate * 100, present: p.present }
-  breakdown.penalty = { points: -penalty, present: penalty > 0 }
-
-  return { score: Math.round(score * 10) / 10, penalty, breakdown }
+  let score = 0
+  for (const [key, section] of Object.entries(rubric)) {
+    let raw = 0
+    for (const streamName of sources[key]) {
+      const stream = contributions[streamName]
+      if (stream == null) continue
+      if (section.flat != null) {
+        raw += (typeof stream === 'number' ? stream : stream.length) * section.flat
+      } else {
+        for (const item of stream) raw += itemPoints(section, item)
+      }
+    }
+    const capped = Math.min(section.cap, raw)
+    breakdown[key] = { raw: Math.round(raw * 10) / 10, capped: Math.round(capped * 10) / 10, cap: section.cap, label: section.label }
+    score += capped
+  }
+  return { score: Math.round(Math.min(100, score) * 10) / 10, breakdown }
 }
 
-// Advance an all-time rating by one day's score. Moves toward RATING_MAX on good
-// days and RATING_MIN on bad days, with the step shrinking as it approaches either
-// bound (so it can't run away and a strong newcomer can still overtake a coasting
-// veteran). Returns the new rating, clamped to [RATING_MIN, RATING_MAX].
-export function advanceRating(prevRating, dayScore, { k = RATING_K, baseline = RATING_BASELINE } = {}) {
-  const rating = clamp(prevRating ?? RATING_START, RATING_MIN, RATING_MAX)
-  // Raw step, e.g. dayScore 100 vs baseline 60 → +4k; dayScore 0 → -6k.
-  const rawStep = (k * (dayScore - baseline)) / 10
-  const span = RATING_MAX - RATING_MIN
-  // Headroom damping: ×2 so mid-range moves are ~full-strength, tapering near bounds.
-  const damp = rawStep >= 0
-    ? ((RATING_MAX - rating) / span) * 2
-    : ((rating - RATING_MIN) / span) * 2
-  return clamp(rating + rawStep * damp, RATING_MIN, RATING_MAX)
+// Sections of a role's rubric as an ordered list, for the UI to render labels/caps
+// without re-deriving them.
+export function rubricSections(role) {
+  return Object.entries(rubricForRole(role)).map(([key, s]) => ({ key, label: s.label, cap: s.cap }))
 }

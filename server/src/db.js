@@ -418,6 +418,11 @@ export function initSchema() {
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
+  // Section-based engagement scoring: a JSON map of {section: {raw, capped, cap}}
+  // for the day, so the leaderboard can explain WHY a score is what it is. The
+  // legacy rating/on_time/quality/engagement/penalty columns predate this model
+  // and are no longer written (they stay for old rows / backwards reads).
+  ensureColumn('performance_daily', 'breakdown', 'TEXT')
   // Marks a workspace as a solo/personal account (org of one) vs a team company.
   // Existing orgs default to 0 (company) — no change to the org structure.
   ensureColumn('organizations', 'is_personal', 'INTEGER DEFAULT 0')
