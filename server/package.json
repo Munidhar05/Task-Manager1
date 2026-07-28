@@ -23,5 +23,8 @@
     "nodemailer": "^9.0.1",
     "ws": "^8.21.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true
   }
 }
