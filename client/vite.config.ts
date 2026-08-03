@@ -10,7 +10,9 @@ import path from 'node:path'
 //
 // It also must not ship as-is: hey_jarvis_v0.1.onnx is openWakeWord's PRETRAINED
 // placeholder, licensed CC-BY-NC-SA (non-commercial), and a Play Store release is
-// commercial distribution. It stands in until hey_btm.onnx is trained.
+// commercial distribution. It also fires on a different phrase entirely, so it can
+// never wake on "hey VoTask" — it is a pipeline smoke-test only, and stands in until
+// hey_votask.onnx is trained.
 //
 // The dynamic `await import('onnxruntime-web')` in voice/wakeword.ts is not enough
 // to keep the runtime out: a dynamic import defers WHEN a chunk is fetched, not

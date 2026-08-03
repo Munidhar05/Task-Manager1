@@ -1,13 +1,13 @@
-// Wake-word ("hey BTM") detection via the browser's SpeechRecognition API.
+// Wake-word ("hey VoTask") detection via the browser's SpeechRecognition API.
 //
-// This is the STOPGAP path that works today, before a custom "hey btm"
+// This is the STOPGAP path that works today, before a custom "hey votask"
 // openWakeWord model exists. It runs continuous recognition and watches the
 // transcript for the phrase; `wakeword.ts` picks between this and the on-device
 // ONNX detector via VITE_WAKEWORD_MODE.
 //
 // Trade-offs vs the ONNX path (see wakeword.ts): needs network (Chrome streams
 // audio to Google), costs more battery, and is Chrome/Android-WebView only.
-// The upside is that it needs no trained model and understands "btm" as words.
+// The upside is that it needs no trained model and matches "votask" as words.
 //
 // Like the ONNX path it is config-gated and fails silently — any error just
 // leaves the user tapping the mic button.
@@ -24,27 +24,57 @@ export const speechWakeSupported = () => !!SRClass()
 
 // --- phrase matching --------------------------------------------------------
 // Transcripts are normalised to lowercase letters only, with ALL whitespace and
-// punctuation stripped. That single step does most of the work: an engine that
-// hears the letters spelled out ("hey b t m", "hey B.T.M") collapses to the same
-// "heybtm" as a clean one-word recognition.
+// punctuation stripped. That single step does most of the work: "hey VoTask",
+// "hey vo task", "Hey Vo-Task" and "hey, votask!" all collapse to "heyvotask", so
+// the variant lists below only have to cover PHONETIC guesses, never spacing or
+// punctuation ones.
 const normalize = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '')
 
-// "BTM" is three consonants with no vowel, so engines guess wildly at it. These
-// are the near-misses seen in practice plus their obvious neighbours. They are
-// only accepted WITH a "hey"-ish prefix — bare "bottom"/"item"/"atm" are real
-// English words and would fire constantly on ordinary speech.
-const LOOSE = [
-  'btm', 'btn', 'bdm', 'bpm', 'ptm', 'pdm', 'vtm', 'dtm', 'btem', 'bitem',
-  'beeteeem', 'beeteeen', 'beetm', 'beatem', 'bottom', 'button', 'item', 'atm', 'batman',
+// "VoTask" is a coined word, so no engine has it in its vocabulary — it will always
+// be reported as whatever real words it sounds closest to. Three things drive the
+// variants below, and all three are worse on the en-IN models this app defaults to:
+//
+//  • v/w/b/f/ph all collapse. Telugu and Hindi don't contrast /v/ and /w/ the way
+//    English does, so "votask" comes back as "wotask", "botask" or "photask".
+//  • The /t/ migrates. "vo-TASK" is heard as "vote ask" or "boat ask" just as
+//    readily as "vo task" — the syllable break lands on the wrong side of the stop.
+//  • "task" itself degrades to tusk / tosk / desk / dask.
+//
+// The variants are graded by how much of a real English phrase they are, because
+// that is exactly what governs the false-positive risk. Three tiers:
+
+// TIER 1 — coined tokens. Not English under any reading, so they may stand alone:
+// "VoTask, what's overdue?" wakes with no "hey" at all.
+const STRICT = [
+  'votask', 'wotask', 'botask', 'photask', 'fotask', 'bhotask', 'vhotask',
+  'votusk', 'wotusk', 'botusk', 'votosk', 'votaask', 'vothask', 'vodask',
+  'votas', 'wotas', 'votax', 'votaz', 'vutask', 'vatask', 'vartask',
 ]
-// Accepted with no prefix at all — unambiguous enough to stand alone, so
-// "btm, what's overdue" wakes without the "hey".
-const STRICT = ['btm', 'beeteeem']
-const HEY = '(?:hey|hay|hei|heigh|hi|hie|ay|eh|okay|ok)'
+
+// TIER 2 — near-misses that brush against real words ("vote ask", "vaultask") but
+// would still be odd things to say. Any greeting-ish prefix is enough.
+const LOOSE = [
+  'voteask', 'votetask', 'voatask', 'voteaz', 'boatask', 'boattask',
+  'vaultask', 'voltask', 'voltas', 'vodesk', 'wodesk', 'wartask', 'photoask', 'whoask',
+]
+
+// TIER 3 — the engine substituting a whole ordinary phrase for the coined word.
+// These are the MOST likely mishearings and also the most dangerous: in a task
+// manager, "what task", "no task" and "go task" are things people genuinely say to
+// each other. They are accepted only after a full, deliberate greeting — never
+// after a throwaway "ok"/"eh" — so "OK, no task for me today" cannot wake the app
+// while "Okay VoTask" still can.
+const RISKY = ['whattask', 'whatask', 'whotask', 'phototask', 'gotask', 'notask']
+
+// Greeting prefixes. HEY_ANY includes the clipped interjections a real recording is
+// full of; HEY_STRONG is the deliberate address, and gates TIER 3 only.
+const HEY_ANY = '(?:hey|hay|hei|heigh|hi|hie|hello|helo|hallo|halo|ay|eh|okay|ok|oi)'
+const HEY_STRONG = '(?:hey|hay|hei|heigh|hello|helo|hallo|halo|okay)'
 
 // Extra variants can be added without a code change while tuning on a real
-// device: VITE_WAKEWORD_EXTRA=heybeeteam,heybutum  (or the localStorage twin,
-// which wins so it can be changed live from the console).
+// device: VITE_WAKEWORD_EXTRA=heyvodask,heywotusk  (or the localStorage twin,
+// which wins so it can be changed live from the console). Turn DEBUG on, say the
+// wake word ten times, and add whatever THIS device actually reports.
 const extras = (): string[] => {
   let raw = (import.meta.env.VITE_WAKEWORD_EXTRA as string | undefined) || ''
   try { raw = localStorage.getItem('wakeword_extra') || raw } catch { /* storage off */ }
@@ -52,15 +82,23 @@ const extras = (): string[] => {
 }
 
 const buildMatcher = () => {
-  const loose = new RegExp(`${HEY}(?:${LOOSE.join('|')})`)
+  // Tiers 1 and 2 accept any greeting; tier 3 demands a deliberate one. All three
+  // are anchored to the START of the utterance: a wake word is how you OPEN a
+  // sentence, and matching mid-string is what makes "…I'll add it to VoTask
+  // tomorrow", said to a colleague, wake the app.
+  const anchored = (prefix: string, words: string[]) => new RegExp(`^${prefix}(?:${words.join('|')})`)
+  const loose = anchored(HEY_ANY, [...STRICT, ...LOOSE])
+  const risky = anchored(HEY_STRONG, RISKY)
   const extra = extras()
   return (text: string) => {
     const n = normalize(text)
     if (!n) return false
-    if (loose.test(n)) return true
+    if (loose.test(n) || risky.test(n)) return true
+    // Manually-added variants stay a plain substring test: they exist precisely to
+    // catch whatever odd thing one device reports, and over-constraining them would
+    // defeat the point of a live-tunable escape hatch.
     if (extra.some((e) => n.includes(e))) return true
-    // Bare form: only at the very start of the utterance, so it can't fire on
-    // a "btm" buried inside a longer sentence.
+    // Bare form: tier 1 only, and only at the very start.
     return STRICT.some((s) => n.startsWith(s))
   }
 }
@@ -104,7 +142,7 @@ export function useSpeechWakeWord({ enabled, onWake, onStatus }: Options) {
       }
     }, WATCHDOG_MS)
     // Android re-fires the same utterance as growing-prefix results across its
-    // frequent auto-restarts, so one "hey btm" can match many times. Refractory
+    // frequent auto-restarts, so one "hey VoTask" can match many times. Refractory
     // period + this guard keep that down to a single wake.
     const REFRACTORY_MS = 2500
 
@@ -121,7 +159,7 @@ export function useSpeechWakeWord({ enabled, onWake, onStatus }: Options) {
         rec.lang = LANG
         rec.continuous = true      // honoured on desktop Chrome; ignored on Android
         rec.interimResults = true  // match on interims so wake feels instant
-        rec.maxAlternatives = 3    // "btm" is a coin flip — check the runners-up too
+        rec.maxAlternatives = 3    // a coined word is a coin flip — check the runners-up too
 
         rec.onstart = () => { running = true; everStarted = true; clearTimeout(watchdog); say('listening') }
 

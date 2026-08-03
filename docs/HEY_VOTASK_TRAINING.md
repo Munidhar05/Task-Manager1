@@ -1,6 +1,6 @@
-# Training the "hey BTM" wake-word model (Colab runbook)
+# Training the "hey VoTask" wake-word model (Colab runbook)
 
-This produces `hey_btm.onnx` for the on-device wake word. It **synthesizes** all the
+This produces `hey_votask.onnx` for the on-device wake word. It **synthesizes** all the
 training speech, so you record nothing. Budget ~2–3 hours on a free T4, mostly
 unattended — the bulk is downloading, not GPU time.
 
@@ -170,16 +170,28 @@ for i in tqdm.tqdm(range(2000), desc="background"):
 Written as Python then dumped to YAML, so you never hand-edit `custom_model.yml`.
 
 **`target_phrase` is a list, and giving it pronunciation variants matters here.**
-Piper phonemises the bare initialism "BTM" badly; spelling it out produces far
-better positives. All variants still train one binary classifier.
+"VoTask" is a coined word, so Piper has no pronunciation for it and phonemises the
+single token as one mumbled blob. Splitting it into two words makes the TTS stress
+both syllables the way people actually say it, and the spelling variants cover the
+vowel people land on. All variants still train one binary classifier.
+
+**`custom_negative_phrases` is doing real work here, not left empty.** The phrases
+below are what English speech engines substitute for "vo task" — and they are
+sentences people genuinely say in a task manager. Training against them explicitly
+is what stops the model firing when someone asks a colleague "what task is next?".
+This mirrors the tiering in `client/src/voice/wakeSpeech.ts`, which solves the same
+problem for the speech-recognition path.
 
 ```python
 import yaml
 
 config = {
-    "model_name": "hey_btm",
-    "target_phrase": ["hey btm", "hey bee tee em", "hey b t m"],
-    "custom_negative_phrases": [],
+    "model_name": "hey_votask",
+    "target_phrase": ["hey vo task", "hey voh task", "hey vo tusk", "hey votask"],
+    "custom_negative_phrases": [
+        "what task", "no task", "go task", "the task", "which task",
+        "photo task", "who asked", "vote", "boat", "hey there",
+    ],
 
     # Sample counts. Upstream recommends >=20,000; 100,000+ is better but slower.
     # 20k is a reasonable first run — retrain with more if accuracy disappoints.
@@ -215,9 +227,9 @@ config = {
     "target_false_positives_per_hour": 0.2,
 }
 
-with open("hey_btm.yaml", "w") as f:
+with open("hey_votask.yaml", "w") as f:
     yaml.dump(config, f)
-print(open("hey_btm.yaml").read())
+print(open("hey_votask.yaml").read())
 ```
 
 ---
@@ -225,7 +237,7 @@ print(open("hey_btm.yaml").read())
 ## Cell 7 — generate the positive clips
 
 ```python
-!python ./openWakeWord/openwakeword/train.py --training_config hey_btm.yaml --generate_clips
+!python ./openWakeWord/openwakeword/train.py --training_config hey_votask.yaml --generate_clips
 ```
 
 ---
@@ -260,11 +272,11 @@ for npy in glob.glob("my_custom_model/**/*.npy", recursive=True):
 ## Cell 9 — augment, then train
 
 ```python
-!python ./openWakeWord/openwakeword/train.py --training_config hey_btm.yaml --augment_clips
+!python ./openWakeWord/openwakeword/train.py --training_config hey_votask.yaml --augment_clips
 ```
 
 ```python
-!python ./openWakeWord/openwakeword/train.py --training_config hey_btm.yaml --train_model
+!python ./openWakeWord/openwakeword/train.py --training_config hey_votask.yaml --train_model
 ```
 
 **Do not pass `--convert_to_tflite`.** It needs the TensorFlow stack we deliberately
@@ -281,7 +293,7 @@ detector in [`client/src/voice/wakeword.ts`](../client/src/voice/wakeword.ts) fe
 ```python
 import onnxruntime as ort, numpy as np
 
-sess = ort.InferenceSession("my_custom_model/hey_btm.onnx")
+sess = ort.InferenceSession("my_custom_model/hey_votask.onnx")
 i, o = sess.get_inputs()[0], sess.get_outputs()[0]
 print("input :", i.name, i.shape)    # expect [1, 16, 96]
 print("output:", o.name, o.shape)    # expect [1, 1]
@@ -295,16 +307,16 @@ If the input isn't `[1,16,96]`, something exported the wrong graph — re-run Ce
 
 ```python
 from google.colab import files
-files.download("my_custom_model/hey_btm.onnx")
+files.download("my_custom_model/hey_votask.onnx")
 ```
 
 ---
 
 ## Install it in the app
 
-1. Put the file at `client/public/wakeword/hey_btm.onnx`.
+1. Put the file at `client/public/wakeword/hey_votask.onnx`.
 2. In `client/.env`, **delete** the placeholder line — the code already defaults to
-   `/wakeword/hey_btm.onnx`:
+   `/wakeword/hey_votask.onnx`:
    ```diff
    - VITE_WAKEWORD_MODEL_PATH=/wakeword/hey_jarvis_v0.1.onnx
    - VITE_WAKEWORD_PHRASE=hey jarvis
@@ -322,12 +334,12 @@ With `VITE_WAKEWORD_DEBUG=true` the console logs every scored frame:
 [wakeword] score 0.884 *** WAKE ***
 ```
 
-Say "hey BTM" a few times, then talk normally for a minute. Set the threshold below
+Say "hey VoTask" a few times, then talk normally for a minute. Set the threshold below
 your reliable wake peaks and above the chatter floor. Live, without a rebuild:
 `localStorage.setItem('wakeword_threshold','0.6')` then reload. Once settled, commit
 it as `VITE_WAKEWORD_THRESHOLD` and turn `VITE_WAKEWORD_DEBUG` off.
 
-Start at **0.5**. "hey BTM" is short, so it has a naturally higher false-accept rate
+Start at **0.5**. "hey VoTask" is short, so it has a naturally higher false-accept rate
 and often wants **0.6–0.7**. The current placeholder needs 0.2 only because the
 generic "hey jarvis" model scores weakly — a purpose-trained model should peak much
 higher, so if you still need 0.2 after training, the model is weak and wants more

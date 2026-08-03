@@ -1,11 +1,11 @@
-// Wake-word ("hey BTM") detection using openWakeWord models, run fully on-device
+// Wake-word ("hey VoTask") detection using openWakeWord models, run fully on-device
 // in the browser / Android WebView via onnxruntime-web (WASM). Free & unlimited —
 // no cloud, no per-user licensing.
 //
 // openWakeWord is a 3-stage ONNX pipeline:
 //   audio → [melspectrogram] → mel frames → [embedding] → 96-d vectors → [wakeword] → score
 // The first two models are fixed (shared by every wake word); the third is the
-// custom "hey BTM" model you train (see docs/VOICE_ASSISTANT_SETUP.md).
+// custom "hey VoTask" model you train (see docs/VOICE_ASSISTANT_SETUP.md).
 //
 // It is OPTIONAL and config-gated: with VITE_WAKEWORD_ENABLED unset (or the model
 // files missing) it no-ops and the app uses the tap-the-mic button. Any load/runtime
@@ -19,11 +19,11 @@ import { useSpeechWakeWord, speechWakeSupported } from './wakeSpeech'
 
 const ENABLED = (import.meta.env.VITE_WAKEWORD_ENABLED as string | undefined) === 'true'
 // Which detector runs:
-//   'speech' — browser SpeechRecognition matching the words "hey btm". Needs no
+//   'speech' — browser SpeechRecognition matching the words "hey votask". Needs no
 //              trained model, but needs network and is not reliably present in
 //              the Android WebView (see below).
 //   'onnx'   — the on-device openWakeWord pipeline in this file. Offline and
-//              cheap, but needs a trained hey_btm.onnx.
+//              cheap, but needs a trained hey_votask.onnx.
 //   'auto'   — (default) pick per platform at runtime, and fall back if the
 //              chosen one turns out not to work on this device.
 const RAW_MODE = (import.meta.env.VITE_WAKEWORD_MODE as string | undefined) || 'auto'
@@ -42,7 +42,7 @@ const preferSpeech = () => {
 }
 const MEL_PATH = (import.meta.env.VITE_WAKEWORD_MELSPEC_PATH as string | undefined) || '/wakeword/melspectrogram.onnx'
 const EMB_PATH = (import.meta.env.VITE_WAKEWORD_EMBEDDING_PATH as string | undefined) || '/wakeword/embedding_model.onnx'
-const WW_PATH = (import.meta.env.VITE_WAKEWORD_MODEL_PATH as string | undefined) || '/wakeword/hey_btm.onnx'
+const WW_PATH = (import.meta.env.VITE_WAKEWORD_MODEL_PATH as string | undefined) || '/wakeword/hey_votask.onnx'
 // Detection threshold. A localStorage override wins so you can TUNE LIVE — set
 //   localStorage.setItem('wakeword_threshold','0.2')  then reload (no dev-server
 // restart needed). Falls back to the env default, then 0.5.
@@ -58,11 +58,12 @@ const DEBUG = (import.meta.env.VITE_WAKEWORD_DEBUG as string | undefined) === 't
 export const wakeWordConfigured = () => ENABLED && (!preferSpeech() || speechWakeSupported())
 
 // The spoken phrase to SHOW users. It must match what the active detector will
-// actually fire on. The speech path genuinely listens for "hey BTM"; the onnx
-// path fires on whatever model is loaded (the placeholder "hey jarvis" model
-// never fires on "hey BTM"), so VITE_WAKEWORD_PHRASE overrides there.
+// actually fire on. The speech path genuinely listens for "hey VoTask" (and a long
+// list of ways engines mishear it — see wakeSpeech.ts); the onnx path fires on
+// whatever model is loaded, and a model trained on a DIFFERENT phrase will never
+// fire on "hey VoTask", so VITE_WAKEWORD_PHRASE overrides the label there.
 export const wakeWordPhrase = () =>
-  preferSpeech() ? 'hey BTM' : (import.meta.env.VITE_WAKEWORD_PHRASE as string | undefined) || 'hey BTM'
+  preferSpeech() ? 'hey VoTask' : (import.meta.env.VITE_WAKEWORD_PHRASE as string | undefined) || 'hey VoTask'
 
 // What the detector is doing, so the UI can say so instead of failing silently.
 export type WakeStatus = 'off' | 'loading' | 'awaiting-gesture' | 'listening' | 'error'
