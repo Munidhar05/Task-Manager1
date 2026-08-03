@@ -1,3 +1,4 @@
+import './crashLog.js' // MUST be first — installs the crash handlers before any other module body runs
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
