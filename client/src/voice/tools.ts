@@ -218,7 +218,10 @@ export const TOOLS: ToolDef[] = [
       const live = await awaitSurface('meetings.live', 10000)
       if (title) await live.setTitle({ value: title })
       const r = await live.record()
-      return ok(r?.already ? 'That meeting is already recording.' : 'Recording now.')
+      if (r?.already) return ok('That meeting is already recording.')
+      // The microphone now belongs to the meeting — see `endSession` in
+      // actionEngine.ts. Say the wake word again to take it back.
+      return { ...ok('Recording now.'), endSession: true }
     },
   },
 
@@ -245,7 +248,10 @@ export const TOOLS: ToolDef[] = [
         case 'resume':
           if (!before.paused) return fail('The recording isn’t paused.')
           await live.resume()
-          return ok('Recording again.')
+          // Capturing again, so the mic goes back to the meeting. Pause and stop
+          // deliberately do NOT stand down: nothing is recording after those, and
+          // staying live is what lets "…now finish it" follow without a wake word.
+          return { ...ok('Recording again.'), endSession: true }
         case 'stop':
           if (!before.recording) return fail('Nothing is recording at the moment.')
           await live.stop()

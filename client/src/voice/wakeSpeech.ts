@@ -103,6 +103,19 @@ const buildMatcher = () => {
   }
 }
 
+// The matcher, exposed for use outside wake detection itself.
+//
+// The live meeting recorder needs it as a backstop. Wake is matched on an INTERIM
+// result so it feels instant, which means the meeting's own recogniser has often
+// already buffered "hey VoTask, pause the meeting" by the time the assistant
+// claims the mic — the audio was captured before there was anything to gate on.
+// An utterance that OPENS with the wake word was addressed to the agent, never to
+// the room, so the meeting can drop it on the text alone.
+//
+// Rebuilt per call rather than cached: `extras()` reads localStorage so it can be
+// tuned live on a device, and this is called a few times a minute at most.
+export const matchesWakePhrase = (text: string): boolean => buildMatcher()(text)
+
 interface Options { enabled: boolean; onWake: () => void; onStatus?: (s: WakeStatus, detail?: string) => void }
 
 export function useSpeechWakeWord({ enabled, onWake, onStatus }: Options) {

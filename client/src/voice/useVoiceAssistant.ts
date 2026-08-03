@@ -28,6 +28,7 @@ import { speak, stopSpeaking, isTtsEnabled, setTtsEnabled } from './tts'
 import { runPlan, answerAndResume, type Outcome, type ToolContext } from './actionEngine'
 import { planFromServer } from './serverPlan'
 import { on, resetTrace, emit, type TraceStep } from './agentBus'
+import { setAgentTurn } from './agentTurn'
 // Side-effect import: registers every tool in the table. Without it the engine
 // knows no tools and every plan fails as "not able to do that yet".
 import './tools'
@@ -90,6 +91,14 @@ export function useVoiceAssistant() {
   // Mirror the bus into React state for rendering.
   useEffect(() => on('trace', ({ steps }) => setTrace(steps)), [])
 
+  // Announce that the user is talking to the agent, so anything else listening to
+  // the same microphone can leave that speech out of its own transcript. See
+  // agentTurn.ts — without this a voice command lands inside the meeting it was
+  // issued about. Gated on `state` as well as `open`, so a panel left parked at
+  // idle (nobody speaking) does not hold the mic hostage.
+  useEffect(() => { setAgentTurn(open && state !== 'idle') }, [open, state])
+  useEffect(() => () => setAgentTurn(false), [])
+
   const setTtsOn = (on: boolean) => { setTtsEnabled(on); setTtsOnState(on) }
 
   // ---- server calls --------------------------------------------------------
@@ -118,11 +127,37 @@ export function useVoiceAssistant() {
     user: user ? { id: user.id, name: user.name, role: user.role } : null,
   }
 
+  // Hand the microphone back and end the session.
+  //
+  // The loop's normal behaviour is to keep re-opening the mic so a conversation
+  // flows without repeating the wake word. That is wrong the moment the agent has
+  // just put a DIFFERENT listener in charge of the microphone: after "start the
+  // meeting", a still-live assistant session records the opening minute of the
+  // meeting as if it were a command, and the gate in agentTurn.ts — doing its job —
+  // keeps that same minute out of the meeting transcript. Both listeners would be
+  // behaving correctly and the user would lose the audio. So the agent gets out of
+  // the way, and the wake word brings it back.
+  const yieldSession = () => {
+    sessionRef.current++
+    try { recRef.current?.cancel() } catch {}
+    recRef.current = null
+    openRef.current = false
+    setMinimized(false)
+    setOpen(false)
+    setState('idle')
+  }
+
   // ---- react to whatever the engine did ------------------------------------
   // Three ways a run ends, and each one leaves the conversation somewhere different:
   // finished (speak the result), suspended (ask, and keep the mic open for the
   // answer), or failed (say why — the trace already shows which step broke).
   const handleOutcome = async (outcome: Outcome) => {
+    // Which session this outcome belongs to. Standing down is the only thing here
+    // that reaches outside the current turn, and there is a real gap to lose: the
+    // user can say the wake word again while the agent is still speaking its reply,
+    // which starts a NEW session. Tearing that one down because the previous
+    // outcome asked to yield would swallow the command they just gave.
+    const turn = sessionRef.current
     if (outcome.status === 'suspended') {
       setPend(outcome)
       setMinimized(false)                 // the question has to be readable
@@ -147,6 +182,9 @@ export function useVoiceAssistant() {
     if (card) setMinimized(false)
     push({ role: 'ai', text: outcome.say, card })
     await say(outcome.say)
+    // Speak first, THEN stand down: the reply has to be heard, and the gate's tail
+    // is what keeps it off the meeting's transcript.
+    if (outcome.results.some((r) => r.endSession) && sessionRef.current === turn) yieldSession()
   }
 
   // Start a fresh plan. The trace resets here and nowhere else, so every step the

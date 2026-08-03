@@ -49,6 +49,12 @@ export type ToolResult = {
   // A failed tool can offer one concrete fix instead of just an error. The engine
   // turns it into a yes/no and, on "yes", retries the same step with `patch` applied.
   suggest?: { question: string; patch: Record<string, any> }
+  // Stand the assistant down after this step instead of re-opening the mic for
+  // another command. Set by the tools that hand the microphone to something else
+  // — starting or resuming a meeting recording — where staying live would have the
+  // two listeners compete for the same speech. The engine only carries the flag;
+  // the conversation loop decides what ending a session means.
+  endSession?: boolean
 }
 
 export interface ToolContext {

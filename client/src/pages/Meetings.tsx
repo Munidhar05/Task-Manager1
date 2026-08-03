@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useSurface } from '../voice/uiRegistry'
 import { pickValue, flashPress, pause, settle, findVaEl } from '../voice/uiController'
+import { agentHasMic, agentHadMicSince, onAgentTurn } from '../voice/agentTurn'
+import { matchesWakePhrase } from '../voice/wakeSpeech'
 import { Capacitor } from '@capacitor/core'
 import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
@@ -359,6 +361,9 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const [transcribing, setTranscribing] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
+  // Purely to explain the gap. Without it the transcript silently stops growing
+  // mid-meeting and the only honest reading is "the recorder broke".
+  const [agentTalking, setAgentTalking] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -393,6 +398,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     return () => clearInterval(id)
   }, [recording, paused])
 
+  useEffect(() => onAgentTurn(setAgentTalking), [])
+
   // stop & clean up on unmount
   useEffect(() => () => {
     recordingRef.current = false
@@ -425,8 +432,21 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     return () => { handle?.remove() }
   }, [])
 
+  // Speech addressed to the voice assistant is not part of this meeting, and the
+  // recording is the one place where that distinction is impossible to fix after
+  // the fact — "hey VoTask, stop the recording" would otherwise sit in the
+  // transcript and be handed to the AI as something a participant said.
+  //
+  // Two layers, because one is not enough. The gate (agentTurn.ts) is checked at
+  // each capture site below and covers the assistant's whole turn including its
+  // spoken reply. This text check is the backstop for the gap the gate cannot
+  // close: the wake word is matched on an INTERIM result, so this recogniser has
+  // usually already heard the phrase by the time the assistant claims the mic.
+  const isAgentSpeech = (text: string) => agentHasMic() || matchesWakePhrase(text)
+
   const appendLine = (text: string) => {
     if (!text.trim()) return
+    if (isAgentSpeech(text)) return
     setTranscript((prev) => (prev ? prev.replace(/\s*$/, '') + '\n' : '') + `${speakerRef.current || 'Speaker'}: ${text.trim()}`)
   }
 
@@ -443,6 +463,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const commitBrowserFinal = (text: string) => {
     const clean = text.trim()
     if (!clean) return
+    if (isAgentSpeech(clean)) return
     const speaker = speakerRef.current || 'Speaker'
     const prefix = `${speaker}: `
     setTranscript((prev) => {
@@ -495,7 +516,14 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     setRecording(true)
     ;(async () => {
       while (recordingRef.current) {
+        const segmentStart = Date.now()
         const blob = await recordSegment(stream, 12000)
+        // Drop the whole segment if the assistant was addressed at any point
+        // inside it. Coarse — up to 12 seconds of real meeting goes with it — but
+        // a webm blob cannot be trimmed before upload, and a segment containing
+        // "hey VoTask, stop recording" is precisely what must not reach the
+        // transcript. Skipping it also saves the transcription call.
+        if (agentHadMicSince(segmentStart)) continue
         if (blob.size > 2000) {
           try { setTranscribing(true); appendLine(await uploadChunk(blob, transcriptRef.current.slice(-450))) }
           catch (e: any) { setErr(e.message) }
@@ -529,7 +557,10 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     ws.onopen = async () => {
       setTranscribing(true)
       pcmRef.current = await startPcmStream(
-        (b64) => { if (ws.readyState === WebSocket.OPEN) ws.send(b64) },
+        // Withhold the frames rather than the transcript: Sarvam never receives
+        // the audio of a command, so there is nothing to filter downstream and
+        // nothing billed for it either.
+        (b64) => { if (ws.readyState === WebSocket.OPEN && !agentHasMic()) ws.send(b64) },
         (msg) => { setErr(msg); stop() },
       )
     }
@@ -544,6 +575,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     rec.interimResults = true
     rec.lang = lang
     rec.onresult = (e: any) => {
+      // Bail before the interim is rendered too, or the live caption line shows
+      // the user's command being typed into the meeting it is about to stop.
+      // The recogniser itself is left running: restarting it per command costs a
+      // second of genuine speech at each end.
+      if (agentHasMic()) { setInterim(''); return }
       let intr = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
@@ -728,6 +764,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             </div>
           </div>
 
+          {recording && !paused && agentTalking && (
+            <div data-va="meetings.live.agent-hold" style={{ background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+              <b>Listening to you, not the room</b> — the recording is still running, but what you say to VoTask is being kept out of the transcript.
+            </div>
+          )}
           {recording && paused && (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
 <b>Meeting paused</b> — recording was interrupted (e.g. a phone call, or the screen turned off). Tap <b>Resume meeting</b> to continue capturing.
