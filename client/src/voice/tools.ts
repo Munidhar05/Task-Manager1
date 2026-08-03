@@ -271,7 +271,10 @@ export const TOOLS: ToolDef[] = [
 
   {
     name: 'navigate_url',
-    label: ({ label }) => `Opening ${label || 'that'}…`,
+    // Derived from the URL, not from the spoken sentence. The `say` is already a
+    // full sentence ("Opening that now.") and interpolating it produced
+    // "Opening Opening that now.…" in the trace.
+    label: ({ url }) => `Opening ${screenName(url)}…`,
     requires: ['url'],
     run: async ({ url }, ctx) => {
       ctx.navigate(url)
@@ -328,6 +331,24 @@ export const TOOLS: ToolDef[] = [
     },
   },
 ]
+
+// A short, human name for a route, for the trace line: "/tasks?status=Blocked"
+// reads as "the Blocked tasks", not as a URL.
+function screenName(url: string): string {
+  try {
+    const [path, query] = String(url || '').split('?')
+    const q = new URLSearchParams(query || '')
+    const status = q.get('status'), priority = q.get('priority'), view = q.get('view')
+    if (status) return `the ${status} tasks`
+    if (priority) return `the ${priority} tasks`
+    if (view) return `the ${view} tasks`
+    const name: Record<string, string> = {
+      '/': 'the dashboard', '/tasks': 'Tasks', '/meetings': 'Meetings',
+      '/chats': 'Chats', '/leaderboard': 'the Leaderboard', '/admin': 'Administration',
+    }
+    return name[path] || 'that'
+  } catch { return 'that' }
+}
 
 // Open a task's drawer and wait for it to be the one on screen.
 //

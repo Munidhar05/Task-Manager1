@@ -59,8 +59,8 @@ export const TOOLS = [
 
   // ---- views ---------------------------------------------------------------
   { name: 'navigate', kind: 'navigate', roles: ALL,
-    desc: 'Open a screen or a filtered task list. Use for "show/open/go to".',
-    args: 'target (overdue|completed|active|all|my_tasks|dashboard|meetings|chats|person|status|priority), person, status, priority' },
+    desc: 'Open a screen or a filtered task list. Use for "show/open/go to". For a status or priority, set target=status/priority AND the matching field — e.g. "open the blocked tasks" is target=status, status=Blocked.',
+    args: 'target (overdue|completed|active|all|my_tasks|dashboard|meetings|chats|leaderboard|person|status|priority), person, status (' + STATUSES.join('|') + '), priority (' + PRIORITIES.join('|') + ')' },
 
   // ---- analytics (numbers computed in SQL, never by you) --------------------
   { name: 'get_overview', kind: 'read', roles: ALL,

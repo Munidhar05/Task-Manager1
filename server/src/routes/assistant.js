@@ -110,7 +110,58 @@ function commandScopedTasks(user) {
 }
 
 // Map a navigate target to a URL, or signal a denial.
-function navUrl(a, user) {
+// "Open the blocked tasks" used to dead-end in a clarify. The model answers that
+// with target:"blocked" — naming the status directly — rather than the documented
+// target:"status" + status:"Blocked", and both readings are perfectly reasonable
+// English. The old switch had no case for it and fell through to null, so the
+// assistant said "Opening the blocked tasks list for you" and then did nothing:
+// the worst possible outcome, because it reports success.
+//
+// So normalise first. A target that names a STATUS or a PRIORITY is treated as
+// one, whatever shape the model picked. Trailing "tasks" is stripped because
+// "blocked tasks" is the natural phrasing.
+function normalizeTarget(a) {
+  const raw = String(a.target || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ').replace(/ tasks?$/, '')
+  if (!raw) return a
+  const status = STATUSES.find((s) => s.toLowerCase() === raw)
+  if (status) return { ...a, target: 'status', status }
+  const priority = PRIORITIES.find((p) => p.toLowerCase() === raw)
+  if (priority) return { ...a, target: 'priority', priority }
+  // Also accept a bare status/priority passed alongside a target the switch
+  // doesn't know, e.g. target:"tasks" + status:"Blocked".
+  if (STATUSES.includes(a.status)) return { ...a, target: 'status' }
+  if (PRIORITIES.includes(a.priority)) return { ...a, target: 'priority' }
+  return { ...a, target: raw.replace(/ /g, '_') }
+}
+
+// Last resort when the model picks `navigate` but supplies NO arguments at all —
+// which it does routinely for "can you open the blocked task?", returning
+// {"tool":"navigate","args":{}}. There is nothing to normalise in that case, and
+// the user's own words are right there, so read the destination out of them.
+//
+// This only ever runs after the model has already decided the user wants to open
+// something, so matching a bare status word here cannot hijack ordinary speech.
+function inferNavFromText(text) {
+  const t = ` ${String(text || '').toLowerCase()} `
+  const has = (w) => new RegExp(`\\b${w}\\b`).test(t)
+  if (has('overdue') || has('late')) return { url: '/tasks?view=overdue' }
+  for (const s of STATUSES) if (has(s.toLowerCase())) return { url: `/tasks?status=${encodeURIComponent(s)}` }
+  for (const p of PRIORITIES) if (has(p.toLowerCase())) return { url: `/tasks?priority=${encodeURIComponent(p)}&view=active` }
+  if (has('completed') || has('finished')) return { url: '/tasks?view=completed' }
+  if (has('dashboard') || has('overview')) return { url: '/' }
+  if (has('meeting') || has('meetings')) return { url: '/meetings' }
+  if (has('chat') || has('chats') || has('message') || has('messages')) return { url: '/chats' }
+  if (has('leaderboard') || has('score') || has('scores')) return { url: '/leaderboard' }
+  if (has('task') || has('tasks')) return { url: '/tasks' }
+  return null
+}
+
+function navUrl(rawArgs, user, transcript = '') {
+  const a = normalizeTarget(rawArgs)
+  if (!a.target) {
+    const guess = inferNavFromText(transcript)
+    if (guess) return guess
+  }
   switch (a.target) {
     case 'overdue': return { url: '/tasks?view=overdue' }
     case 'completed': return { url: '/tasks?view=completed' }
@@ -119,6 +170,7 @@ function navUrl(a, user) {
     case 'dashboard': return { url: '/' }
     case 'meetings': return user.role === 'employee' ? { deny: 'Only managers can open meetings.' } : { url: '/meetings' }
     case 'chats': return { url: '/chats' }
+    case 'leaderboard': return { url: '/leaderboard' }
     case 'status': return a.status ? { url: `/tasks?status=${encodeURIComponent(a.status)}` } : null
     case 'priority': return a.priority ? { url: `/tasks?priority=${encodeURIComponent(a.priority)}&view=active` } : null
     case 'person': {
@@ -335,9 +387,14 @@ async function handleCommand(req, res) {
     }
 
     case 'navigate': {
-      const nav = navUrl(a, user)
+      const nav = navUrl(a, user, transcript)
       if (nav?.deny) return res.json(answer(nav.deny))
-      if (!nav?.url) return res.json(clarify(call.say || 'Where would you like to go?'))
+      // Never echo the model's own sentence here. It was written on the assumption
+      // the navigation would happen ("Opening the blocked tasks list for you"), so
+      // reusing it on the failure path makes the assistant announce success and
+      // then do nothing — which reads as the app being broken rather than as a
+      // question. Ask a real question instead.
+      if (!nav?.url) return res.json(clarify("I'm not sure which screen you meant — could you say it another way?"))
       return res.json({ mode: 'navigate', say: call.say || 'Opening that now.', navigate: { url: nav.url } })
     }
 
