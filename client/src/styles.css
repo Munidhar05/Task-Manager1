@@ -974,14 +974,22 @@ tbody tr:hover { background: var(--n-50); }
 .lang-tag { font-size: 10px; background: #fdeee3; color: var(--primary); border-radius: 5px; padding: 1px 6px; margin-left: 6px; font-weight: 700; }
 
 /* ---- assistant ---- */
-.assistant-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
+/* minmax(0, 1fr), never a bare 1fr. A `1fr` track is minmax(auto, 1fr), and that
+   `auto` minimum is the item's MIN-CONTENT width — which here is a whole chat
+   preview line, because .chat-contact-preview is white-space: nowrap. The track
+   inflates to fit it (692px inside a 430px phone), so the ellipsis that rule asks
+   for can never fire: the box is never forced narrower than its own text. */
+.assistant-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
 .chat-pane { min-width: 0; }
 
 /* conversation history sidebar (ChatGPT/Claude style) */
-.chat-history { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 12px; height: calc(100dvh - 124px); }
+/* min-width: 0 for the same reason as the grid track above — as a flex item on
+   mobile (where it becomes the only column) it would otherwise refuse to shrink
+   below the widest preview line. */
+.chat-history { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 12px; height: calc(100dvh - 124px); min-width: 0; }
 .new-chat-btn { width: 100%; justify-content: center; }
 .convo-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin: 0 -4px; padding: 0 4px; }
-.convo-item { display: flex; align-items: center; gap: 6px; padding: 9px 10px; border-radius: 9px; cursor: pointer; transition: .12s; }
+.convo-item { display: flex; align-items: center; gap: 6px; padding: 9px 10px; border-radius: 9px; cursor: pointer; transition: .12s; min-width: 0; }
 .convo-item:hover { background: var(--bg); }
 .convo-item.active { background: #fdeee3; }
 .convo-meta { flex: 1; min-width: 0; }
