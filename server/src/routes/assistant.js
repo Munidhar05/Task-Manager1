@@ -379,8 +379,25 @@ async function handleCommand(req, res) {
 
     // ---- meetings -----------------------------------------------------------
     case 'start_meeting':
-      // The Meetings page opens its live recorder when it sees ?live=1.
-      return res.json({ mode: 'navigate', say: call.say || 'Starting a new meeting recording.', navigate: { url: '/meetings?live=1' } })
+      // The Meetings page opens its live recorder when it sees ?live=1. `meeting`
+      // tells the client to go further and actually press Record — opening the
+      // recorder alone left the assistant claiming to have started a meeting while
+      // nothing was capturing, which is worse than not offering the command.
+      return res.json({
+        mode: 'navigate',
+        say: call.say || 'Starting a new meeting recording.',
+        navigate: { url: '/meetings?live=1' },
+        meeting: { action: 'start', title: typeof a.title === 'string' ? a.title.slice(0, 120) : null },
+      })
+
+    // Controlling a recording that is already on screen. Deliberately NO url: the
+    // recorder lives inside the Meetings page, so navigating would unmount it and
+    // destroy the very session being controlled.
+    case 'control_meeting': {
+      const action = ['pause', 'resume', 'stop', 'finish'].includes(a.action) ? a.action : null
+      if (!action) return res.json(clarify('Do you want me to pause, resume, stop, or finish and analyse the recording?'))
+      return res.json({ mode: 'navigate', say: call.say || '', meeting: { action } })
+    }
 
     case 'list_meetings':
       return res.json(answer(listMeetings(user).say, { navigate: { url: '/meetings' } }))

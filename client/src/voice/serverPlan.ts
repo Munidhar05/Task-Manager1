@@ -27,6 +27,8 @@ export interface ServerResponse {
   action?: any
   navigate?: { url?: string }
   data?: any
+  // Live-recording control. Present only for start_meeting / control_meeting.
+  meeting?: { action: 'start' | 'pause' | 'resume' | 'stop' | 'finish'; title?: string | null }
 }
 
 export interface Bridged {
@@ -105,6 +107,18 @@ export function planFromServer(resp: ServerResponse | null | undefined): Bridged
     }
 
     case 'navigate': {
+      // Meeting control is its own thing: `start` opens the recorder AND presses
+      // Record (opening it alone left the assistant claiming to have started a
+      // meeting while nothing captured), and pause/resume/stop/finish carry no url
+      // at all, because navigating would unmount the recorder mid-session.
+      const meeting = (resp as any).meeting
+      if (meeting?.action === 'start') {
+        return { plan: { intent: 'meeting', say, steps: [{ tool: 'start_meeting', args: { title: meeting.title || null } }] }, say, data: resp.data }
+      }
+      if (meeting?.action) {
+        return { plan: { intent: 'meeting', say, steps: [{ tool: 'control_meeting', args: { action: meeting.action } }] }, say, data: resp.data }
+      }
+
       const steps: { tool: string; args: Record<string, any> }[] = [{ tool: 'navigate_url', args: { url, label: say } }]
       // Administration opens on Overview. Every voice request that routes here is
       // about people ("add an employee", "remove someone"), so carry on to the

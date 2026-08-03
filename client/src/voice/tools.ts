@@ -205,6 +205,62 @@ export const TOOLS: ToolDef[] = [
     },
   },
 
+  // ---- live meetings -------------------------------------------------------
+  // The one screen where voice is not a convenience. During a meeting your hands
+  // are busy, the phone is face-down on the table, and reaching for it to press
+  // Pause is exactly the interruption you are trying to avoid.
+  {
+    name: 'start_meeting',
+    label: () => 'Starting the recording…',
+    run: async ({ title }, ctx) => {
+      ctx.navigate('/meetings?live=1')
+      // ?live=1 opens the recorder; the page consumes the flag itself.
+      const live = await awaitSurface('meetings.live', 10000)
+      if (title) await live.setTitle({ value: title })
+      const r = await live.record()
+      return ok(r?.already ? 'That meeting is already recording.' : 'Recording now.')
+    },
+  },
+
+  {
+    name: 'control_meeting',
+    label: ({ action }) => ({
+      pause: 'Pausing the recording…', resume: 'Resuming the recording…',
+      stop: 'Stopping the recording…', finish: 'Finishing and analysing…',
+    } as Record<string, string>)[action] || 'Adjusting the recording…',
+    requires: ['action'],
+    run: async ({ action }) => {
+      // Never navigate here. The recorder lives inside the Meetings page, so a
+      // route change would unmount it and destroy the session being controlled.
+      const live = getSurface('meetings.live')
+      if (!live) return fail("There's no meeting recording open right now.")
+      const before = await live.status()
+
+      switch (action) {
+        case 'pause':
+          if (!before.recording) return fail('Nothing is recording at the moment.')
+          if (before.paused) return ok('It’s already paused.')
+          await live.pause()
+          return ok('Paused. Say resume when you’re ready.')
+        case 'resume':
+          if (!before.paused) return fail('The recording isn’t paused.')
+          await live.resume()
+          return ok('Recording again.')
+        case 'stop':
+          if (!before.recording) return fail('Nothing is recording at the moment.')
+          await live.stop()
+          return ok('Stopped. Say finish when you want the tasks pulled out.')
+        case 'finish': {
+          const r = await live.finish()
+          if (r?.empty) return fail("There's nothing transcribed yet, so there's nothing to analyse.")
+          return ok('Analysing the meeting and pulling out the tasks now.')
+        }
+        default:
+          return fail("I can pause, resume, stop or finish a recording.")
+      }
+    },
+  },
+
   // ---- bridge tools --------------------------------------------------------
   // The server's voice router already resolves a spoken command into a concrete
   // action: it matched the name against the org's alias table, checked the role,
