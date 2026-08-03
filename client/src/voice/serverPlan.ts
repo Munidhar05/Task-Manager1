@@ -41,19 +41,44 @@ export interface Bridged {
 }
 
 // A single server action → one plan step.
-const stepFor = (action: any) =>
-  action?.kind === 'create_task'
-    ? {
+//
+// The kinds listed here have a tool that performs the workflow on screen. Anything
+// not listed falls through to `api_action`, which posts to the same endpoint the UI
+// would. That fallthrough is deliberate: a server tool can be added, or an existing
+// one extended, without this file changing — it keeps working, just invisibly, and
+// gets a visible tool later if it earns one.
+const stepFor = (action: any) => {
+  const b = action?.body || {}
+  switch (action?.kind) {
+    case 'create_task':
+      return {
         tool: 'create_task',
         args: {
-          title: action.body?.title,
-          description: action.body?.description,
-          assignee_id: action.body?.assignee_id || null,
-          priority: action.body?.priority,
-          due_date: action.body?.due_date,
+          title: b.title,
+          description: b.description,
+          assignee_id: b.assignee_id || null,
+          priority: b.priority,
+          due_date: b.due_date,
         },
       }
-    : { tool: 'api_action', args: { action } }
+    case 'set_status':
+      return { tool: 'set_status', args: { task_id: action.task_id, status: b.status, task_title: titleFrom(action.summary) } }
+    case 'assign_task':
+      return { tool: 'assign_task', args: { task_id: action.task_id, assignee_id: b.assignee_id, assignee_name: nameFrom(action.summary) } }
+    case 'add_comment':
+      return { tool: 'add_comment', args: { task_id: action.task_id, body: b.body } }
+    case 'send_message':
+      return { tool: 'send_message', args: { to_user_id: action.to_user_id, to_name: action.to_name, text: action.text } }
+    default:
+      return { tool: 'api_action', args: { action } }
+  }
+}
+
+// The server's summary is the only place the human-readable task title and person
+// name survive — the action body carries ids. Both are used for the spoken line and
+// the trace label ONLY, so a miss degrades to a vaguer sentence, never a wrong edit.
+const titleFrom = (summary?: string) => summary?.match(/"([^"]+)"/)?.[1] || null
+const nameFrom = (summary?: string) => summary?.match(/\bto ([^"]+)$/)?.[1]?.trim() || null
 
 export function planFromServer(resp: ServerResponse | null | undefined): Bridged {
   const say = String(resp?.say || '').trim()
@@ -79,12 +104,14 @@ export function planFromServer(resp: ServerResponse | null | undefined): Bridged
       }
     }
 
-    case 'navigate':
-      return {
-        plan: { intent: 'navigate', say, steps: [{ tool: 'navigate_url', args: { url, label: say } }] },
-        say,
-        data: resp.data,
-      }
+    case 'navigate': {
+      const steps: { tool: string; args: Record<string, any> }[] = [{ tool: 'navigate_url', args: { url, label: say } }]
+      // Administration opens on Overview. Every voice request that routes here is
+      // about people ("add an employee", "remove someone"), so carry on to the
+      // User Management tab rather than stopping one click short.
+      if (url === '/admin') steps.push({ tool: 'admin_tab', args: { tab: 'users' } })
+      return { plan: { intent: 'navigate', say, steps }, say, data: resp.data }
+    }
 
     // 'answer' and 'clarify' carry no action — the figures were computed server-side
     // and the reply IS the result.

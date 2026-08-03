@@ -10,7 +10,7 @@ import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
 import { useEscape } from '../lib/useEscape'
 import { useSurface } from '../voice/uiRegistry'
-import { typeInto, pickValue, flashPress, highlight, pause, findVaEl, waitForVaEl } from '../voice/uiController'
+import { typeInto, pickValue, flashPress, highlight, pause, settle, findVaEl, waitForVaEl } from '../voice/uiController'
 
 // Date the task was GIVEN to its owner — drives grouping, ordering, and the Time
 // column. Using the given date (not the latest activity) means completing a task
@@ -1016,6 +1016,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     read: () => ({ ...form, assignee_name: assignable.find((u) => u.id === form.assignee_id)?.name || null }),
     submit: async () => {
       await pause(260)                       // a beat so the filled form is readable
+      await settle()                         // ...and make sure the last field committed
       await flashPress(findField('submit'))
       return await save()
     },

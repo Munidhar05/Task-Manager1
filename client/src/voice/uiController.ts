@@ -44,6 +44,15 @@ export const pause = (ms: number): Promise<void> =>
 const isAttached = (el: Element | null | undefined): el is HTMLElement =>
   !!el && el instanceof HTMLElement && el.isConnected
 
+// Wait for React to actually commit the state a previous step set.
+//
+// This is REAL time, deliberately not `pause()`: pause is scaled by the pace
+// setting and collapses to zero under prefers-reduced-motion, so a step that typed
+// a value and then submitted would read stale state for exactly the users who
+// turned the animation off. Two frames — one for React to commit, one to paint.
+export const settle = (): Promise<void> =>
+  new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+
 // ---- attention -------------------------------------------------------------
 
 // Bring an element into view and mark it as the agent's current focus. Returns a

@@ -11,8 +11,8 @@
 // would press. The user watches their own UI do the work, which is the entire product
 // claim. The write still happens through the same endpoint the form always used, so
 // permissions, notifications, category detection and audit logging are unchanged.
-import { registerTools, type ToolDef, type ToolResult } from './actionEngine'
-import { invoke, awaitSurface } from './uiRegistry'
+import { registerTools, type ToolDef, type ToolResult, type ToolContext } from './actionEngine'
+import { invoke, awaitSurface, getSurface } from './uiRegistry'
 import { pause } from './uiController'
 import { api } from '../api'
 
@@ -143,6 +143,68 @@ export const TOOLS: ToolDef[] = [
     },
   },
 
+  // ---- chats ---------------------------------------------------------------
+  {
+    name: 'send_message',
+    label: ({ to_name }) => `Messaging ${to_name || 'them'}…`,
+    requires: ['to_user_id', 'text'],
+    prompts: { text: 'What should the message say?' },
+    // The only action here that another person sees, and the only one that cannot
+    // be undone from the UI. It confirms even though it is now fully visible.
+    destructive: true,
+    summarize: ({ to_name, text }) => `Message ${to_name || 'them'}: "${text}"`,
+    run: async ({ to_user_id, to_name, text }, ctx) => {
+      ctx.navigate('/chats')
+      await awaitSurface('chats')
+      await invoke('chats', 'openDirect', { userId: to_user_id })
+      await invoke('chats', 'typeMessage', { value: text })
+      await invoke('chats', 'send')
+      window.dispatchEvent(new Event('chat-unread-changed'))
+      return ok(`Sent to ${to_name || 'them'}.`)
+    },
+  },
+
+  // ---- editing an existing task, in its drawer -----------------------------
+  // These open the task the user is talking about and change it there, rather than
+  // PATCHing invisibly and jumping to a list. Seeing WHICH task changed is the
+  // whole difference between trusting the assistant and re-checking its work.
+  {
+    name: 'set_status',
+    label: ({ status, task_title }) => `Setting ${task_title ? `"${task_title}"` : 'the task'} to ${status}…`,
+    requires: ['task_id', 'status'],
+    run: async ({ task_id, status }, ctx) => {
+      await openDrawer(task_id, ctx)
+      await invoke('task.drawer', 'changeStatus', { status })
+      window.dispatchEvent(new CustomEvent('tasks-changed'))
+      return ok()
+    },
+  },
+
+  {
+    name: 'assign_task',
+    label: ({ assignee_name }) => `Assigning to ${assignee_name || 'them'}…`,
+    requires: ['task_id', 'assignee_id'],
+    run: async ({ task_id, assignee_id, assignee_name }, ctx) => {
+      await openDrawer(task_id, ctx)
+      await invoke('task.drawer', 'assignTo', { id: assignee_id })
+      window.dispatchEvent(new CustomEvent('tasks-changed'))
+      return ok(assignee_name ? `Assigned to ${assignee_name}.` : undefined)
+    },
+  },
+
+  {
+    name: 'add_comment',
+    label: () => 'Adding your comment…',
+    requires: ['task_id', 'body'],
+    prompts: { body: 'What should the comment say?' },
+    run: async ({ task_id, body }, ctx) => {
+      await openDrawer(task_id, ctx)
+      await invoke('task.drawer', 'comment', { body })
+      window.dispatchEvent(new CustomEvent('tasks-changed'))
+      return ok()
+    },
+  },
+
   // ---- bridge tools --------------------------------------------------------
   // The server's voice router already resolves a spoken command into a concrete
   // action: it matched the name against the org's alias table, checked the role,
@@ -158,6 +220,16 @@ export const TOOLS: ToolDef[] = [
     run: async ({ url }, ctx) => {
       ctx.navigate(url)
       await pause(420)
+      return ok()
+    },
+  },
+
+  {
+    name: 'admin_tab',
+    label: ({ tab }) => `Opening ${tab === 'users' ? 'User Management' : tab}…`,
+    requires: ['tab'],
+    run: async ({ tab }) => {
+      await invoke('admin', 'openTab', { tab })
       return ok()
     },
   },
@@ -200,6 +272,23 @@ export const TOOLS: ToolDef[] = [
     },
   },
 ]
+
+// Open a task's drawer and wait for it to be the one on screen.
+//
+// The drawer is a single component reused for whichever task is open, so it can
+// already be mounted showing a DIFFERENT task when a plan's second step runs. The
+// id check is what stops step two editing the task step one happened to leave open.
+async function openDrawer(taskId: string, ctx: ToolContext): Promise<void> {
+  ctx.navigate('/tasks')
+  await invoke('tasks', 'openTask', { id: taskId })
+  const deadline = Date.now() + 6000
+  while (Date.now() < deadline) {
+    const surface = getSurface('task.drawer')
+    if (surface && (await surface.id()) === taskId) { await pause(320); return }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error("that task's details didn't open")
+}
 
 // Execute one server-resolved action against the endpoints the UI itself uses, so
 // permissions, notifications, category detection and audit logging are identical to

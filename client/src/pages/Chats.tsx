@@ -5,6 +5,8 @@ import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
 import { confirmDialog } from '../lib/confirm'
+import { useSurface } from '../voice/uiRegistry'
+import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiController'
 
 interface Member { id: string; name: string; avatar_color?: string; avatar_file?: string | null; role: string }
 interface Conversation {
@@ -271,6 +273,33 @@ export default function Chats() {
       setMessages((m) => m.filter((x) => x.id !== optimistic.id)); setInput(body); toast.error('Could not send: ' + e.message)
     } finally { setBusy(false) }
   }
+
+  // ---- Agent surface -------------------------------------------------------
+  // Sending a message by voice used to POST straight to the chat API and then
+  // navigate to /chats, so the user saw a thread that already contained a message
+  // they never watched being written. Now the agent opens the conversation, types
+  // into the real composer and presses the real Send — which matters more here than
+  // anywhere else in the app, because this is the one action that is visible to
+  // ANOTHER PERSON and cannot be taken back.
+  useSurface('chats', {
+    // Find or create the direct thread with someone, then open it.
+    openDirect: async ({ userId }: { userId: string }) => {
+      const conv: any = await api.post('/chat/conversations', { type: 'direct', userId })
+      loadConvos()
+      setActiveId(conv.id)
+      await pause(420)                 // let the thread render before typing into it
+      return { id: conv.id }
+    },
+    typeMessage: ({ value }: { value: string }) =>
+      typeInto(findVaEl('chats.composer'), value, setInput),
+    send: async () => {
+      // settle() before reading state: typeInto set `input` through React, and the
+      // real send() closes over it. Without a commit the message would post empty.
+      await settle()
+      await flashPress(findVaEl('chats.send'))
+      await send()
+    },
+  })
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; e.target.value = ''
@@ -589,6 +618,7 @@ export default function Chats() {
                 <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={onPickFile} />
                 <button className="btn btn-ghost attach-btn" title="Attach a file" aria-label="Attach a file" disabled={busy || !!editing} onClick={() => fileRef.current?.click()}>＋</button>
                 <input
+                  data-va="chats.composer"
                   placeholder={editing ? 'Edit your message…' : 'Type a message…'}
                   value={input}
                   onChange={(e) => { setInput(e.target.value); if (!editing) sendTyping(true) }}
@@ -598,7 +628,7 @@ export default function Chats() {
                   onBlur={() => sendTyping(false)}
                   autoFocus
                 />
-                <button className="btn btn-primary" onClick={send} disabled={busy || !input.trim()}>{editing ? 'Save' : 'Send'}</button>
+                <button data-va="chats.send" className="btn btn-primary" onClick={send} disabled={busy || !input.trim()}>{editing ? 'Save' : 'Send'}</button>
               </div>
             </div>
           )}

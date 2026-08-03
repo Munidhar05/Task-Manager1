@@ -159,9 +159,15 @@ export function useVoiceAssistant() {
   }
 
   // Continue a suspended plan with the user's answer.
+  //
+  // Collapse again before resuming. handleOutcome EXPANDED the panel to show the
+  // question, and without this the rest of the plan would run behind a full-screen
+  // panel — so a confirmed action (which is every destructive one, and the only
+  // kind another person sees) would be the one case the user never gets to watch.
   const resume = async (p: Suspended, answer: string | boolean, extra?: Record<string, any>) => {
     setState('processing')
     setPend(null)
+    if (answer !== false) setMinimized(true)
     await handleOutcome(await answerAndResume(p, answer, ctx, extra))
   }
 
