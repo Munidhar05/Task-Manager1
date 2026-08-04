@@ -1795,6 +1795,43 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .fb-review-time { font-size: 11px; margin-left: auto; }
 .fb-review-comment { font-size: 13px; color: var(--text); margin-top: 3px; line-height: 1.45; word-break: break-word; }
 
+/* Context line under a review: which screen, which device, how many sends. */
+.fb-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.fb-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600; color: var(--muted);
+  background: var(--n-50); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+.fb-tag code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: inherit; }
+
+/* The submission trail (managers): one row per send, newest first. */
+.fb-tabs { display: inline-flex; gap: 4px; background: var(--n-50); border-radius: 999px; padding: 3px; margin-bottom: 14px; }
+.fb-tab { border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted);
+  padding: 5px 13px; border-radius: 999px; cursor: pointer; transition: background .15s, color .15s; }
+.fb-tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.fb-ev { display: grid; grid-template-columns: 26px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.fb-ev:last-child { border-bottom: 0; }
+.fb-ev-dot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 800;
+  color: #fff; background: #0f9d6e; }
+.fb-ev-dot.update { background: #2f6fd0; }
+.fb-ev-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fb-ev-when { font-size: 11px; color: var(--muted); margin-left: auto; }
+.fb-ev-empty { font-size: 13px; color: var(--muted); }
+
+/* ---- Floating feedback tab --------------------------------------------------- */
+/* Bottom-right, stacked above the draggable "Ask BTM" voice pill (which owns the
+   corner at bottom:20px). Below modals (1300) and below a pill mid-drag (1310). */
+.fbtn {
+  position: fixed; right: 20px; bottom: 88px; z-index: 1150;
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 16px; border: 0; border-radius: 999px;
+  font: inherit; font-size: 13.5px; font-weight: 700; color: #fff; cursor: pointer;
+  background: linear-gradient(135deg, #7c4ddb, #5b34b8);
+  box-shadow: 0 8px 22px rgba(91,52,184,.42), inset 0 1px 0 rgba(255,255,255,.22);
+  transition: transform .12s ease, box-shadow .2s ease, filter .2s;
+}
+.fbtn:hover { transform: translateY(-2px); filter: brightness(1.07); box-shadow: 0 12px 28px rgba(91,52,184,.5), inset 0 1px 0 rgba(255,255,255,.28); }
+.fbtn:active { transform: translateY(0); }
+.fbtn:focus-visible { outline: 3px solid rgba(124,77,219,.55); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .fbtn { transition: none; } .fbtn:hover { transform: none; } }
+
 /* ---- Task attachments -------------------------------------------------------- */
 /* Staged files in the New Task form (before upload) */
 .attach-stage { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
@@ -1883,6 +1920,21 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
      card (and with it the drag affordance) is desktop/tablet only — the dock
      stays put here purely to anchor the coachmark above the tab bar. */
   .va-fab-pill { display: none; }
+  /* The feedback tab moves to the bottom-LEFT on phones. The right corner is
+     taken (new-task FAB) and the centre is the mic orb, but the left of the tab
+     bar is free on every page — so the tab keeps one consistent spot. Compact,
+     and layered like the other mobile floating buttons (under the tab bar and
+     under toasts) rather than over them. */
+  .fbtn {
+    left: 12px; right: auto; z-index: 33;
+    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+    height: 34px; padding: 0 13px; gap: 6px; font-size: 12.5px;
+    box-shadow: 0 4px 14px rgba(91,52,184,.42), inset 0 1px 0 rgba(255,255,255,.22);
+  }
+  .fbtn svg { width: 15px; height: 15px; }
+  /* The verify-email card lands in this same corner (full-width on small phones)
+     and would sit ON the tab, swallowing the tap — stack it above instead. */
+  .verify-pop { bottom: calc(126px + env(safe-area-inset-bottom, 0px)); }
 
   /* --- Floating "New task" action ----------------------------------------- */
   .fab-newtask {

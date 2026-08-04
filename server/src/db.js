@@ -428,6 +428,27 @@ export function initSchema() {
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_feedback_org ON app_feedback(org_id);
+
+  -- Every feedback SUBMISSION, append-only. app_feedback above holds each
+  -- person's CURRENT opinion (one row, overwritten on re-submit); this is the
+  -- trail behind it — who sent what, when, from which screen and which device,
+  -- including every edit. Nothing here is ever updated or deleted, so a rating
+  -- that changed from 2★ to 5★ still shows both steps.
+  CREATE TABLE IF NOT EXISTS feedback_events (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    rating INTEGER NOT NULL,                    -- 1..5 stars as submitted
+    comment TEXT,
+    kind TEXT NOT NULL,                         -- 'new' (first time) | 'update'
+    page TEXT,                                  -- route they were on, e.g. /tasks
+    device TEXT,                                -- 'Android app', 'Chrome on Windows', …
+    app_version TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_fbev_org ON feedback_events(org_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_fbev_user ON feedback_events(user_id);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
@@ -498,6 +519,18 @@ export function initSchema() {
   // Index on conversation_id — created here (not in the inline schema) so it runs
   // AFTER the column is ensured above; otherwise older DBs predating the column fail.
   db.exec('CREATE INDEX IF NOT EXISTS idx_chat_convo ON chat_messages(conversation_id, created_at);')
+
+  // Seed the submission trail from feedback left BEFORE feedback_events existed,
+  // so an early review doesn't read as "0 submissions". Screen and device are
+  // genuinely unknown for these, so they stay NULL rather than being invented —
+  // the row records the honest minimum: who, what rating, and when.
+  runOnce('feedback_events_backfill_v1', () => {
+    const rows = db.prepare('SELECT id, org_id, user_id, rating, comment, created_at FROM app_feedback').all()
+    const ins = db.prepare(`INSERT INTO feedback_events
+      (id, org_id, user_id, rating, comment, kind, page, device, app_version, created_at)
+      VALUES (?,?,?,?,?,'new',NULL,NULL,NULL,?)`)
+    db.transaction(() => { for (const f of rows) ins.run(`fbe_seed_${f.id}`, f.org_id, f.user_id, f.rating, f.comment, f.created_at) })()
+  })
 
   // Rebuild chat_messages on older DBs where recipient_id was NOT NULL with a FK
   // (which blocks group messages). Recreates it nullable / FK-free, preserving rows.

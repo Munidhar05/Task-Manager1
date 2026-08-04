@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { api, userAvatarUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Ic, EmptyState } from '../ui'
@@ -6,9 +7,10 @@ import { useEscape } from '../lib/useEscape'
 import { toast } from '../lib/toast'
 
 // In-app feedback. Everyone can leave a star rating + comment about the app (and
-// update it later). Managers/admins also see the whole org's reviews and the
-// average, so they can gauge how the team rates the product. Opens from the
-// sidebar and the profile menu.
+// update it later). Managers/admins also see the whole org's reviews, the
+// average, and the submission trail — who sent what, when, from which screen and
+// which device. Opens from the corner Feedback tab, the sidebar and the profile
+// menu.
 
 // A row of five stars, clickable when interactive.
 function Stars({ value, onPick, size = 22 }: { value: number; onPick?: (n: number) => void; size?: number }) {
@@ -51,34 +53,70 @@ const timeAgo = (raw?: string) => {
   return Math.floor(sec / 86400) + 'd ago'
 }
 
+// Absolute date + time for the trail, where "2d ago" is too vague to act on.
+const stamp = (raw?: string) => {
+  if (!raw) return ''
+  const s = /\dT|\dZ|[+-]\d\d:?\d\d$/.test(raw) ? raw : raw.replace(' ', 'T') + 'Z'
+  const ms = Date.parse(s); if (isNaN(ms)) return ''
+  return new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+}
+
+// The screen / device / build chips shown under a review or a trail entry.
+function ContextTags({ page, device, version, sends }: { page?: string; device?: string; version?: string; sends?: number }) {
+  if (!page && !device && !version && !sends) return null
+  return (
+    <div className="fb-meta">
+      {page && <span className="fb-tag" title="Screen they were on when they sent it">from <code>{page}</code></span>}
+      {device && <span className="fb-tag">{device}</span>}
+      {version && <span className="fb-tag">v{version}</span>}
+      {!!sends && sends > 1 && <span className="fb-tag">{sends} submissions</span>}
+    </div>
+  )
+}
+
 export default function FeedbackModal({ onClose }: { onClose: () => void }) {
   const { user } = useAuth()
   useEscape(onClose)
   const isManager = user?.role !== 'employee'
+  // Where the user was when they opened the form — recorded with the submission
+  // so a manager can see which screen prompted the comment.
+  const loc = useLocation()
 
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
   const [existing, setExisting] = useState(false)   // has the user rated before?
   const [busy, setBusy] = useState(false)
   const [summary, setSummary] = useState<any>(null)  // manager view
+  const [history, setHistory] = useState<any>(null)  // manager view: the trail
+  const [tab, setTab] = useState<'reviews' | 'history'>('reviews')
   const [loaded, setLoaded] = useState(false)
+
+  const loadManagerViews = () => {
+    api.get('/feedback').then(setSummary).catch(() => {})
+    api.get('/feedback/history').then(setHistory).catch(() => {})
+  }
 
   // Load the user's own rating (pre-fill) and, for managers, the org summary.
   useEffect(() => {
     api.get('/feedback/mine').then((r) => {
       if (r) { setRating(r.rating); setComment(r.comment || ''); setExisting(true) }
     }).catch(() => {}).finally(() => setLoaded(true))
-    if (isManager) api.get('/feedback').then(setSummary).catch(() => {})
+    if (isManager) loadManagerViews()
   }, [isManager])
 
   const submit = async () => {
     if (rating < 1) { toast.error('Please pick a star rating first.'); return }
     setBusy(true)
     try {
-      await api.post('/feedback', { rating, comment: comment.trim() })
+      await api.post('/feedback', {
+        rating,
+        comment: comment.trim(),
+        page: loc.pathname,
+        app_version: typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : undefined,
+      })
       toast.success(existing ? 'Feedback updated — thank you!' : 'Thanks for your feedback!')
       setExisting(true)
-      if (isManager) api.get('/feedback').then(setSummary).catch(() => {}) // refresh the list
+      if (isManager) loadManagerViews() // refresh the list and the trail
     } catch (err: any) {
       toast.error(err?.message || 'Could not send feedback.')
     } finally { setBusy(false) }
@@ -110,7 +148,7 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
             </button>
           </section>
 
-          {/* Manager view: the whole team's reviews */}
+          {/* Manager view: the whole team's reviews + the submission trail */}
           {isManager && summary && (
             <section className="fb-reviews">
               <div className="fb-section-lbl">Team feedback</div>
@@ -118,6 +156,13 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
                 <div className="muted" style={{ fontSize: 13 }}>No one has rated the app yet.</div>
               ) : (
                 <>
+                  <div className="fb-tabs" role="tablist" aria-label="Feedback view">
+                    <button role="tab" aria-selected={tab === 'reviews'} className={'fb-tab' + (tab === 'reviews' ? ' active' : '')}
+                      onClick={() => setTab('reviews')}>Reviews</button>
+                    <button role="tab" aria-selected={tab === 'history'} className={'fb-tab' + (tab === 'history' ? ' active' : '')}
+                      onClick={() => setTab('history')}>Activity{history?.count ? ` (${history.count})` : ''}</button>
+                  </div>
+                  {tab === 'reviews' ? <>
                   <div className="fb-summary">
                     <div className="fb-avg">
                       <div className="fb-avg-num">{summary.average}</div>
@@ -137,7 +182,7 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
                   <div className="fb-list">
                     {summary.reviews.map((rv: any) => (
                       <div key={rv.id} className="fb-review">
-                        <Avatar name={rv.user_name} color={rv.avatar_color} size={30} src={rv.avatar_file ? userAvatarUrl(rv.id, rv.avatar_file) : undefined} />
+                        <Avatar name={rv.user_name} color={rv.avatar_color} size={30} src={rv.avatar_file ? userAvatarUrl(rv.user_id, rv.avatar_file) : undefined} />
                         <div className="fb-review-body">
                           <div className="fb-review-top">
                             <span className="fb-review-name">{rv.user_name}</span>
@@ -145,10 +190,37 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
                             <span className="muted fb-review-time">{timeAgo(rv.updated_at)}</span>
                           </div>
                           {rv.comment && <div className="fb-review-comment">{rv.comment}</div>}
+                          <ContextTags page={rv.page} device={rv.device} sends={rv.submissions} />
                         </div>
                       </div>
                     ))}
                   </div>
+                  </> : (
+                  /* Activity: every send and edit, newest first — the trail behind
+                     the reviews above, including ratings that were later changed. */
+                  <div className="fb-list">
+                    {!history ? <div className="fb-ev-empty">Loading activity…</div>
+                      : history.events.length === 0 ? <div className="fb-ev-empty">No submissions recorded yet.</div>
+                      : history.events.map((e: any) => (
+                        <div key={e.id} className="fb-ev">
+                          <span className={'fb-ev-dot' + (e.kind === 'update' ? ' update' : '')} title={e.kind === 'update' ? 'Updated their feedback' : 'First feedback'}>
+                            {e.rating}★
+                          </span>
+                          <div>
+                            <div className="fb-ev-top">
+                              <span className="fb-review-name">{e.user_name}</span>
+                              <span className="muted" style={{ fontSize: 11.5 }}>
+                                {e.kind === 'update' ? 'updated their rating' : 'left feedback'}
+                              </span>
+                              <span className="fb-ev-when">{stamp(e.created_at)}</span>
+                            </div>
+                            {e.comment && <div className="fb-review-comment">{e.comment}</div>}
+                            <ContextTags page={e.page} device={e.device} version={e.app_version} />
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                  )}
                 </>
               )}
             </section>

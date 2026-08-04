@@ -2,6 +2,7 @@ import { defineConfig, loadEnv, Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
+import pkg from './package.json'
 
 // The wake word costs ~9 MB of the bundle: the ONNX runtime WASM (~26 MB raw,
 // ~6 MB compressed) plus three models. All of it is dead weight in a build where
@@ -53,6 +54,9 @@ export default defineConfig(({ mode }) => {
   const wakeWord = env.VITE_WAKEWORD_ENABLED === 'true'
   return {
     plugins: [react(), dropWakeWordAssets(wakeWord)],
+    // Stamp the build's version into the bundle so feedback can record which
+    // build it came from ("this complaint is from 1.0.0, already fixed in 1.1").
+    define: { __APP_VERSION__: JSON.stringify(pkg.version) },
     server: {
       port: 5173,
       proxy: {
