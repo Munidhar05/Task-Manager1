@@ -3,11 +3,12 @@ import { api, userAvatarUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Ic, EmptyState, Bar } from '../ui'
 
-// Points leaderboard. One point per action, no weighting:
-//   assign a task · complete a task · comment on a task · change a task's status
-// Assign 10 tasks and you have 10 points. Today / last 30 days / all-time are the
-// same count over a different window. Clicking a card shows which actions earned
-// the points. Everything comes from /api/scores, counted live from the task tables.
+// Points leaderboard. Fixed points per action:
+//   complete a task 10 · assign a task 5 · comment on a task 1 · change a status 1
+// Complete 10 tasks and you have 100 points. Today / last 30 days / all-time are
+// the same tally over a different window. Clicking a card shows which actions
+// earned the points. Everything comes from /api/scores, counted live from the task
+// tables — the per-action values are the server's `rules`, never hard-coded here.
 
 const PERIODS = [
   { k: 'day', label: 'Today', hint: 'points earned today' },
@@ -74,7 +75,10 @@ export default function Leaderboard() {
     <>
       <div className="lb-toolbar section">
         <div className="muted" style={{ fontSize: 13 }}>
-          1 point each: assign a task · complete a task · comment on a task · change a status.
+          {/* Read off the server's rules so the legend can't drift from the scoring. */}
+          {data?.rules?.length
+            ? data.rules.map((r: any) => `${r.points} ${r.points === 1 ? 'pt' : 'pts'} ${r.short || r.label.toLowerCase()}`).join(' · ')
+            : 'Points are awarded for assigning, completing and commenting on tasks.'}
         </div>
         <div className="lb-winsel" role="tablist" aria-label="Time period">
           {PERIODS.map((p) => (
@@ -153,6 +157,7 @@ function DetailModal({ userId, period, onClose }: { userId: string; period: stri
   // One row per rule: how many times they did it, and the points that earned.
   const rows = (d?.rules || []).map((r: any) => ({
     key: r.key, label: r.label, hint: r.hint,
+    per: d?.breakdown?.[r.key]?.per ?? r.points ?? 1,
     count: d?.breakdown?.[r.key]?.count || 0,
     points: d?.breakdown?.[r.key]?.points || 0,
   }))
@@ -200,7 +205,7 @@ function DetailModal({ userId, period, onClose }: { userId: string; period: stri
                 <div key={s.key} className="lb-comp">
                   <div className="lb-comp-top">
                     <span className="lb-comp-key" title={s.hint}>{s.label}</span>
-                    <span className="lb-comp-val">{s.count} × 1 = <b>{s.points}</b></span>
+                    <span className="lb-comp-val">{s.count} × {s.per} = <b>{s.points}</b></span>
                   </div>
                   <Bar value={s.points} max={maxPoints} color={ruleColor(s.key)} />
                 </div>

@@ -10,7 +10,7 @@
 // Day boundaries are UTC (substr(iso,1,10)) to match the dashboards.
 
 import { db } from './db.js'
-import { scoreCounts, pointRules } from './scoring.js'
+import { scoreCounts, pointRules, RULE_POINTS } from './scoring.js'
 
 const utcDay = (d = new Date()) => d.toISOString().slice(0, 10)
 const addDays = (day, n) => { const d = new Date(day + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
@@ -141,7 +141,8 @@ export function getUserDetail(userId, { period = 'month', historyDays = 30 } = {
 }
 
 // Points per day for the last `days` days, oldest first — the detail chart.
-// Same four rules, grouped by day instead of by person.
+// Same four rules, grouped by day instead of by person, each day's raw counts
+// multiplied by what that rule pays so the bars match the headline total.
 function dailyPoints(orgId, userId, days) {
   const from = addDays(utcDay(), -(days - 1))
   const perDay = new Map()
@@ -162,8 +163,9 @@ function dailyPoints(orgId, userId, days) {
       WHERE a.org_id=? AND a.actor_id=? AND a.action='task.status' AND a.entity_type='task'
         AND a.detail IS NOT 'Done' AND substr(a.created_at,1,10) >= ? GROUP BY d`,
   }
-  for (const sql of Object.values(DAY_SQL)) {
-    for (const row of P(sql).all(orgId, userId, from)) if (row.d) bump(row.d, row.c)
+  for (const [key, sql] of Object.entries(DAY_SQL)) {
+    const per = RULE_POINTS[key] || 0
+    for (const row of P(sql).all(orgId, userId, from)) if (row.d) bump(row.d, row.c * per)
   }
 
   const out = []
