@@ -8,6 +8,7 @@ import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal from './components/ProfileModal'
 import FeedbackModal from './components/FeedbackModal'
+import FeedbackButton from './components/FeedbackButton'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
@@ -223,6 +224,8 @@ function Layout({ children }: { children: React.ReactNode }) {
         </button>
       </nav>
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} onFeedback={() => { setShowProfile(false); setShowFeedback(true) }} />}
+      {/* Corner feedback tab — hidden while the modal is open so it isn't behind it. */}
+      {!showFeedback && <FeedbackButton onClick={() => setShowFeedback(true)} />}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />
