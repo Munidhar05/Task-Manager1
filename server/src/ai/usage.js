@@ -33,6 +33,15 @@ const TOKEN_PRICES = {
     'whisper': { in: 0, out: 0 },          // billed per audio-hour; counted as calls
     '*': { in: 0.1, out: 0.3 },
   },
+  // ElevenLabs bills per CHARACTER, not per token, so the tts route passes the
+  // character count as inputTokens and these are dollars per 1,000,000 characters.
+  // Flash/Turbo cost half a credit per character, hence the split. Indicative only:
+  // the real rate depends on the subscription tier's credit price.
+  elevenlabs: {
+    'flash': { in: 110, out: 0 },
+    'turbo': { in: 110, out: 0 },
+    '*': { in: 220, out: 0 },
+  },
 }
 
 // Flat per-call estimate (USD) for providers billed by audio, not tokens.

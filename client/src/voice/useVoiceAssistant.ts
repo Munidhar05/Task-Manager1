@@ -1,21 +1,37 @@
-// The voice assistant's conversation engine. Owns the hands-free state machine:
+// The voice assistant's conversation loop. Owns the hands-free state machine:
 //
-//   armed ──(wake word / tap)──▶ listening ──▶ processing ──▶ {navigate | answer
-//        ▲                                                     | confirm | clarify}
-//        └──────────── speak reply, then re-open mic ──────────┘
+//   armed ──(wake word / tap)──▶ listening ──▶ processing ──▶ run the plan
+//        ▲                                                       │
+//        │                                       ┌───────────────┴────────────┐
+//        │                                    finished                    suspended
+//        │                                       │                  (needs a slot, a
+//        └──────── speak, then re-open mic ──────┴───── ask, then ──── yes/no, or a
+//                                                       re-open mic     correction)
 //
-// Each turn records until the speaker goes quiet (recorder VAD), transcribes via
-// the existing multilingual endpoint, asks POST /assistant/command what to do, and
-// then acts: navigates the UI, speaks an answer, or — for anything that changes
-// data — asks for a spoken yes/no before executing against the normal task APIs
-// (so permissions & notifications are unchanged). It keeps re-opening the mic so
-// the exchange feels conversational, and falls back to "armed" when the user is
-// silent. All spoken replies also go through TTS.
+// Each turn records until the speaker goes quiet (recorder VAD), transcribes via the
+// multilingual endpoint, and asks POST /assistant/command what to do. What comes
+// back is adapted into an Action Engine plan (serverPlan.ts) and executed there —
+// this file no longer knows how any individual action is performed.
+//
+// That split is the point. Previously this hook held a switch over action kinds and
+// called the REST API directly, which meant a voice edit and a hand edit were two
+// different code paths, and the user saw nothing happen between "shall I?" and
+// "done". Now the engine drives the real screens (tools.ts), so the work is visible,
+// and the loop's only remaining job is the CONVERSATION: listen, ask the question
+// the engine suspended on, feed the answer back, speak the result.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, API_BASE, getToken } from '../api'
+import { useAuth } from '../auth'
 import { startRecording, canRecord, Recording } from './recorder'
 import { speak, stopSpeaking, isTtsEnabled, setTtsEnabled } from './tts'
+import { runPlan, answerAndResume, type Outcome, type ToolContext } from './actionEngine'
+import { planFromServer } from './serverPlan'
+import { on, resetTrace, emit, type TraceStep } from './agentBus'
+import { setAgentTurn } from './agentTurn'
+// Side-effect import: registers every tool in the table. Without it the engine
+// knows no tools and every plan fails as "not able to do that yet".
+import './tools'
 
 export type VoiceState = 'idle' | 'listening' | 'processing' | 'confirming' | 'speaking' | 'error'
 
@@ -32,18 +48,25 @@ export interface VoiceCardData {
 // A message is either spoken text or a data card rendered inline in the panel.
 export interface VoiceMsg { role: 'user' | 'ai'; text: string; card?: VoiceCardData }
 
-interface PendingAction { kind: string; task_id?: string; to_user_id?: string; to_name?: string; text?: string; needsPassword?: boolean; summary?: string; steps?: PendingAction[]; count?: number; body?: any }
+// The engine stopped and needs something from the user. Kept in state so the panel
+// can render the right affordance: yes/no buttons for a confirmation, a password
+// field when removing a teammate, or nothing at all for a spoken slot answer.
+export type Suspended = Extract<Outcome, { status: 'suspended' }>
 
 const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|okey|confirm|confirmed|correct|right|go ahead|do it|please do|haan|haa|ha|ji|karo|sari|sare|avunu|cheyyi|cheyandi|cheyyandi)\b/i
 const NO_RE = /\b(no|nope|nah|cancel|cancelled|don'?t|stop|nahi|nahin|mat|vddu|venda|vodhu|leave it|never mind|nevermind)\b/i
 
 export function useVoiceAssistant() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<VoiceState>('idle')
   const [messages, setMessages] = useState<VoiceMsg[]>([])
   const [level, setLevel] = useState(0)
-  const [pending, setPending] = useState<PendingAction | null>(null)
+  const [pending, setPending] = useState<Suspended | null>(null)
+  // The live step list the panel renders. Mirrors agentBus, which is the source of
+  // truth — the engine and the tools push to it from outside React.
+  const [trace, setTrace] = useState<TraceStep[]>([])
   const [ttsOn, setTtsOnState] = useState(isTtsEnabled())
   // Minimized = the session stays live in a small bar (page visible) so the user
   // can keep giving commands without re-triggering the wake word.
@@ -52,7 +75,7 @@ export function useVoiceAssistant() {
   // Refs mirror state for use inside the async turn loop (avoids stale closures).
   const sessionRef = useRef(0)          // bump to invalidate an in-flight loop
   const recRef = useRef<Recording | null>(null)
-  const pendingRef = useRef<PendingAction | null>(null)
+  const pendingRef = useRef<Suspended | null>(null)
   const msgsRef = useRef<VoiceMsg[]>([])
   const emptyStreakRef = useRef(0)
   const openRef = useRef(false)
@@ -63,7 +86,18 @@ export function useVoiceAssistant() {
   minimizedRef.current = minimized
 
   const push = (m: VoiceMsg) => setMessages((ms) => [...ms.slice(-20), m])
-  const setPend = (p: PendingAction | null) => { pendingRef.current = p; setPending(p) }
+  const setPend = (p: Suspended | null) => { pendingRef.current = p; setPending(p) }
+
+  // Mirror the bus into React state for rendering.
+  useEffect(() => on('trace', ({ steps }) => setTrace(steps)), [])
+
+  // Announce that the user is talking to the agent, so anything else listening to
+  // the same microphone can leave that speech out of its own transcript. See
+  // agentTurn.ts — without this a voice command lands inside the meeting it was
+  // issued about. Gated on `state` as well as `open`, so a panel left parked at
+  // idle (nobody speaking) does not hold the mic hostage.
+  useEffect(() => { setAgentTurn(open && state !== 'idle') }, [open, state])
+  useEffect(() => () => setAgentTurn(false), [])
 
   const setTtsOn = (on: boolean) => { setTtsEnabled(on); setTtsOnState(on) }
 
@@ -83,57 +117,96 @@ export function useVoiceAssistant() {
   const sendCommand = (transcript: string) =>
     api.post('/assistant/command', { transcript, history: msgsRef.current.slice(-8) })
 
-  // ---- execute a confirmed mutation via the existing task endpoints --------
-  // Every kind maps to an endpoint the app already exposes, so permissions and
-  // notifications behave exactly as they do from the UI.
-  // Run ONE action against the app's real endpoints (permissions/notifications
-  // behave exactly as they do from the UI).
-  const executeOne = async (action: PendingAction, password?: string) => {
-    switch (action.kind) {
-      case 'create_task': await api.post('/tasks', action.body); break
-      case 'set_status': await api.post(`/tasks/${action.task_id}/status`, action.body); break
-      case 'add_comment': await api.post(`/tasks/${action.task_id}/comments`, action.body); break
-      case 'delete_task': await api.del(`/tasks/${action.task_id}`); break
-      case 'send_message': {
-        // Find/create the direct thread, then post the message.
-        const conv: any = await api.post('/chat/conversations', { type: 'direct', userId: action.to_user_id })
-        await api.post(`/chat/conversations/${conv.id}/messages`, { body: action.text })
-        break
-      }
-      case 'remove_user': {
-        // Gate the destructive account removal behind the manager's password.
-        await api.post('/auth/verify-password', { password })
-        await api.del(`/users/${action.to_user_id}`)
-        break
-      }
-      // update_task / assign_task / set_priority / set_due_date all PATCH fields
-      default: await api.patch(`/tasks/${action.task_id}`, action.body)
-    }
+  // ---- the engine's view of the app ---------------------------------------
+  // Injected rather than imported by the tools, so nothing in the tool table has a
+  // React or router dependency. Rebuilt each render; the engine only reads it
+  // during a run, so a stale closure can't outlive a turn.
+  const ctx: ToolContext = {
+    navigate: (url: string) => navigate(url),
+    say: (text: string) => say(text),
+    user: user ? { id: user.id, name: user.name, role: user.role } : null,
   }
 
-  const execute = async (action: PendingAction, password?: string) => {
-    setState('processing')
-    // A plan runs each step in order; a single action is just a 1-step plan.
-    const steps = action.kind === 'plan' ? (action.steps || []) : [action]
-    try {
-      let done = 0
-      for (const step of steps) {
-        await executeOne(step, password)
-        done++
-        // Narrate progress so a multi-step plan doesn't feel frozen.
-        if (steps.length > 1) push({ role: 'ai', text: `✓ (${done}/${steps.length}) ${step.summary || 'done'}` })
-      }
-      if (steps.length === 1) push({ role: 'ai', text: `✓ ${action.summary || 'Done'}` })
-      await say(steps.length > 1 ? `Done — ${done} ${done === 1 ? 'step' : 'steps'} completed.` : 'Done.')
-      // Refresh the relevant lists and jump to the most relevant section.
-      const kinds = new Set(steps.map((s) => s.kind))
-      if (kinds.has('remove_user')) { window.dispatchEvent(new CustomEvent('users-changed')); navigate('/admin') }
-      else if (kinds.size === 1 && kinds.has('send_message')) { window.dispatchEvent(new Event('chat-unread-changed')); navigate('/chats') }
-      else { window.dispatchEvent(new CustomEvent('tasks-changed')); if (kinds.has('send_message')) window.dispatchEvent(new Event('chat-unread-changed')); navigate('/tasks') }
-    } catch (e: any) {
-      const m = `Sorry, that didn't fully work: ${e?.message || 'please try again'}`
-      push({ role: 'ai', text: m }); await say(m)
+  // Hand the microphone back and end the session.
+  //
+  // The loop's normal behaviour is to keep re-opening the mic so a conversation
+  // flows without repeating the wake word. That is wrong the moment the agent has
+  // just put a DIFFERENT listener in charge of the microphone: after "start the
+  // meeting", a still-live assistant session records the opening minute of the
+  // meeting as if it were a command, and the gate in agentTurn.ts — doing its job —
+  // keeps that same minute out of the meeting transcript. Both listeners would be
+  // behaving correctly and the user would lose the audio. So the agent gets out of
+  // the way, and the wake word brings it back.
+  const yieldSession = () => {
+    sessionRef.current++
+    try { recRef.current?.cancel() } catch {}
+    recRef.current = null
+    openRef.current = false
+    setMinimized(false)
+    setOpen(false)
+    setState('idle')
+  }
+
+  // ---- react to whatever the engine did ------------------------------------
+  // Three ways a run ends, and each one leaves the conversation somewhere different:
+  // finished (speak the result), suspended (ask, and keep the mic open for the
+  // answer), or failed (say why — the trace already shows which step broke).
+  const handleOutcome = async (outcome: Outcome) => {
+    // Which session this outcome belongs to. Standing down is the only thing here
+    // that reaches outside the current turn, and there is a real gap to lose: the
+    // user can say the wake word again while the agent is still speaking its reply,
+    // which starts a NEW session. Tearing that one down because the previous
+    // outcome asked to yield would swallow the command they just gave.
+    const turn = sessionRef.current
+    if (outcome.status === 'suspended') {
+      setPend(outcome)
+      setMinimized(false)                 // the question has to be readable
+      setState('confirming')
+      push({ role: 'ai', text: outcome.question })
+      await say(outcome.question)
+      return
     }
+    if (outcome.status === 'failed') {
+      setPend(null)
+      setMinimized(false)
+      push({ role: 'ai', text: outcome.say })
+      await say(outcome.say)
+      return
+    }
+    setPend(null)
+    const data = outcome.results.find((r) => r.data)?.data
+    // A card has figures worth reading, so expand for it. A plain success stays
+    // minimized: the result is the page behind the bar (the highlighted new row),
+    // and popping the panel back over it would hide the thing just accomplished.
+    const card = data?.type === 'task' ? undefined : data
+    if (card) setMinimized(false)
+    push({ role: 'ai', text: outcome.say, card })
+    await say(outcome.say)
+    // Speak first, THEN stand down: the reply has to be heard, and the gate's tail
+    // is what keeps it off the meeting's transcript.
+    if (outcome.results.some((r) => r.endSession) && sessionRef.current === turn) yieldSession()
+  }
+
+  // Start a fresh plan. The trace resets here and nowhere else, so every step the
+  // agent takes for ONE utterance stays visible together.
+  const execute = async (plan: Parameters<typeof runPlan>[0]) => {
+    setState('processing')
+    emit('phase', { phase: 'executing' })
+    resetTrace('new command')
+    await handleOutcome(await runPlan(plan, ctx))
+  }
+
+  // Continue a suspended plan with the user's answer.
+  //
+  // Collapse again before resuming. handleOutcome EXPANDED the panel to show the
+  // question, and without this the rest of the plan would run behind a full-screen
+  // panel — so a confirmed action (which is every destructive one, and the only
+  // kind another person sees) would be the one case the user never gets to watch.
+  const resume = async (p: Suspended, answer: string | boolean, extra?: Record<string, any>) => {
+    setState('processing')
+    setPend(null)
+    if (answer !== false) setMinimized(true)
+    await handleOutcome(await answerAndResume(p, answer, ctx, extra))
   }
 
   // ---- speak + reflect state ----------------------------------------------
@@ -150,35 +223,30 @@ export function useVoiceAssistant() {
   }
 
   const handleResponse = async (resp: any) => {
-    const sayText = String(resp?.say || '').trim()
-    // Attach any figures to the reply so the panel can show them, not just speak them.
-    if (sayText) push({ role: 'ai', text: sayText, card: resp?.data || undefined })
-    switch (resp?.mode) {
-      case 'confirm':
-        setMinimized(false)  // expand so the confirmation card is visible
-        if (resp.action) { setPend(resp.action); setState('confirming') }
-        await say(sayText || 'Shall I go ahead?')
-        break
-      case 'navigate':
-        if (resp.navigate?.url) navigate(resp.navigate.url)
-        // The full-screen panel would hide the page we just opened. Shrink to the
-        // minimized bar instead of closing — the session stays live, so the next
-        // command needs no wake word (just speak or tap the bar). Await the reply
-        // so the mic doesn't re-open (and echo the TTS) until it finishes.
-        setMinimized(true)
-        await say(sayText || 'Opening that.')
-        break
-      case 'answer':
-        setMinimized(false)  // expand to show any figures/cards
-        await say(sayText || "I don't have anything on that.")
-        if (resp.navigate?.url) navigate(resp.navigate.url)
-        break
-      case 'clarify':
-      default:
-        setMinimized(false)
-        await say(sayText || "Sorry, I didn't understand.")
-        break
+    const bridged = planFromServer(resp)
+
+    // Nothing to execute: an answer or a clarifying question. Speak it, show any
+    // figures the server computed, and open the matching view if one was suggested.
+    if (!bridged.plan) {
+      setMinimized(false)                 // expand so cards/figures are visible
+      const text = bridged.say || "Sorry, I didn't understand."
+      push({ role: 'ai', text, card: bridged.data || undefined })
+      await say(text)
+      if (bridged.navigateUrl) navigate(bridged.navigateUrl)
+      return
     }
+
+    // Shrink to the mini bar before ANY plan runs. The full-screen panel covers the
+    // whole app, so leaving it up while the agent fills a form means the user is
+    // told what happened but never sees it — which defeats the entire point of
+    // driving the real UI instead of calling the API. The mini bar keeps the session
+    // live (so the next command needs no wake word) and keeps the trace visible
+    // while the page behind it actually changes.
+    //
+    // handleOutcome expands again the moment the agent needs the user back: a
+    // question, a confirmation, a failure, or figures to show.
+    setMinimized(true)
+    await execute(bridged.plan)
   }
 
   // ---- the conversational loop (records → interprets → acts → repeats) -----
@@ -219,13 +287,24 @@ export function useVoiceAssistant() {
       emptyStreakRef.current = 0
       push({ role: 'user', text })
 
-      // 3. If awaiting a yes/no on a pending action, resolve it locally first.
+      // 3. If a plan is suspended, this utterance is most likely its answer.
       const pend = pendingRef.current
       if (pend) {
+        if (pend.kind === 'slot') {
+          // A missing field is answered with free text ("Fix the login bug"), so
+          // there is nothing to interpret — hand it straight back to the engine.
+          // A password slot never reaches here: those are typed, not spoken.
+          await resume(pend, text)
+          continue
+        }
+        // confirm / recover are yes-or-no.
         const yes = YES_RE.test(text), no = NO_RE.test(text)
-        if (yes && !no) { setPend(null); await execute(pend); continue }
-        if (no && !yes) { setPend(null); const m = 'Okay, cancelled.'; push({ role: 'ai', text: m }); await say(m); continue }
-        setPend(null) // neither/both → treat as a revised command below
+        if (yes && !no) { await resume(pend, true); continue }
+        if (no && !yes) { await resume(pend, false); continue }
+        // Neither, or both — the user said something else entirely, which in
+        // practice means they are correcting themselves. Drop the pending plan and
+        // treat this as a fresh command.
+        setPend(null)
       }
 
       // 4. Ask the brain what to do, then act on it.
@@ -271,27 +350,32 @@ export function useVoiceAssistant() {
     }
   }, [state, runTurn])
 
-  // Manual confirm / cancel buttons for the pending action card. `password` is
-  // supplied only for actions that require re-auth (e.g. removing a teammate).
+  // Manual confirm / cancel buttons on the pending card — the tap equivalent of
+  // saying yes or no. `password` is supplied only for actions that require re-auth
+  // (removing a teammate), which is typed into the card rather than spoken.
   const confirmPending = useCallback(async (password?: string) => {
     const p = pendingRef.current
     if (!p) return
-    setPend(null); sessionRef.current++
+    // Stop the mic first: the button was pressed, so the recorder is mid-turn and
+    // would otherwise transcribe the room while the plan runs.
+    sessionRef.current++
     try { recRef.current?.cancel() } catch {}
-    await execute(p, password)
+    await resume(p, true, password ? { password } : undefined)
     sessionRef.current++; openRef.current = true; runTurn()
   }, [runTurn])
 
   const cancelPending = useCallback(() => {
+    const p = pendingRef.current
     setPend(null)
     const m = 'Okay, cancelled.'
     push({ role: 'ai', text: m }); speak(m)
+    if (p) resetTrace('cancelled')
   }, [])
 
   useEffect(() => () => { sessionRef.current++; try { recRef.current?.cancel() } catch {}; stopSpeaking() }, [])
 
   return {
-    open, state, messages, level, pending, ttsOn, minimized,
+    open, state, messages, level, pending, trace, ttsOn, minimized,
     start, stop, close, micButton, confirmPending, cancelPending, setTtsOn,
     setOpen, setMinimized,
   }

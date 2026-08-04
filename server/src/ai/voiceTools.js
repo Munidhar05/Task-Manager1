@@ -59,8 +59,8 @@ export const TOOLS = [
 
   // ---- views ---------------------------------------------------------------
   { name: 'navigate', kind: 'navigate', roles: ALL,
-    desc: 'Open a screen or a filtered task list. Use for "show/open/go to".',
-    args: 'target (overdue|completed|active|all|my_tasks|dashboard|meetings|chats|person|status|priority), person, status, priority' },
+    desc: 'Open a screen or a filtered task list. Use for "show/open/go to". For a status or priority, set target=status/priority AND the matching field — e.g. "open the blocked tasks" is target=status, status=Blocked.',
+    args: 'target (overdue|completed|active|all|my_tasks|dashboard|meetings|chats|leaderboard|person|status|priority), person, status (' + STATUSES.join('|') + '), priority (' + PRIORITIES.join('|') + ')' },
 
   // ---- analytics (numbers computed in SQL, never by you) --------------------
   { name: 'get_overview', kind: 'read', roles: ALL,
@@ -79,6 +79,10 @@ export const TOOLS = [
   { name: 'start_meeting', kind: 'navigate', roles: MGR,
     desc: "Begin recording a new live meeting. Use for 'start a meeting', 'record a meeting', 'begin the standup'.",
     args: '(none)' },
+
+  { name: 'control_meeting', kind: 'navigate', roles: MGR,
+    desc: "Control a meeting recording that is ALREADY RUNNING on screen. Use for 'pause the recording', 'resume', 'stop recording', 'finish the meeting', 'analyse it and pull out the tasks'. 'finish' stops the recording AND extracts the tasks — use it when they are done with the meeting entirely.",
+    args: 'action (pause|resume|stop|finish)' },
 
   { name: 'open_meeting', kind: 'navigate', roles: MGR,
     desc: "Open a specific meeting's page. Use for 'open the marketing meeting', 'show me the last meeting'.",
@@ -108,6 +112,7 @@ export const toolsFor = (role) => TOOLS.filter((t) => t.roles.includes(role))
 // A specific, spoken reason for a role-restricted tool.
 const DENIAL = {
   start_meeting: 'Only managers can start a meeting.',
+  control_meeting: 'Only managers can control a meeting recording.',
   open_meeting: 'Only managers can open meetings.',
   summarize_meeting: 'Only managers can see meeting summaries.',
   list_meetings: 'Only managers can see the meeting list.',

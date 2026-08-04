@@ -107,7 +107,7 @@ export default function VoiceAssistant() {
   }, [])
   const dock = useDraggable({ storageKey: FAB_POS_KEY, enabled: canDrag })
 
-  // Wake word ("hey btm") — starts a session when heard. No-op until configured;
+  // Wake word ("hey VoTask") — starts a session when heard. No-op until configured;
   // paused while a session is already open so it doesn't retrigger mid-conversation.
   useWakeWord({
     enabled: !v.open,
@@ -159,11 +159,15 @@ export default function VoiceAssistant() {
       + (dock.pos.y + h / 2 < window.innerHeight / 2 ? ' va-dock--top' : '')
   })()
 
+  // The step the agent is on right now, if any. Drives the minimized bar's caption.
+  const running = v.trace.find((s) => s.status === 'running')
+
   return (
     <>
     <div className="va-root">
       {/* Minimized bar — the session stays live over the page, so the user can
-          keep giving commands (speak or tap) without re-triggering the wake word. */}
+          keep giving commands (speak or tap) without re-triggering the wake word.
+          This is also what's on screen WHILE the agent drives the app. */}
       {v.open && v.minimized && (
         <div className={'va-mini va-mini--' + v.state} role="dialog" aria-label="Voice assistant (minimized)">
           <button className="va-mini-orb" onClick={v.micButton} title={v.state === 'listening' ? 'Stop' : 'Talk'} aria-label={v.state === 'listening' ? 'Stop' : 'Talk'}>
@@ -174,9 +178,13 @@ export default function VoiceAssistant() {
                 : <MicIcon size={20} />}
           </button>
           <div className="va-mini-text">
-            <div className="va-mini-title">BTM</div>
+            <div className="va-mini-title">VoTask</div>
             <div className="va-mini-status">
-              {v.state === 'listening' ? 'Listening — say your next command'
+              {/* While a plan runs, the mini bar IS the narration — the panel is
+                  collapsed precisely so the user can watch the page work, so the
+                  current step has to be legible here rather than only in the panel. */}
+              {running ? running.label
+                : v.state === 'listening' ? 'Listening — say your next command'
                 : v.state === 'processing' ? 'Working…'
                 : v.state === 'speaking' ? 'Speaking…'
                 : 'Tap to talk'}
@@ -252,14 +260,34 @@ export default function VoiceAssistant() {
             </div>
           )}
 
-          {v.pending && (
+          {/* What the agent is doing, step by step. This is the "watch it work"
+              half of the experience: the panel narrates while the page behind it
+              actually changes, so a multi-step plan is legible rather than a pause
+              followed by "done". Cleared at the start of each new command. */}
+          {v.trace.length > 0 && (
+            <div className="va-trace">
+              {v.trace.map((s) => (
+                <div key={s.id} className={'va-trace-step va-trace-step--' + s.status}>
+                  <span className="va-trace-mark" aria-hidden="true">
+                    {s.status === 'running' ? <span className="spinner" /> : s.status === 'done' ? '✓' : s.status === 'failed' ? '✕' : '–'}
+                  </span>
+                  <span className="va-trace-label">{s.label}</span>
+                  {s.detail && <span className="va-trace-detail">{s.detail}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* A suspended plan. `slot` questions are answered by just talking, so
+              they need no buttons — only a confirmation gets yes/no. */}
+          {v.pending && v.pending.kind !== 'slot' && (
             <div className="va-confirm">
               <div className="va-confirm-summary">
-                {v.pending.needsPassword
-                  ? <>Remove <b>{v.pending.to_name}</b>’s account? Enter your password to confirm.</>
-                  : v.pending.summary}
+                {v.pending.meta?.needsPassword
+                  ? <>{v.pending.summary}? Enter your password to confirm.</>
+                  : v.pending.summary || v.pending.question}
               </div>
-              {v.pending.needsPassword && (
+              {v.pending.meta?.needsPassword && (
                 <input
                   type="password"
                   className="va-confirm-pw"
@@ -273,8 +301,8 @@ export default function VoiceAssistant() {
               <div className="row" style={{ gap: 8 }}>
                 <button
                   className="btn btn-primary btn-sm"
-                  disabled={!!v.pending.needsPassword && !confirmPw}
-                  onClick={() => { const pw = v.pending?.needsPassword ? confirmPw : undefined; setConfirmPw(''); v.confirmPending(pw) }}
+                  disabled={!!v.pending.meta?.needsPassword && !confirmPw}
+                  onClick={() => { const pw = v.pending?.meta?.needsPassword ? confirmPw : undefined; setConfirmPw(''); v.confirmPending(pw) }}
                 >✓ Confirm</button>
                 <button className="btn btn-sm va-cancel" onClick={() => { setConfirmPw(''); v.cancelPending() }}>✕ Cancel</button>
               </div>

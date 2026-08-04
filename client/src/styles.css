@@ -543,7 +543,57 @@ tbody tr:hover { background: var(--n-50); }
 .login-err { display: flex; align-items: center; gap: 8px; color: var(--danger-ink); background: var(--danger-bg); border: 1px solid var(--danger-border); border-radius: var(--r-md); padding: 9px 12px; font-size: var(--t-md); font-weight: 600; margin-top: var(--s-3); }
 .login-err::before { content: '⚠'; font-size: 14px; flex-shrink: 0; }
 
-/* ===== Voice assistant (hands-free "hey BTM") ===== */
+/* ===== Agent-driven UI (the assistant operating the app in view) =====
+   Three states the agent puts on ORDINARY app elements while it works, so the user
+   can follow along: .va-acting = "I am here now", .va-press = "I just pressed this",
+   .va-highlight = "this is the thing I made". They are deliberately additive classes
+   on the existing controls rather than an agent-specific skin — the point is that
+   the user watches the real form, not a simulation of it.
+
+   Everything here is a shadow/outline animation. No layout property is touched, so
+   nothing reflows and the agent can never shift the page under a user who is also
+   interacting with it. */
+.va-acting {
+  outline: 2px solid var(--primary) !important;
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 16%, transparent);
+  transition: outline-color .18s ease, box-shadow .18s ease;
+}
+.va-press {
+  transform: scale(.96);
+  transition: transform .12s ease;
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--primary) 22%, transparent) !important;
+}
+.va-highlight { animation: va-pulse 1.1s ease-out 2; border-radius: var(--r-sm); }
+@keyframes va-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 12px color-mix(in srgb, var(--primary) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent); }
+}
+/* The agent's motion is explanatory, not decorative — but a user who has asked for
+   reduced motion gets the end state with no animation. uiController already skips
+   its own pacing under the same query; this covers the CSS half. */
+@media (prefers-reduced-motion: reduce) {
+  .va-acting, .va-press, .va-highlight { animation: none; transition: none; transform: none; }
+}
+
+/* The agent's step-by-step narration inside the assistant panel. Deliberately quiet
+   typography — it is a running commentary you glance at, not the content. */
+.va-trace { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-top: 1px solid var(--border); }
+.va-trace-step { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); line-height: 1.5; }
+.va-trace-mark { flex: 0 0 14px; text-align: center; font-weight: 700; }
+.va-trace-mark .spinner { width: 10px; height: 10px; border-width: 2px; }
+.va-trace-label { flex: 1; }
+.va-trace-detail { font-size: var(--t-xs); opacity: .8; }
+/* The running step is the one the user should be looking at, so it gets full ink;
+   completed steps recede rather than disappear, which keeps the plan readable. */
+.va-trace-step--running { color: var(--ink); font-weight: 600; }
+.va-trace-step--done .va-trace-mark { color: var(--success-ink, #16a34a); }
+.va-trace-step--failed { color: var(--danger-ink); }
+.va-trace-step--skipped { opacity: .6; }
+
+/* ===== Voice assistant (hands-free "hey VoTask") ===== */
 .va-root { position: fixed; right: 20px; bottom: 20px; z-index: 1200; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
 
 /* Wake-word status chip (shown while the panel is closed). Confirms the app is
@@ -924,14 +974,22 @@ tbody tr:hover { background: var(--n-50); }
 .lang-tag { font-size: 10px; background: #fdeee3; color: var(--primary); border-radius: 5px; padding: 1px 6px; margin-left: 6px; font-weight: 700; }
 
 /* ---- assistant ---- */
-.assistant-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
+/* minmax(0, 1fr), never a bare 1fr. A `1fr` track is minmax(auto, 1fr), and that
+   `auto` minimum is the item's MIN-CONTENT width — which here is a whole chat
+   preview line, because .chat-contact-preview is white-space: nowrap. The track
+   inflates to fit it (692px inside a 430px phone), so the ellipsis that rule asks
+   for can never fire: the box is never forced narrower than its own text. */
+.assistant-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
 .chat-pane { min-width: 0; }
 
 /* conversation history sidebar (ChatGPT/Claude style) */
-.chat-history { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 12px; height: calc(100dvh - 124px); }
+/* min-width: 0 for the same reason as the grid track above — as a flex item on
+   mobile (where it becomes the only column) it would otherwise refuse to shrink
+   below the widest preview line. */
+.chat-history { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 12px; height: calc(100dvh - 124px); min-width: 0; }
 .new-chat-btn { width: 100%; justify-content: center; }
 .convo-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin: 0 -4px; padding: 0 4px; }
-.convo-item { display: flex; align-items: center; gap: 6px; padding: 9px 10px; border-radius: 9px; cursor: pointer; transition: .12s; }
+.convo-item { display: flex; align-items: center; gap: 6px; padding: 9px 10px; border-radius: 9px; cursor: pointer; transition: .12s; min-width: 0; }
 .convo-item:hover { background: var(--bg); }
 .convo-item.active { background: #fdeee3; }
 .convo-meta { flex: 1; min-width: 0; }

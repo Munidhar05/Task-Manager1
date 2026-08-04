@@ -3,6 +3,8 @@ import { api } from '../api'
 import { Stat, Badge } from '../ui'
 import UserManagement from '../components/UserManagement'
 import { toast } from '../lib/toast'
+import { useSurface } from '../voice/uiRegistry'
+import { flashPress, pause, findVaEl } from '../voice/uiController'
 
 // Manage which email domains may join this organization. Empty = any domain.
 function AllowedDomains() {
@@ -61,13 +63,26 @@ export default function Admin() {
   useEffect(() => {
     api.get('/usage').then((d) => { setUsage(d); setUsageAllowed(true) }).catch(() => setUsageAllowed(false))
   }, [])
+
+  // ---- Agent surface -------------------------------------------------------
+  // Administration opens on Overview, but every voice request that lands here
+  // ("add an employee", "remove someone") is about User Management. Landing the
+  // user on the wrong tab and telling them to go and find the right one is the
+  // kind of half-help this whole stage exists to remove.
+  useSurface('admin', {
+    openTab: async ({ tab: want }: { tab: 'overview' | 'users' | 'audit' | 'usage' }) => {
+      await flashPress(findVaEl(`admin.tab.${want}`))
+      setTab(want)
+      await pause(360)
+    },
+  })
   return (
     <>
       <div className="toolbar">
-        <button className={'btn btn-sm' + (tab === 'overview' ? ' btn-primary' : '')} onClick={() => setTab('overview')}>Overview</button>
-        <button className={'btn btn-sm' + (tab === 'users' ? ' btn-primary' : '')} onClick={() => setTab('users')}>User Management</button>
-        <button className={'btn btn-sm' + (tab === 'audit' ? ' btn-primary' : '')} onClick={() => setTab('audit')}>Audit Log</button>
-        {usageAllowed && <button className={'btn btn-sm' + (tab === 'usage' ? ' btn-primary' : '')} onClick={() => setTab('usage')}>AI Usage</button>}
+        <button className={'btn btn-sm' + (tab === 'overview' ? ' btn-primary' : '')} data-va="admin.tab.overview" onClick={() => setTab('overview')}>Overview</button>
+        <button className={'btn btn-sm' + (tab === 'users' ? ' btn-primary' : '')} data-va="admin.tab.users" onClick={() => setTab('users')}>User Management</button>
+        <button className={'btn btn-sm' + (tab === 'audit' ? ' btn-primary' : '')} data-va="admin.tab.audit" onClick={() => setTab('audit')}>Audit Log</button>
+        {usageAllowed && <button className={'btn btn-sm' + (tab === 'usage' ? ' btn-primary' : '')} data-va="admin.tab.usage" onClick={() => setTab('usage')}>AI Usage</button>}
       </div>
       {tab === 'overview' && <Overview />}
       {tab === 'users' && <><AllowedDomains /><UserManagement /></>}

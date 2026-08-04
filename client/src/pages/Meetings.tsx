@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSurface } from '../voice/uiRegistry'
+import { pickValue, flashPress, pause, settle, findVaEl } from '../voice/uiController'
+import { agentHasMic, agentHadMicSince, onAgentTurn } from '../voice/agentTurn'
+import { matchesWakePhrase } from '../voice/wakeSpeech'
 import { Capacitor } from '@capacitor/core'
 import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
@@ -60,6 +64,18 @@ export default function Meetings() {
     next.delete('live')
     setSearchParams(next, { replace: true })
   }, [searchParams, setSearchParams])
+
+  // ---- Agent surface -------------------------------------------------------
+  // Only opening the recorder. Everything about the RUNNING session belongs to the
+  // modal, which owns the mic, the websocket and the transcript.
+  useSurface('meetings', {
+    openLive: async () => {
+      await flashPress(findVaEl('meetings.startLive'))
+      setShowLive(true)
+      await pause(500)
+    },
+    isLiveOpen: () => showLive,
+  })
   const [editing, setEditing] = useState<any | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(false)
@@ -82,7 +98,7 @@ export default function Meetings() {
         <div className="muted">{meetings.length} meeting(s) processed</div>
         {isManager && (
           <div className="row meetings-actions" style={{ gap: 8 }}>
-            <button className="btn btn-primary" onClick={() => setShowLive(true)}>● Start meeting</button>
+            <button data-va="meetings.startLive" className="btn btn-primary" onClick={() => setShowLive(true)}>● Start meeting</button>
             <button className="btn" onClick={() => setShowUpload(true)}>+ Upload meeting</button>
           </div>
         )}
@@ -345,6 +361,9 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const [transcribing, setTranscribing] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
+  // Purely to explain the gap. Without it the transcript silently stops growing
+  // mid-meeting and the only honest reading is "the recorder broke".
+  const [agentTalking, setAgentTalking] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -379,6 +398,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     return () => clearInterval(id)
   }, [recording, paused])
 
+  useEffect(() => onAgentTurn(setAgentTalking), [])
+
   // stop & clean up on unmount
   useEffect(() => () => {
     recordingRef.current = false
@@ -411,8 +432,21 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     return () => { handle?.remove() }
   }, [])
 
+  // Speech addressed to the voice assistant is not part of this meeting, and the
+  // recording is the one place where that distinction is impossible to fix after
+  // the fact — "hey VoTask, stop the recording" would otherwise sit in the
+  // transcript and be handed to the AI as something a participant said.
+  //
+  // Two layers, because one is not enough. The gate (agentTurn.ts) is checked at
+  // each capture site below and covers the assistant's whole turn including its
+  // spoken reply. This text check is the backstop for the gap the gate cannot
+  // close: the wake word is matched on an INTERIM result, so this recogniser has
+  // usually already heard the phrase by the time the assistant claims the mic.
+  const isAgentSpeech = (text: string) => agentHasMic() || matchesWakePhrase(text)
+
   const appendLine = (text: string) => {
     if (!text.trim()) return
+    if (isAgentSpeech(text)) return
     setTranscript((prev) => (prev ? prev.replace(/\s*$/, '') + '\n' : '') + `${speakerRef.current || 'Speaker'}: ${text.trim()}`)
   }
 
@@ -429,6 +463,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const commitBrowserFinal = (text: string) => {
     const clean = text.trim()
     if (!clean) return
+    if (isAgentSpeech(clean)) return
     const speaker = speakerRef.current || 'Speaker'
     const prefix = `${speaker}: `
     setTranscript((prev) => {
@@ -481,7 +516,14 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     setRecording(true)
     ;(async () => {
       while (recordingRef.current) {
+        const segmentStart = Date.now()
         const blob = await recordSegment(stream, 12000)
+        // Drop the whole segment if the assistant was addressed at any point
+        // inside it. Coarse — up to 12 seconds of real meeting goes with it — but
+        // a webm blob cannot be trimmed before upload, and a segment containing
+        // "hey VoTask, stop recording" is precisely what must not reach the
+        // transcript. Skipping it also saves the transcription call.
+        if (agentHadMicSince(segmentStart)) continue
         if (blob.size > 2000) {
           try { setTranscribing(true); appendLine(await uploadChunk(blob, transcriptRef.current.slice(-450))) }
           catch (e: any) { setErr(e.message) }
@@ -515,7 +557,10 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     ws.onopen = async () => {
       setTranscribing(true)
       pcmRef.current = await startPcmStream(
-        (b64) => { if (ws.readyState === WebSocket.OPEN) ws.send(b64) },
+        // Withhold the frames rather than the transcript: Sarvam never receives
+        // the audio of a command, so there is nothing to filter downstream and
+        // nothing billed for it either.
+        (b64) => { if (ws.readyState === WebSocket.OPEN && !agentHasMic()) ws.send(b64) },
         (msg) => { setErr(msg); stop() },
       )
     }
@@ -530,6 +575,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     rec.interimResults = true
     rec.lang = lang
     rec.onresult = (e: any) => {
+      // Bail before the interim is rendered too, or the live caption line shows
+      // the user's command being typed into the meeting it is about to stop.
+      // The recogniser itself is left running: restarting it per command costs a
+      // second of genuine speech at each end.
+      if (agentHasMic()) { setInterim(''); return }
       let intr = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
@@ -596,6 +646,67 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
   const close = () => { stop(); onClose() }
 
+  // ---- Agent surface -------------------------------------------------------
+  // Live recording is the one place in the app where reaching for the screen is
+  // genuinely impractical: your hands are busy, the phone is face-down on the
+  // table, and the meeting is happening. So this is the surface where voice is not
+  // a convenience but the only sensible control.
+  //
+  // Each capability calls the modal's own handler, which means the agent inherits
+  // every hard-won behaviour already in them: keepScreenAwake, the fresh-engine
+  // restart on resume (an interrupted mic/websocket is usually dead), and the
+  // teardown that releases the microphone.
+  //
+  // `status` exists so a tool can refuse coherently — "pause" when nothing is
+  // recording should say so, not silently do nothing.
+  useSurface('meetings.live', {
+    status: () => ({ recording, paused, transcript: transcript.trim().length, seconds }),
+    // A custom select, not a text field, so this is a discrete set with a beat
+    // either side rather than faked character-by-character typing.
+    setTitle: ({ value }: { value: string }) =>
+      pickValue(findVaEl('meetings.live.title'), value, setTitle),
+    record: async () => {
+      if (recording) return { already: true }
+      await flashPress(findVaEl('meetings.live.record'))
+      start()
+      await pause(400)
+      return { started: true }
+    },
+    pause: async () => {
+      if (!recording || paused) return { skipped: true }
+      // No dedicated Pause button: pausing is what the app does for you on an
+      // interruption. Press Stop's neighbour is wrong, so just call the handler and
+      // let the amber "Meeting paused" banner be the visible feedback.
+      pauseRecording()
+      await pause(320)
+      return { paused: true }
+    },
+    resume: async () => {
+      if (!paused) return { skipped: true }
+      await flashPress(findVaEl('meetings.live.resume'))
+      resumeRecording()
+      await pause(400)
+      return { resumed: true }
+    },
+    stop: async () => {
+      if (!recording) return { skipped: true }
+      await flashPress(findVaEl('meetings.live.stop'))
+      stop()
+      await pause(400)
+      return { stopped: true }
+    },
+    // Stop if still running, then analyse. `process` reads the transcript from
+    // state, so settle() before it or a just-stopped segment can be missed.
+    finish: async () => {
+      if (recording) { stop(); await pause(500) }
+      await settle()
+      if (!transcript.trim()) return { empty: true }
+      await flashPress(findVaEl('meetings.live.finish'))
+      await process()
+      return { analysed: true }
+    },
+  })
+
   const process = async () => {
     stop()
     setBusy(true); setErr('')
@@ -614,7 +725,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
         </div>
         <div className="card-pad grid" style={{ gap: 12 }}>
           <div className="grid grid-3" style={{ gap: 10 }}>
-            <div style={{ gridColumn: 'span 2' }}><MeetingTitleSelect value={title} onChange={setTitle} /></div>
+            <div data-va="meetings.live.title" style={{ gridColumn: 'span 2' }}><MeetingTitleSelect value={title} onChange={setTitle} /></div>
             <div><label>Speaker label</label><input value={speaker} onChange={(e) => setSpeaker(e.target.value)} /></div>
           </div>
           <div><label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this meeting about?" /></div>
@@ -653,6 +764,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             </div>
           </div>
 
+          {recording && !paused && agentTalking && (
+            <div data-va="meetings.live.agent-hold" style={{ background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+              <b>Listening to you, not the room</b> — the recording is still running, but what you say to VoTask is being kept out of the transcript.
+            </div>
+          )}
           {recording && paused && (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
 <b>Meeting paused</b> — recording was interrupted (e.g. a phone call, or the screen turned off). Tap <b>Resume meeting</b> to continue capturing.
@@ -660,14 +776,14 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           )}
           <div className="row" style={{ gap: 10 }}>
             {!recording ? (
-              <button className="btn btn-primary" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
+              <button data-va="meetings.live.record" className="btn btn-primary" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
             ) : paused ? (
               <>
-                <button className="btn btn-primary" onClick={resumeRecording}>▶ Resume meeting</button>
-                <button className="btn btn-danger" onClick={stop}>■ Stop</button>
+                <button data-va="meetings.live.resume" className="btn btn-primary" onClick={resumeRecording}>▶ Resume meeting</button>
+                <button data-va="meetings.live.stop" className="btn btn-danger" onClick={stop}>■ Stop</button>
               </>
             ) : (
-              <button className="btn btn-danger" onClick={stop}>■ Stop</button>
+              <button data-va="meetings.live.stop" className="btn btn-danger" onClick={stop}>■ Stop</button>
             )}
             {recording && !paused && transcribing && <span className="spinner" />}
           </div>
@@ -681,7 +797,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={close}>Cancel</button>
-            <button className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}</button>
+            <button data-va="meetings.live.finish" className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}</button>
           </div>
         </div>
       </div>

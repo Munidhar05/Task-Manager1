@@ -9,6 +9,8 @@ import { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
 import { useEscape } from '../lib/useEscape'
+import { useSurface } from '../voice/uiRegistry'
+import { typeInto, pickValue, flashPress, highlight, pause, settle, findVaEl, waitForVaEl } from '../voice/uiController'
 
 // Date the task was GIVEN to its owner — drives grouping, ordering, and the Time
 // column. Using the given date (not the latest activity) means completing a task
@@ -496,6 +498,28 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     return false
   }), [showNew, openId, filtersOpen])
 
+  // ---- Agent surface -------------------------------------------------------
+  // The task list's capabilities. `openNew` presses the real button rather than
+  // just flipping state, so the user sees the same affordance they would have used.
+  useSurface('tasks', {
+    openNew: async () => {
+      await flashPress(findVaEl('tasks.newTask'))
+      setShowNew(true)
+    },
+    filter: async ({ priority, status, assignee }: { priority?: string; status?: string; assignee?: string }) => {
+      setFilters((f) => ({ ...f, ...(priority && { priority }), ...(status && { status }), ...(assignee && { assignee }) }))
+      await pause(400)
+    },
+    // Point at a row after the agent changed it. The row may not have rendered yet
+    // (the list reloads after a create), so this waits rather than missing it.
+    highlightTask: async ({ id }: { id: string }) => {
+      const el = await waitForVaEl(`task.${id}`)
+      await highlight(el)
+    },
+    openTask: ({ id }: { id: string }) => setOpenId(id),
+    reload: () => load(),
+  })
+
   // In "My Tasks" (personal) mode, behave like a personal board even for managers:
   // own tasks only, no assignee column/picker, and new tasks are private.
   const isManager = user?.role !== 'employee' && !personal
@@ -603,8 +627,11 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     </th>
   )
 
+  // data-va lets the assistant point at this row after it changes something. Without
+  // it `highlightTask` polls for four seconds and gives up, which reads to the user
+  // as the agent hanging at the end of every create.
   const renderRow = (t: Task) => (
-    <tr key={t.id} className={'clickable ' + rowClass(t)} onClick={() => setOpenId(t.id)}>
+    <tr data-va={`task.${t.id}`} key={t.id} className={'clickable ' + rowClass(t)} onClick={() => setOpenId(t.id)}>
       <td className="cell-title">
         <div style={{ fontWeight: 600 }}>{t.title}</div>
         <span className="row" style={{ gap: 6 }}><ConfidenceTag c={t.ownership_confidence} /><CategoryBadge c={t.category} /></span>
@@ -666,7 +693,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     () => [...visibleTasks].sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || '')),
     [visibleTasks])
   const renderCompletedRow = (t: Task) => (
-    <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
+    <tr data-va={`task.${t.id}`} key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
       <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><CategoryBadge c={t.category} /></td>
       <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
       {!personal && (
@@ -718,7 +745,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               <span className="filterbtn-dot">{Number(!!filters.priority) + Number(!!filters.status) + Number(!!filters.assignee)}</span>
             )}
           </button>
-          <button className="btn btn-primary btn-sm toolbar-newtask" onClick={() => setShowNew(true)}>+ New task</button>
+          <button data-va="tasks.newTask" className="btn btn-primary btn-sm toolbar-newtask" onClick={() => setShowNew(true)}>+ New task</button>
         </div>
         {/* DESKTOP: the three filter dropdowns (+ sortable column headers). Hidden on
             mobile, where the Sort control above takes their place instead. */}
@@ -898,6 +925,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   )
 }
 
+// Locate one of the new-task form's controls. The agent uses these ONLY to show
+// where it is working (scroll into view, focus ring, typing caret) — every value it
+// sets goes through React state, so a missing element degrades to an instant,
+// still-correct change rather than a broken one.
+const findField = (key: string) => findVaEl(`tasks.new.${key}`)
+
 function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; personal?: boolean; onClose: () => void; onCreated: () => void }) {
   const { user } = useAuth()
   useEscape(onClose)
@@ -940,8 +973,55 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
         catch { toast.error(`Couldn't attach ${f.name}`) }
       }
       onCreated()
+      return created
     } finally { setBusy(false) }
   }
+
+  // ---- Agent surface -------------------------------------------------------
+  // What the voice assistant is allowed to do to this form. Each capability drives
+  // the SAME React state a human keystroke would, so what the user watches happen is
+  // the real thing — there is no second, invisible code path that could diverge.
+  //
+  // The DOM is touched only through uiController, and only to show where the agent
+  // is working (scroll, ring, caret). Values always go through setForm.
+  const assignable = users.filter((u) => u.role !== 'admin')
+  useSurface('tasks.new', {
+    // Match a spoken name to a real teammate. Exact wins; otherwise a unique
+    // case-insensitive prefix/substring match. An ambiguous or absent name returns
+    // candidates so the Action Engine can ask instead of picking someone at random —
+    // assigning work to the wrong person is not a recoverable mistake.
+    resolveAssignee: ({ name }: { name: string }) => {
+      const q = String(name || '').trim().toLowerCase()
+      if (!q) return { match: null, candidates: [] }
+      const exact = assignable.find((u) => u.name.toLowerCase() === q)
+      if (exact) return { match: { id: exact.id, name: exact.name }, candidates: [] }
+      const hits = assignable.filter((u) => u.name.toLowerCase().includes(q) || q.includes(u.name.toLowerCase().split(' ')[0]))
+      return {
+        match: hits.length === 1 ? { id: hits[0].id, name: hits[0].name } : null,
+        candidates: hits.slice(0, 4).map((u) => ({ id: u.id, name: u.name })),
+      }
+    },
+    setTitle: ({ value }: { value: string }) =>
+      typeInto(findField('title'), value, (v) => setForm((f: any) => ({ ...f, title: v }))),
+    setDescription: ({ value }: { value: string }) =>
+      typeInto(findField('description'), value, (v) => setForm((f: any) => ({ ...f, description: v }))),
+    setPriority: ({ value }: { value: string }) =>
+      pickValue(findField('priority'), value, (v) => setPriority(v)),
+    setAssignee: ({ id }: { id: string }) =>
+      pickValue(findField('assignee'), id, (v) => setForm((f: any) => ({ ...f, assignee_id: v }))),
+    setDueDate: ({ value }: { value: string }) =>
+      pickValue(findField('due_date'), value, (v) => { setDueManual(true); setForm((f: any) => ({ ...f, due_date: v })) }),
+    // Read back what is on screen, so the agent can confirm before submitting
+    // ("Creating 'Fix login bug' for Reddeppa, high priority, due Friday").
+    read: () => ({ ...form, assignee_name: assignable.find((u) => u.id === form.assignee_id)?.name || null }),
+    submit: async () => {
+      await pause(260)                       // a beat so the filled form is readable
+      await settle()                         // ...and make sure the last field committed
+      await flashPress(findField('submit'))
+      return await save()
+    },
+    cancel: () => onClose(),
+  })
 
   // ---- Voice input: record a short clip and transcribe it SERVER-SIDE (Sarvam /
   // Whisper), which is far more reliable on Android and for Telugu/Hindi/English
@@ -1083,13 +1163,13 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
             {parsing && heard && (
               <div className="muted" style={{ fontSize: 12, marginTop: 6, fontStyle: 'italic', textAlign: 'center' }}>“{heard}”</div>
             )}
-            <AutoTextarea style={{ width: '100%', marginTop: 8 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
+            <AutoTextarea data-va="tasks.new.title" style={{ width: '100%', marginTop: 8 }} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs doing?" autoFocus />
           </div>
-          <div><label>Description</label><textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+          <div><label>Description</label><textarea data-va="tasks.new.description" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>
-            <div><label>Priority</label><select value={form.priority} onChange={(e) => setPriority(e.target.value)}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
-            {!asPersonal && <div><label>Assignee</label><select value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}</select></div>}
-            <div><label>Due date {!dueManual && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto from priority</span>}</label><input type="date" value={form.due_date} onChange={(e) => { setDueManual(true); setForm({ ...form, due_date: e.target.value }) }} /></div>
+            <div><label>Priority</label><select data-va="tasks.new.priority" value={form.priority} onChange={(e) => setPriority(e.target.value)}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
+            {!asPersonal && <div><label>Assignee</label><select data-va="tasks.new.assignee" value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}</select></div>}
+            <div><label>Due date {!dueManual && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto from priority</span>}</label><input data-va="tasks.new.due_date" type="date" value={form.due_date} onChange={(e) => { setDueManual(true); setForm({ ...form, due_date: e.target.value }) }} /></div>
           </div>
           <div><label>Category {!form.category && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto-detected if left blank</span>}</label>
             <select value={form.category || ''} onChange={(e) => setForm({ ...form, category: e.target.value })}>
@@ -1116,7 +1196,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" onClick={save} disabled={busy || !form.title}>{busy ? <span className="spinner" /> : 'Create task'}</button>
+            <button data-va="tasks.new.submit" className="btn btn-primary" onClick={save} disabled={busy || !form.title}>{busy ? <span className="spinner" /> : 'Create task'}</button>
           </div>
         </div>
       </div>

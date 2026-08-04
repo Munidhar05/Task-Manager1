@@ -1,4 +1,4 @@
-# Voice assistant ("hey BTM") — how it works & setup
+# Voice assistant ("hey VoTask") — how it works & setup
 
 The app has a hands-free voice assistant: a floating mic button (bottom-right) on
 every page. Tap it (or say the wake word, once configured) and speak commands like:
@@ -22,14 +22,14 @@ engine set (`OPENROUTER_API_KEY`, or Anthropic/OpenAI) — which this app alread
 uses — the voice assistant works today via the **tap-the-mic** button on web and
 Android. Spoken replies use the browser's speech synthesis on web.
 
-Two things are optional add-ons: the **"hey BTM" wake word** and **native Android
+Two things are optional add-ons: the **"hey VoTask" wake word** and **native Android
 text-to-speech**.
 
 ---
 
-## Optional 1 — the "hey BTM" wake word (free, openWakeWord)
+## Optional 1 — the "hey VoTask" wake word (free, openWakeWord)
 
-Without this, you tap the mic. With it, saying **"hey BTM"** opens the assistant
+Without this, you tap the mic. With it, saying **"hey VoTask"** opens the assistant
 and starts listening (while the app is open — background/closed-app listening was
 intentionally not built). It uses **openWakeWord** — free, open-source, on-device,
 with no per-user cost — running in the browser / Android WebView via onnxruntime-web.
@@ -40,20 +40,20 @@ It needs three ONNX models in `client/public/wakeword/`:
 |---|---|
 | `melspectrogram.onnx` — shared feature model | ✅ already committed |
 | `embedding_model.onnx` — shared embedding model | ✅ already committed |
-| `hey_btm.onnx` — your custom detector | ⬜ you train this |
+| `hey_votask.onnx` — your custom detector | ⬜ you train this |
 
 The two shared models are already in the repo (Apache-2.0, ~2.4 MB), taken from the
 [openWakeWord v0.5.1 release assets](https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1).
 Note they are **not** browsable in the repo source tree — upstream ships them as
 release assets / via `openwakeword.utils.download_models()`.
 
-**Only remaining step — train `hey_btm.onnx`:**
+**Only remaining step — train `hey_votask.onnx`:**
 
-👉 **Follow the step-by-step runbook: [HEY_BTM_TRAINING.md](HEY_BTM_TRAINING.md).**
+👉 **Follow the step-by-step runbook: [HEY_VOTASK_TRAINING.md](HEY_VOTASK_TRAINING.md).**
 It has the exact Colab cells with every crash we already hit pre-patched (the
 `torchaudio.set_audio_backend` fix, the pronunciation variants, which steps to skip).
 In short: run openWakeWord's [automatic training notebook](https://colab.research.google.com/github/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb)
-(~1 hr, synthesizes its own speech), download `hey_btm.onnx` into
+(~1 hr, synthesizes its own speech), download `hey_votask.onnx` into
 `client/public/wakeword/`, remove the placeholder `VITE_WAKEWORD_MODEL_PATH` line
 from `client/.env`, and restart. `VITE_WAKEWORD_ENABLED=true` is already set.
 
@@ -113,9 +113,9 @@ app. Usage is metered under the `voice_command` feature in the per-org usage sta
   plugin above; some browsers need a user interaction before speech works.
 - **"Voice control needs an AI engine configured":** set `OPENROUTER_API_KEY` (or
   Anthropic/OpenAI) on the server.
-- **Wake word never triggers:** confirm `hey_btm.onnx` (plus the two shared models)
+- **Wake word never triggers:** confirm `hey_votask.onnx` (plus the two shared models)
   is in `client/public/wakeword/` and `VITE_WAKEWORD_ENABLED=true`, then restart the
   dev server / rebuild. Open the browser console: if you see no `[wakeword] score …`
   lines at all, the mic/plumbing isn't running (grant mic permission; it needs a user
   gesture first); if scores peak below the threshold, lower `VITE_WAKEWORD_THRESHOLD`.
-  Full training + tuning steps: [HEY_BTM_TRAINING.md](HEY_BTM_TRAINING.md).
+  Full training + tuning steps: [HEY_VOTASK_TRAINING.md](HEY_VOTASK_TRAINING.md).

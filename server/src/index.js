@@ -1,3 +1,4 @@
+import './crashLog.js' // MUST be first — installs the crash handlers before any other module body runs
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
@@ -22,6 +23,7 @@ import platformRoutes from './routes/platform.js'
 import usageRoutes from './routes/usage.js'
 import scoreRoutes from './routes/scores.js'
 import feedbackRoutes from './routes/feedback.js'
+import ttsRoutes from './routes/tts.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -73,6 +75,7 @@ app.use('/api/platform', platformRoutes)
 app.use('/api/usage', usageRoutes)
 app.use('/api/scores', scoreRoutes)
 app.use('/api/feedback', feedbackRoutes)
+app.use('/api/tts', ttsRoutes)
 
 // --- Serve the built web client (client/dist) from this SAME service ----------
 // So one URL hosts BOTH the website (for people without the Android app) AND the

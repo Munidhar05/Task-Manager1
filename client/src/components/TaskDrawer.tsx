@@ -5,6 +5,8 @@ import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, Co
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
+import { useSurface } from '../voice/uiRegistry'
+import { typeInto, pickValue, flashPress, settle, findVaEl } from '../voice/uiController'
 
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 
@@ -66,6 +68,36 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const setProgress = (progress: number) => mutate(() => api.patch(`/tasks/${taskId}`, { progress }))
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
+
+  // ---- Agent surface -------------------------------------------------------
+  // Every capability drives the drawer's OWN handlers, so a voice edit and a hand
+  // edit are the same code path — same optimistic update, same onChange back to the
+  // list, same toast on failure. The flashPress calls only render the click; if a
+  // control is not on screen for this role, the press is a no-op and the change
+  // still happens correctly.
+  useSurface('task.drawer', {
+    id: () => taskId,
+    changeStatus: async ({ status }: { status: string }) => {
+      // Two real presses, as a person would: pick the status, then accept it.
+      await flashPress(findVaEl(`task.drawer.status.${status}`))
+      setPendingStatus(status)
+      await settle()
+      await flashPress(findVaEl('task.drawer.acceptStatus'))
+      await setStatus(status)
+    },
+    assignTo: async ({ id }: { id: string }) => {
+      await pickValue(findVaEl('task.drawer.assignee'), id, setPendingAssignee)
+      await settle()
+      await flashPress(findVaEl('task.drawer.assign'))
+      await setAssignee(id)
+    },
+    comment: async ({ body }: { body: string }) => {
+      await typeInto(findVaEl('task.drawer.comment'), body, setComment)
+      await settle()          // addComment reads `comment` from state, not an arg
+      await flashPress(findVaEl('task.drawer.postComment'))
+      await addComment()
+    },
+  }, !!task)
   // Open the inline editor, seeded from the current task.
   const startEdit = () => {
     if (!task) return
@@ -192,11 +224,12 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               <div className="dr-field-val">
                 {isManager ? (
                   <div className="row" style={{ gap: 8 }}>
-                    <select value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
+                    <select data-va="task.drawer.assignee" value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
                       <option value="">Select member…</option>
                       {users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                     </select>
                     <button
+                      data-va="task.drawer.assign"
                       className="btn btn-primary btn-sm"
                       disabled={busy || pendingAssignee === (task.assignee?.id || '')}
                       onClick={() => setAssignee(pendingAssignee)}
@@ -269,12 +302,12 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               <>
                 <div className="row wrap">
                   {STATUSES.map((s) => (
-                    <button key={s} className={'btn btn-sm' + (pendingStatus === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setPendingStatus(s)}>{s}</button>
+                    <button data-va={`task.drawer.status.${s}`} key={s} className={'btn btn-sm' + (pendingStatus === s ? ' btn-primary' : '')} disabled={busy} onClick={() => setPendingStatus(s)}>{s}</button>
                   ))}
                 </div>
                 {pendingStatus !== task.status && (
                   <div className="row" style={{ marginTop: 10 }}>
-                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setStatus(pendingStatus)}>
+                    <button data-va="task.drawer.acceptStatus" className="btn btn-primary btn-sm" disabled={busy} onClick={() => setStatus(pendingStatus)}>
                       {busy ? <span className="spinner" /> : `✓ Accept change → ${pendingStatus}`}
                     </button>
                     <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingStatus(task.status)}>Cancel</button>
@@ -436,8 +469,8 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               </div>
             ))}
             <div className="row" style={{ marginTop: 10 }}>
-              <input aria-label="Add a comment" placeholder="Add a comment…" value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addComment()} />
-              <button className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>
+              <input data-va="task.drawer.comment" aria-label="Add a comment" placeholder="Add a comment…" value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addComment()} />
+              <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>
             </div>
           </div>
         </div>
