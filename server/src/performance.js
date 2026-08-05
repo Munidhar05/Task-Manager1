@@ -1,11 +1,12 @@
 // Engagement scoring service — counts each person's scoring actions straight out
-// of tasks / task_comments / audit_logs and turns them into points. The policy
-// (what an action is worth) lives in scoring.js; this file is the DB-facing glue.
+// of tasks / task_comments and turns them into points. The policy (what an action
+// is worth) lives in scoring.js; this file is the DB-facing glue.
 //
-// Nothing is persisted: a point is a row that already exists in one of those three
-// tables, so the leaderboard is always live and there is no job to run, no cache to
-// invalidate and no history to rebuild. Changing a task's status updates the board
-// on the next read.
+// Nothing is persisted: a point is a row that already exists in one of those
+// tables, so the leaderboard is always live and there is no job to run, no cache
+// to invalidate and no history to rebuild. Completing a task updates the board on
+// the next read — including retroactively, since removing a scoring rule changes
+// every past score too.
 //
 // Day boundaries are UTC (substr(iso,1,10)) to match the dashboards.
 
@@ -44,18 +45,14 @@ const SQL_COMMENTED = `
   SELECT c.user_id AS uid, COUNT(DISTINCT c.task_id) AS c FROM task_comments c
   JOIN tasks t ON t.id=c.task_id
   WHERE t.org_id=? AND substr(c.created_at,1,10) >= ?`
-// +1 per status change, EXCLUDING Done — that one is paid as a completion above.
-const SQL_STATUS = `
-  SELECT a.actor_id AS uid, COUNT(*) AS c FROM audit_logs a
-  WHERE a.org_id=? AND a.action='task.status' AND a.entity_type='task'
-    AND a.detail IS NOT 'Done' AND a.actor_id IS NOT NULL AND substr(a.created_at,1,10) >= ?`
+// Status changes are no longer scored (see scoring.js), so there is no query for
+// them here — the audit rows are still written, they just don't pay.
 
 // key → [sql, groupByColumn]. The group-by column doubles as the single-user filter.
 const RULE_SQL = {
   assigned: [SQL_ASSIGNED, 'assigned_by_id'],
   completed: [SQL_COMPLETED, 'assignee_id'],
   commented: [SQL_COMMENTED, 'c.user_id'],
-  status: [SQL_STATUS, 'a.actor_id'],
 }
 
 // Raw action counts for every person in the org: Map<uid, {assigned,…}>.
@@ -63,7 +60,7 @@ function gatherCounts(orgId, since, onlyUserId = null) {
   const out = new Map()
   const bump = (uid, key, c) => {
     if (!uid) return
-    if (!out.has(uid)) out.set(uid, { assigned: 0, completed: 0, commented: 0, status: 0 })
+    if (!out.has(uid)) out.set(uid, { assigned: 0, completed: 0, commented: 0 })
     out.get(uid)[key] = c
   }
   for (const [key, [sql, col]] of Object.entries(RULE_SQL)) {
@@ -159,9 +156,6 @@ function dailyPoints(orgId, userId, days) {
     commented: `SELECT substr(c.created_at,1,10) AS d, COUNT(DISTINCT c.task_id) AS c FROM task_comments c
       JOIN tasks t ON t.id=c.task_id
       WHERE t.org_id=? AND c.user_id=? AND substr(c.created_at,1,10) >= ? GROUP BY d`,
-    status: `SELECT substr(a.created_at,1,10) AS d, COUNT(*) AS c FROM audit_logs a
-      WHERE a.org_id=? AND a.actor_id=? AND a.action='task.status' AND a.entity_type='task'
-        AND a.detail IS NOT 'Done' AND substr(a.created_at,1,10) >= ? GROUP BY d`,
   }
   for (const [key, sql] of Object.entries(DAY_SQL)) {
     const per = RULE_POINTS[key] || 0
