@@ -4,7 +4,8 @@ import { useAuth } from '../auth'
 import { Avatar, Ic, EmptyState, Bar } from '../ui'
 
 // Points leaderboard. Fixed points per action:
-//   complete a task 10 · assign a task 5 · comment on a task 1 · change a status 1
+//   complete a task 10 · assign a task 5 · comment on a task 1
+// Moving a task between statuses pays nothing — see the note in server/src/scoring.js.
 // Complete 10 tasks and you have 100 points. Today / last 30 days / all-time are
 // the same tally over a different window. Clicking a card shows which actions
 // earned the points. Everything comes from /api/scores, counted live from the task
@@ -22,13 +23,13 @@ const RULE_COLORS: Record<string, string> = {
   assigned: '#2f6fd0',
   completed: '#0f9d6e',
   commented: '#8b5cf6',
-  status: '#d98a0b',
 }
 const ruleColor = (k: string) => RULE_COLORS[k] || '#64748b'
 
-// "status change" + 2 → "status changes". Only the noun-phrase rules need it —
-// "assigned"/"completed"/"commented" are past participles and never pluralise.
-const PLURALISE = new Set(['status change'])
+// Kept, though every current rule is a past participle ("assigned"/"completed"/
+// "commented") that never pluralises: the set is what a future noun-phrase rule
+// would be added to, and `plural` is already threaded through the chip rendering.
+const PLURALISE = new Set<string>([])
 const plural = (word: string, n: number) => (n === 1 || !PLURALISE.has(word) ? word : word + 's')
 
 const medalColor = ['#d4af37', '#a8b3c4', '#c8823c'] // gold / silver / bronze

@@ -3,6 +3,7 @@ import { useVoiceAssistant } from '../voice/useVoiceAssistant'
 import { useWakeWord, wakeWordConfigured, wakeWordPhrase, WakeStatus } from '../voice/wakeword'
 import { useDraggable } from '../lib/useDraggable'
 import VoiceCard from './VoiceCard'
+import VoiceOrb from './VoiceOrb'
 
 // Where the draggable "Ask BTM" card remembers its spot (per device).
 const FAB_POS_KEY = 'befach_voice_fab_pos'
@@ -55,7 +56,7 @@ const BIG_STATUS: Record<string, string> = {
 const SUB_STATUS: Record<string, string> = {
   idle: 'Tap the orb below to start',
   listening: 'Speak now',
-  processing: 'Working on it…',
+  processing: 'Analyzing and understanding',
   speaking: 'Playing the response',
   confirming: 'Say “yes” to confirm, or “no”',
   error: 'Please try again',
@@ -64,16 +65,76 @@ const SUB_STATUS: Record<string, string> = {
 const CheckIcon = ({ size = 18 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
 )
-const DotsIcon = ({ size = 18 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
+const BrainIcon = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 4.5a2.5 2.5 0 0 0-4.6-1.3A2.4 2.4 0 0 0 4.9 6a2.6 2.6 0 0 0-.5 4.4A2.6 2.6 0 0 0 5 15a2.4 2.4 0 0 0 2.6 2.9A2.5 2.5 0 0 0 12 19.5z" />
+    <path d="M12 4.5a2.5 2.5 0 0 1 4.6-1.3A2.4 2.4 0 0 1 19.1 6a2.6 2.6 0 0 1 .5 4.4A2.6 2.6 0 0 1 19 15a2.4 2.4 0 0 1-2.6 2.9A2.5 2.5 0 0 1 12 19.5z" />
+    <path d="M12 4.5v15" />
+  </svg>
+)
+const BoltIcon = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.5 2 5 13.5h5.5L9.5 22 19 10.5h-5.6z" /></svg>
 )
 const VOICE_STEPS: { key: string; label: string; icon: React.ReactNode }[] = [
   { key: 'listening', label: 'Listening', icon: <MicIcon size={18} /> },
-  { key: 'processing', label: 'Thinking', icon: <DotsIcon /> },
-  { key: 'speaking', label: 'Speaking', icon: <SpeakerIcon size={18} /> },
+  { key: 'processing', label: 'Thinking', icon: <BrainIcon /> },
+  { key: 'executing', label: 'Executing', icon: <BoltIcon size={17} /> },
   { key: 'complete', label: 'Complete', icon: <CheckIcon /> },
 ]
-const STEP_INDEX: Record<string, number> = { listening: 0, processing: 1, speaking: 2 }
+// The caption on the "Step n of 4" pill — one per rail stage.
+const STEP_HINT = ['Speak now', 'Working it out…', 'Almost there…', 'All done']
+
+// Reassurance grid under the rail. The copy tracks the stage, so it describes
+// what's happening right now rather than being generic marketing chrome.
+const WaveIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <path d="M3 12v1M7 7v10M11 4v16M15 8v8M19 11v2" />
+  </svg>
+)
+const ShieldIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 4.6 3.2 8.8 8 10.5 4.8-1.7 8-5.9 8-10.5v-6z" /></svg>
+)
+const TargetIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+    <circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3.4" /><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3" strokeLinecap="round" />
+  </svg>
+)
+// Solid silhouettes, not fine line-art: at 18px inside a 34px pill, thin strokes
+// with lots of small features (a cog's teeth, a rocket's fins) turn to mush.
+const RocketIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 1.5c3.6 2.6 5.6 6.4 5.6 10.4l-2.4 3.2H8.8l-2.4-3.2C6.4 7.9 8.4 4.1 12 1.5zm0 5.2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
+    <path d="M8.4 16.6 5.6 19l3.1-.5zM15.6 16.6 18.4 19l-3.1-.5zM10.4 17.4 12 22.5l1.6-5.1z" />
+  </svg>
+)
+// A closed automation loop reads instantly at this size where a cog does not.
+const LoopIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <path d="M4 12a8 8 0 0 1 13.7-5.6" /><path d="M20 12a8 8 0 0 1-13.7 5.6" />
+    <path d="M18 2.6v4h-4M6 21.4v-4h4" strokeLinejoin="round" />
+  </svg>
+)
+type Feature = { icon: React.ReactNode; title: string; sub: string }
+const FEATURES: Record<string, Feature[]> = {
+  listening: [
+    { icon: <WaveIcon />, title: 'Real-time Listening', sub: 'Captures your voice instantly' },
+    { icon: <BoltIcon />, title: 'Action Oriented', sub: 'Understands and gets things done' },
+    { icon: <ShieldIcon />, title: 'Secure & Private', sub: 'Your data stays protected' },
+    { icon: <TargetIcon />, title: 'Always by your side', sub: 'Your intelligent co-pilot' },
+  ],
+  processing: [
+    { icon: <WaveIcon />, title: 'Real-time Listening', sub: 'Captures your voice instantly' },
+    { icon: <TargetIcon />, title: 'Accurate Understanding', sub: 'Powered by LLMs & RAG' },
+    { icon: <ShieldIcon />, title: 'Secure & Private', sub: 'Your data stays protected' },
+    { icon: <BoltIcon />, title: 'Action Oriented', sub: 'Turns words into real actions' },
+  ],
+  executing: [
+    { icon: <RocketIcon />, title: 'Real-time Execution', sub: 'Actions happen in real-time' },
+    { icon: <LoopIcon />, title: 'Task Automation', sub: 'Automating complex tasks for you' },
+    { icon: <ShieldIcon />, title: 'Secure & Reliable', sub: 'Your data is always protected' },
+    { icon: <BoltIcon />, title: 'Action Oriented', sub: 'Turning words into real results' },
+  ],
+}
 // Six-dot grip — the standard "you can move this" affordance. Decorative only:
 // the whole card is the drag handle, this just advertises it on hover.
 const GripIcon = () => (
@@ -162,6 +223,20 @@ export default function VoiceAssistant() {
   // The step the agent is on right now, if any. Drives the minimized bar's caption.
   const running = v.trace.find((s) => s.status === 'running')
 
+  // Which of the four rail stages we're on. "Thinking" and "Executing" both live
+  // inside the `processing` state — the tools only start running once the model
+  // has decided what to do, so the arrival of a trace step is what separates them.
+  const step = v.state === 'listening' ? 0
+    : v.state === 'processing' ? (v.trace.length ? 2 : 1)
+    : v.state === 'speaking' || v.state === 'confirming' ? 2
+    : v.messages.length ? 3 : 0
+  // The grid is stage-flavoured, and only while the stage is all there is to show.
+  const features = v.messages.length || v.trace.length
+    ? null
+    : FEATURES[v.state === 'processing' ? 'processing'
+      : v.state === 'speaking' || v.state === 'confirming' ? 'executing'
+      : 'listening']
+
   return (
     <>
     <div className="va-root">
@@ -212,40 +287,51 @@ export default function VoiceAssistant() {
           {/* Immersive focal point: status → glowing orb → progress rail. */}
           <div className="va-stage">
             <div className="va-online"><span className="va-online-dot" /> Online</div>
-            <div className="va-bigstatus">{BIG_STATUS[v.state] || STATUS_LABEL[v.state] || ''}</div>
-            <div className="va-substatus">{SUB_STATUS[v.state] || ''}</div>
+            {/* Once the tools start firing, "Thinking" is no longer honest — the
+                headline follows the rail rather than the raw state. */}
+            <div className="va-bigstatus">{step === 2 && v.state === 'processing' ? 'Executing…' : (BIG_STATUS[v.state] || STATUS_LABEL[v.state] || '')}</div>
+            <div className="va-substatus">{step === 2 && v.state === 'processing' ? 'Getting things done for you' : (SUB_STATUS[v.state] || '')}</div>
 
             <button className={'va-orb va-orb--' + v.state} onClick={v.micButton} aria-label={v.state === 'listening' ? 'Stop listening' : 'Start talking'}>
-              <span className="va-orb-ring va-orb-ring--3" />
-              <span className="va-orb-ring va-orb-ring--2" />
-              <span className="va-orb-ring" />
-              {v.state === 'listening'
-                ? <span className="va-wave" aria-hidden="true">{Array.from({ length: 15 }).map((_, i) => <i key={i} />)}</span>
-                : v.state === 'processing'
-                  ? <span className="va-orb-think" aria-hidden="true"><i /><i /><i /></span>
-                  : <span className="va-orb-core" aria-hidden="true" />}
+              <VoiceOrb state={v.state} />
             </button>
 
             <div className="va-orb-action">
-              {v.state === 'listening' ? 'Tap to stop' : v.state === 'idle' ? 'Tap to talk' : ' '}
+              {v.state === 'listening' ? 'Tap to stop' : v.state === 'idle' ? 'Tap to talk' : v.state === 'processing' ? 'Please wait a moment' :' '}
             </div>
+
+            {/* "Step 3 of 4 · Almost there…" — only once a command is in flight;
+                the idle screen has no progress to report. */}
+            {v.state !== 'idle' && (
+              <div className="va-stepchip">Step {step + 1} of 4 <span>·</span> {STEP_HINT[step]}</div>
+            )}
 
             {/* Four-stage progress rail. */}
             <div className="va-steps">
-              {VOICE_STEPS.map((s, i) => {
-                const active = STEP_INDEX[v.state] ?? (v.messages.length ? 3 : 0)
-                return (
-                  <React.Fragment key={s.key}>
-                    {i > 0 && <span className={'va-step-line' + (i <= active ? ' done' : '')} />}
-                    <div className={'va-step' + (i === active ? ' active' : '') + (i < active ? ' done' : '')}>
-                      <span className="va-step-ic">{s.icon}</span>
-                      <span className="va-step-label">{s.label}</span>
-                      <span className="va-step-dot" />
-                    </div>
-                  </React.Fragment>
-                )
-              })}
+              {VOICE_STEPS.map((s, i) => (
+                <React.Fragment key={s.key}>
+                  {i > 0 && <span className={'va-step-line' + (i <= step ? ' done' : '')} />}
+                  <div className={'va-step' + (i === step ? ' active' : '') + (i < step ? ' done' : '')}>
+                    <span className="va-step-ic">{s.icon}</span>
+                    <span className="va-step-label">{s.label}</span>
+                    <span className="va-step-dot">{i < step && <CheckIcon size={13} />}</span>
+                  </div>
+                </React.Fragment>
+              ))}
             </div>
+
+            {/* Reassurance grid. Dropped the moment there's a transcript or a
+                trace to read — real output outranks it for the space. */}
+            {features && (
+              <div className="va-feats">
+                {features.map((f) => (
+                  <div className="va-feat" key={f.title}>
+                    <span className="va-feat-ic">{f.icon}</span>
+                    <span className="va-feat-text"><b>{f.title}</b><i>{f.sub}</i></span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {v.messages.length > 0 && (

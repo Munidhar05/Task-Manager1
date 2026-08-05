@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 import { Stat, Badge } from '../ui'
 import UserManagement from '../components/UserManagement'
+import FeedbackReviews from '../components/FeedbackReviews'
 import { toast } from '../lib/toast'
 import { useSurface } from '../voice/uiRegistry'
 import { flashPress, pause, findVaEl } from '../voice/uiController'
@@ -55,8 +56,16 @@ function AllowedDomains() {
   )
 }
 
+type AdminTab = 'overview' | 'users' | 'audit' | 'usage' | 'feedback'
+
 export default function Admin() {
-  const [tab, setTab] = useState<'overview' | 'users' | 'audit' | 'usage'>('overview')
+  // The feedback modal deep-links here with ?tab=feedback, so the initial tab
+  // comes from the URL when it names a real one.
+  const [tab, setTab] = useState<AdminTab>(() => {
+    const want = new URLSearchParams(window.location.search).get('tab')
+    return (['overview', 'users', 'audit', 'usage', 'feedback'] as const).includes(want as AdminTab)
+      ? (want as AdminTab) : 'overview'
+  })
   // The Usage tab appears only if the platform admin granted this org access.
   const [usage, setUsage] = useState<UsageData | null>(null)
   const [usageAllowed, setUsageAllowed] = useState(false)
@@ -70,7 +79,7 @@ export default function Admin() {
   // user on the wrong tab and telling them to go and find the right one is the
   // kind of half-help this whole stage exists to remove.
   useSurface('admin', {
-    openTab: async ({ tab: want }: { tab: 'overview' | 'users' | 'audit' | 'usage' }) => {
+    openTab: async ({ tab: want }: { tab: AdminTab }) => {
       await flashPress(findVaEl(`admin.tab.${want}`))
       setTab(want)
       await pause(360)
@@ -82,11 +91,13 @@ export default function Admin() {
         <button className={'btn btn-sm' + (tab === 'overview' ? ' btn-primary' : '')} data-va="admin.tab.overview" onClick={() => setTab('overview')}>Overview</button>
         <button className={'btn btn-sm' + (tab === 'users' ? ' btn-primary' : '')} data-va="admin.tab.users" onClick={() => setTab('users')}>User Management</button>
         <button className={'btn btn-sm' + (tab === 'audit' ? ' btn-primary' : '')} data-va="admin.tab.audit" onClick={() => setTab('audit')}>Audit Log</button>
+        <button className={'btn btn-sm' + (tab === 'feedback' ? ' btn-primary' : '')} data-va="admin.tab.feedback" onClick={() => setTab('feedback')}>Feedback</button>
         {usageAllowed && <button className={'btn btn-sm' + (tab === 'usage' ? ' btn-primary' : '')} data-va="admin.tab.usage" onClick={() => setTab('usage')}>AI Usage</button>}
       </div>
       {tab === 'overview' && <Overview />}
       {tab === 'users' && <><AllowedDomains /><UserManagement /></>}
       {tab === 'audit' && <Audit />}
+      {tab === 'feedback' && <Feedback />}
       {tab === 'usage' && usageAllowed && <UsagePanel data={usage} />}
     </>
   )
@@ -177,6 +188,20 @@ function Overview() {
   )
 }
 
+
+// App feedback for the whole org. The same view also sits under the corner
+// Feedback tab (next to your own rating form) — here it gets a full page, which
+// is what the submission trail actually needs to be readable.
+function Feedback() {
+  return (
+    <div className="card section">
+      <div className="card-head"><h3>App feedback</h3></div>
+      <div className="card-pad fb-admin">
+        <FeedbackReviews />
+      </div>
+    </div>
+  )
+}
 
 function Audit() {
   const [logs, setLogs] = useState<any[]>([])

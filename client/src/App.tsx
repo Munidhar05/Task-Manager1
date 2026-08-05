@@ -206,10 +206,17 @@ function Layout({ children }: { children: React.ReactNode }) {
           title="Talk to the AI assistant"
         >
           <span className="bn-mic-btn">
-            <svg viewBox="0 0 24 24" width="25" height="25" fill="currentColor" aria-hidden="true">
-              <path d="M12 2.5 14 8.2l5.7 2-5.7 2L12 19.9l-2-5.7-5.7-2L10 8.2z" />
-              <path d="M19 13.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z" />
-            </svg>
+            {/* The orb face: a mic flanked by a live waveform. Both wave groups are
+                identical markup — CSS mirrors the right one so the tall bars sit
+                inward on both sides. */}
+            <span className="bn-mic-face" aria-hidden="true">
+              <span className="bn-wave"><i /><i /><i /></span>
+              <svg className="bn-mic-glyph" viewBox="0 0 24 24" width="17" height="17">
+                <rect x="9" y="2" width="6" height="11.5" rx="3" fill="currentColor" />
+                <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <span className="bn-wave"><i /><i /><i /></span>
+            </span>
           </span>
           <span className="bn-mic-label">AI</span>
         </button>

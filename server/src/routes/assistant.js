@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { authRequired } from '../auth.js'
 import { answerQuery } from '../ai/assistant.js'
 import { chatAnswer, hasLLM } from '../ai/assistantChat.js'
-import { routeCommand, STATUSES, PRIORITIES } from '../ai/voiceTools.js'
+import { routeCommand, STATUSES, PRIORITIES, MEETING_TITLES } from '../ai/voiceTools.js'
 import { dateRange, overview, workload, groupTasks } from '../ai/voiceAnalytics.js'
 import { listMeetings, resolveMeeting, meetingSummary, askWhichMeeting } from '../ai/voiceMeetings.js'
 // The voice router works with ANY configured provider (OpenRouter/Claude/OpenAI),
@@ -12,7 +12,11 @@ import { resolveUser } from '../ai/extractor.js'
 import { parseDueDate } from '../ai/dates.js'
 import { recordUsage } from '../ai/usage.js'
 import { db } from '../db.js'
-import { id, now } from '../util.js'
+import { id, now, emailDomainAllowed, orgAllowedDomains } from '../util.js'
+
+// Same shape routes/users.js and routes/invites.js accept, so voice can't create
+// an address the forms would have rejected.
+const VALID_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const r = Router()
 r.use(authRequired)
@@ -176,13 +180,31 @@ function navUrl(rawArgs, user, transcript = '') {
     case 'person': {
       if (user.role === 'employee') return { deny: 'You can only see your own tasks.' }
       const u = a.person ? resolveUser(user.org_id, a.person) : null
-      return u ? { url: `/tasks?assignee=${u.id}` } : null
+      // Say what this actually opens. The model narrates `say` freely and has been
+      // caught calling this "X's profile" while it lands on X's task list — the
+      // assistant contradicting itself is worse than it being terse.
+      return u ? { url: `/tasks?assignee=${u.id}`, say: `Opening ${u.name}'s tasks.` } : null
+    }
+    // Someone's actual conversation, not the chat list. Chats reads `?with=` and
+    // opens (or creates) the direct thread — the same path send_message drives.
+    case 'person_chat': {
+      const u = a.person ? resolveUser(user.org_id, a.person) : null
+      if (a.person && !u) return null
+      return u ? { url: `/chats?with=${u.id}`, say: `Opening your chat with ${u.name}.` } : { url: '/chats' }
     }
     default: return null
   }
 }
 
-const clarify = (say) => ({ mode: 'clarify', say: say || "Sorry, I didn't catch that — could you say it again?" })
+// The default here is the LAST resort, and it must not blame the microphone: by
+// the time we're in the dispatcher the transcript arrived fine, so "I didn't
+// catch that" sends the user off to repeat themselves louder and get the exact
+// same reply. Say what actually went wrong — we heard them, we couldn't work out
+// which task or person they meant.
+const clarify = (say) => ({
+  mode: 'clarify',
+  say: say || "I heard you, but I'm not sure which task or person you meant — could you name it?",
+})
 const answer = (say, extra = {}) => ({ mode: 'answer', say, ...extra })
 const confirm = (say, action) => ({ mode: 'confirm', say, action })
 
@@ -374,8 +396,32 @@ async function handleCommand(req, res) {
     }
 
     // ---- team / people (managers) ------------------------------------------
-    case 'add_user':
-      return res.json({ mode: 'navigate', say: call.say || 'Opening user management so you can add a teammate — their email and phone go on the form.', navigate: { url: '/admin' } })
+    // Invite rather than create outright: the invitee sets their own name and
+    // password on the emailed link, so nothing secret has to travel by voice.
+    // Speaking a password would put it in the transcript on screen AND read it
+    // back through TTS, which is not a trade worth making for convenience.
+    case 'add_user': {
+      const email = String(a.email || '').trim().toLowerCase()
+      if (!email) return res.json(clarify("What's their email address?"))
+      if (!VALID_EMAIL.test(email)) {
+        return res.json(clarify(`I heard "${email}", which isn't a valid email address — could you spell it out?`))
+      }
+      const role = ['employee', 'manager', 'admin'].includes(a.role) ? a.role : 'employee'
+      // Mirrors the server's own rule in routes/users.js so the refusal arrives
+      // before the password prompt, not after it.
+      if (user.role === 'manager' && role === 'admin') {
+        return res.json(answer('Only an admin can invite another admin.'))
+      }
+      if (!emailDomainAllowed(user.org_id, email)) {
+        return res.json(answer(`${email} isn't on this organization's allowed domains: ${orgAllowedDomains(user.org_id).join(', ')}.`))
+      }
+      if (db.prepare('SELECT id FROM users WHERE org_id=? AND lower(email)=?').get(user.org_id, email)) {
+        return res.json(answer(`${email} is already on the team.`))
+      }
+      // "a manager" but "an employee" / "an admin" — the article follows the word.
+      return res.json(confirm(`Invite ${email} as ${role === 'manager' ? 'a manager' : `an ${role}`}. Enter your password to confirm.`,
+        { kind: 'invite_user', email, role, needsPassword: true, summary: `Invited ${email} as ${role}` }))
+    }
 
     case 'remove_user': {
       const match = a.person_name ? resolveUser(user.org_id, a.person_name) : null
@@ -395,7 +441,10 @@ async function handleCommand(req, res) {
       // then do nothing — which reads as the app being broken rather than as a
       // question. Ask a real question instead.
       if (!nav?.url) return res.json(clarify("I'm not sure which screen you meant — could you say it another way?"))
-      return res.json({ mode: 'navigate', say: call.say || 'Opening that now.', navigate: { url: nav.url } })
+      // nav.say wins where we resolved a specific person: the model's sentence is
+      // a guess written before the destination was known, and a wrong one ("...'s
+      // profile") teaches the user the app is broken.
+      return res.json({ mode: 'navigate', say: nav.say || call.say || 'Opening that now.', navigate: { url: nav.url } })
     }
 
     // ---- read tools: the numbers come from SQL, not the model ---------------
@@ -435,17 +484,29 @@ async function handleCommand(req, res) {
     }
 
     // ---- meetings -----------------------------------------------------------
-    case 'start_meeting':
+    case 'start_meeting': {
+      // Never start an untitled recording. Starting is the one meeting action that
+      // can't be corrected after the fact — the room is already talking, and a
+      // meeting saved with no name is near-impossible to find later. The prompt
+      // asks the model to gather the title first; this is the belt-and-braces so a
+      // model that skips the question still can't skip the title.
+      const title = typeof a.title === 'string' ? a.title.trim().slice(0, 120) : ''
+      if (!title) {
+        return res.json(clarify(
+          `What kind of meeting is this — ${MEETING_TITLES.slice(0, -1).join(', ')} or ${MEETING_TITLES.at(-1)}? Or tell me your own title.`,
+        ))
+      }
       // The Meetings page opens its live recorder when it sees ?live=1. `meeting`
       // tells the client to go further and actually press Record — opening the
       // recorder alone left the assistant claiming to have started a meeting while
       // nothing was capturing, which is worse than not offering the command.
       return res.json({
         mode: 'navigate',
-        say: call.say || 'Starting a new meeting recording.',
+        say: call.say || `Starting the ${title} recording. Everyone's included — change that on screen if you need to.`,
         navigate: { url: '/meetings?live=1' },
-        meeting: { action: 'start', title: typeof a.title === 'string' ? a.title.slice(0, 120) : null },
+        meeting: { action: 'start', title },
       })
+    }
 
     // Controlling a recording that is already on screen. Deliberately NO url: the
     // recorder lives inside the Meetings page, so navigating would unmount it and
