@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
@@ -138,6 +139,21 @@ export default function Chats() {
     api.get('/chat/presence').then((d) => { if (!cancel) setOnline(new Set(d.online)) }).catch(() => {})
     return () => { cancel = true }
   }, [user?.id])
+
+  // `/chats?with=<userId>` opens (or creates) that person's direct thread — the
+  // one deliberate exception to "never auto-open a chat" below, because the user
+  // asked for a specific conversation by name ("open Ravi's chat"). The param is
+  // stripped straight away with replace:true so Back doesn't bounce them into the
+  // same thread, and so a refresh doesn't reopen a chat they've since left.
+  const [params, setParams] = useSearchParams()
+  useEffect(() => {
+    const withUser = params.get('with')
+    if (!withUser || !user) return
+    setParams(new URLSearchParams(), { replace: true })
+    api.post('/chat/conversations', { type: 'direct', userId: withUser })
+      .then((conv: any) => { loadConvos(); setActiveId(conv.id) })
+      .catch(() => toast.error("I couldn't open that conversation."))
+  }, [params, user?.id])
 
   // WhatsApp-style: do NOT auto-open a chat. The list is shown first; the user
   // taps a conversation to open it (and the back arrow returns to the list).

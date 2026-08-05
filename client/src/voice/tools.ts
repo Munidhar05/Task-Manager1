@@ -311,18 +311,27 @@ export const TOOLS: ToolDef[] = [
     // a two-turn "shall I?" is the thing that makes assistants tiring to use.
     // Deleting, removing a teammate and sending a message to a human are all
     // one-way doors, so those still stop and ask.
-    destructive: ({ action }) => ['delete_task', 'remove_user', 'send_message'].includes(action?.kind),
+    // invite_user belongs here with the others: it emails a stranger and puts them
+    // in the org. Visible to someone else, and not silently undoable.
+    destructive: ({ action }) => ['delete_task', 'remove_user', 'send_message', 'invite_user'].includes(action?.kind),
     summarize: ({ action }) => {
       const s = action?.summary || 'apply that change'
       return s.charAt(0).toUpperCase() + s.slice(1)
     },
-    confirmMeta: ({ action }) => ({ needsPassword: action?.kind === 'remove_user' }),
+    confirmMeta: ({ action }) => ({ needsPassword: ['remove_user', 'invite_user'].includes(action?.kind) }),
     run: async ({ action, password }, ctx) => {
       await runAction(action, password)
       // Refresh whatever the change touched and land the user where the result is.
       // Mirrors what the old direct-execution path did, so the lists behind the
       // assistant never show stale data after a voice edit.
-      if (action.kind === 'remove_user') {
+      if (action.kind === 'invite_user') {
+        window.dispatchEvent(new CustomEvent('users-changed'))
+        // Straight to the User Management tab, not Administration's default
+        // Overview: the whole point is to see the invitation now sitting under
+        // "Pending invitations". UserManagement loads on mount, so this is also
+        // what actually makes the new row appear.
+        ctx.navigate('/admin?tab=users')
+      } else if (action.kind === 'remove_user') {
         window.dispatchEvent(new CustomEvent('users-changed'))
         ctx.navigate('/admin')
       } else if (action.kind === 'send_message') {
@@ -392,6 +401,14 @@ async function runAction(action: any, password?: string): Promise<void> {
       // delete a colleague's account.
       await api.post('/auth/verify-password', { password })
       await api.del(`/users/${action.to_user_id}`)
+      break
+    }
+    case 'invite_user': {
+      // Same re-auth bar as removal — this sends mail in the org's name and grants
+      // a stranger a way in. The invitee sets their own name and password on the
+      // link, so no credential for them ever passes through the voice channel.
+      await api.post('/auth/verify-password', { password })
+      await api.post('/invites', { email: action.email, role: action.role })
       break
     }
     // update_task / assign_task and friends all PATCH the task's fields.

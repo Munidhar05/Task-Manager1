@@ -13,6 +13,10 @@ import { callOpenRouter, callClaude, callOpenAI, parseJson } from './voiceTask.j
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
 const PERIODS = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'custom']
+// Mirrors MEETING_TITLES in client/src/pages/Meetings.tsx — the presets in the
+// recorder's title dropdown. Kept in step by hand (same as STATUSES/PRIORITIES);
+// a title outside this list still works, it just lands in the "Other" field.
+const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Tech and Marketing Meeting']
 
 const ALL = ['manager', 'admin', 'employee']
 const MGR = ['manager', 'admin']
@@ -49,9 +53,12 @@ export const TOOLS = [
     args: 'recipient_name, body (the message to send, phrased naturally in English)' },
 
   // ---- team / people (managers) --------------------------------------------
-  { name: 'add_user', kind: 'navigate', roles: MGR,
-    desc: "Open Administration to add a new teammate. Adding needs their email & phone (entered on the form), so this opens the page rather than creating blindly. Use for 'add an employee', 'create a new user', 'onboard someone'.",
-    args: '(none)' },
+  { name: 'add_user', kind: 'mutate', roles: MGR,
+    desc: "Invite a new teammate into the organization by email. Use for 'add an employee', 'create a new user', 'onboard someone', 'invite <email>'. "
+      + 'They get an emailed link and choose their OWN name and password there, so NEVER ask for, invent, or repeat a password for them — the only password involved is the manager\'s own, which the app collects as a typed confirmation. '
+      + 'The email address is the one thing you must have: if they have not said it, use "clarify" and ask for it — do not guess it from their name. '
+      + "Infer the role from their words ('add an employee' → employee, 'add a manager' → manager) and default to employee; only ask about role if they said something ambiguous like 'add someone'.",
+    args: 'email (required), role (employee|manager|admin, default employee)' },
 
   { name: 'remove_user', kind: 'mutate', roles: MGR,
     desc: "Permanently remove a teammate's account from the organization. Use for 'delete <name>', 'remove <name> from the team', 'fire <name>'. The app will require the manager's own password to confirm before it happens.",
@@ -59,8 +66,10 @@ export const TOOLS = [
 
   // ---- views ---------------------------------------------------------------
   { name: 'navigate', kind: 'navigate', roles: ALL,
-    desc: 'Open a screen or a filtered task list. Use for "show/open/go to". For a status or priority, set target=status/priority AND the matching field — e.g. "open the blocked tasks" is target=status, status=Blocked.',
-    args: 'target (overdue|completed|active|all|my_tasks|dashboard|meetings|chats|leaderboard|person|status|priority), person, status (' + STATUSES.join('|') + '), priority (' + PRIORITIES.join('|') + ')' },
+    desc: 'Open a screen or a filtered task list. Use for "show/open/go to". For a status or priority, set target=status/priority AND the matching field — e.g. "open the blocked tasks" is target=status, status=Blocked. '
+      + 'For a PERSON, pick the right one: person = their TASK list; person_chat = their CHAT conversation. "open Ravi\'s chat / message thread / conversation" is person_chat, NOT person. Plain chats = the conversation list. '
+      + 'Speech-to-text often hears "chat" as "chart" or "charts"; nobody asks for a person\'s chart, so "<name>\'s chart" means person_chat.',
+    args: 'target (overdue|completed|active|all|my_tasks|dashboard|meetings|chats|leaderboard|person|person_chat|status|priority), person, status (' + STATUSES.join('|') + '), priority (' + PRIORITIES.join('|') + ')' },
 
   // ---- analytics (numbers computed in SQL, never by you) --------------------
   { name: 'get_overview', kind: 'read', roles: ALL,
@@ -77,8 +86,12 @@ export const TOOLS = [
 
   // ---- meetings (manager/admin only) ---------------------------------------
   { name: 'start_meeting', kind: 'navigate', roles: MGR,
-    desc: "Begin recording a new live meeting. Use for 'start a meeting', 'record a meeting', 'begin the standup'.",
-    args: '(none)' },
+    desc: "Begin recording a new live meeting. Use for 'start a meeting', 'record a meeting', 'begin the standup'. "
+      + 'A meeting MUST be named before recording starts — an untitled recording is near-impossible to find again afterwards. '
+      + 'If their words ALREADY name it, that IS the title — use it and start, do not ask a needless question: "start the marketing meeting" → title "Marketing Meeting", "record the standup" → title "Standup". '
+      + 'Only when they named no meeting at all ("start a meeting", "begin recording") do you skip this tool and use "clarify" to ask which one, offering the presets. '
+      + 'Presets: ' + MEETING_TITLES.join(', ') + '. Anything else they say is fine as a custom title.',
+    args: 'title (required — the meeting name)' },
 
   { name: 'control_meeting', kind: 'navigate', roles: MGR,
     desc: "Control a meeting recording that is ALREADY RUNNING on screen. Use for 'pause the recording', 'resume', 'stop recording', 'finish the meeting', 'analyse it and pull out the tasks'. 'finish' stops the recording AND extracts the tasks — use it when they are done with the meeting entirely.",
@@ -159,6 +172,7 @@ RULES:
 - NEVER compute or guess numbers/metrics yourself — call get_overview / get_workload / group_tasks and let the system count.
 - If the request is a question rather than a command, use "ask".
 - "say" is one short, natural spoken sentence. For mutate tools it should read like you are about to do it (the app adds a yes/no step). For read tools, leave "say" empty — the system supplies the real answer.
+- EXCEPT "clarify": there is no computed answer behind it, so it MUST carry the actual question in args.question (and in "say"). A clarify with an empty question tells the user nothing and strands them repeating themselves. Name what you need — which task, or which person.
 
 Respond with ONLY a JSON object, no markdown fences. Either a single tool:
 {"tool":"<name>","args":{...},"say":"..."}
@@ -258,4 +272,4 @@ export async function routeCommand(transcript, { user, tasks = [], users = [], h
   return { tool: spec.name, kind: spec.kind, args: obj.args || {}, say: typeof obj.say === 'string' ? obj.say.trim() : '' }
 }
 
-export { STATUSES, PRIORITIES, PERIODS }
+export { STATUSES, PRIORITIES, PERIODS, MEETING_TITLES }
