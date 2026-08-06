@@ -142,7 +142,7 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
     LEFT JOIN tasks t ON t.id=a.entity_id AND a.entity_type='task'
     WHERE a.org_id=? AND a.entity_type='task'
       AND a.action IN ('task.create','task.status','task.approval','task.split','task.comment','task.reassign')
-    ORDER BY a.created_at DESC LIMIT 8`).all(org)
+    ORDER BY a.created_at DESC LIMIT 25`).all(org)
   res.json({
     counts: {
       total: tasks.length,
@@ -159,7 +159,10 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
     by_status: ['To Do', 'In Progress', 'In Review', 'Blocked', 'Reopened', 'Done'].map((s) => ({ status: s, count: tasks.filter((t) => t.status === s).length })),
     workload,
     projects: projects.map((p) => ({ ...p, progress: p.total ? Math.round((p.done / p.total) * 100) : 0 })),
-    overdue: overdue.slice(0, 8),
+    // 25, not 8: the dashboard shows the first 5 and expands in place, so the cap
+    // is what "View all" can actually reveal. Still a cap — the card links out to
+    // the full Tasks list when the real count exceeds it.
+    overdue: overdue.slice(0, 25),
     in_review: inReview.slice(0, 8),
     recent_activity: recentActivity,
   })
