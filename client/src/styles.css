@@ -441,6 +441,15 @@ tbody tr:hover { background: var(--n-50); }
 .pbi-legend .dot { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
 .pbi-legend .lg b { margin-left: auto; font-size: 14px; }
 
+/* "Tasks by status" rows — a label/count line above a Bar. Same hover and focus
+   treatment as the priority legend beside it, since both drill into a filtered
+   task list and should feel like the same control. */
+.st-row { padding: 4px 6px 2px; margin: 0 -6px 11px; border-radius: 7px; }
+.st-row:last-child { margin-bottom: 0; }
+.st-row.clickable { transition: background .15s ease; }
+.st-row.clickable:hover { background: color-mix(in srgb, var(--primary) 7%, transparent); }
+.st-row.clickable:focus-visible { outline: none; background: color-mix(in srgb, var(--primary) 9%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent); }
+
 @media (max-width: 1100px) {
   .pbi { height: auto; }
   .pbi-kpis { grid-template-columns: repeat(3, 1fr); }
@@ -1776,6 +1785,17 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 @media (max-width: 720px) {
   .msg-tool-btn { min-width: 36px; min-height: 36px; padding: 6px; font-size: 15px; }
   .reaction-chip { padding: 3px 9px; font-size: 12.5px; min-height: 28px; }
+
+  /* Those three buttons are ~115px wide and, per the hover:none rule above, always
+     visible on touch. Sharing a row with the bubble they took roughly a third of a
+     phone's width, so a long message was squeezed into a tall narrow column with a
+     dead gutter beside it. Give the bubble the whole row and let the buttons wrap
+     underneath — same tap targets, no competition for width.
+     Each wrapped line holds one item, so row-reverse on .mine no longer reorders
+     anything; flex-start alone lands the buttons under the side they belong to. */
+  .msg-line { flex-wrap: wrap; max-width: 96%; }
+  .msg-body { flex: 1 1 100%; }
+  .msg-tools { flex: 0 0 auto; margin-top: 1px; }
 }
 
 /* ---- Performance leaderboard ------------------------------------------------ */
@@ -1793,7 +1813,11 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .lb-card.idle { opacity: .62; }
 .lb-rank { display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: var(--muted); }
 .lb-who { min-width: 0; }
-.lb-name { font-weight: 700; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 7px; }
+/* Deliberately NOT display:flex. text-overflow only applies to a block container's
+   own inline content, so the flex box this used to be swallowed the ellipsis and a
+   long name was sliced flat against the card edge instead of trailing off. It holds
+   nothing but the name, so a plain block is all it ever needed. */
+.lb-name { font-weight: 700; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Volume side-badge (top completer / most assigned) — shown, not scored. */
 .lb-badge { flex-shrink: 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
   padding: 2px 7px; border-radius: 999px; color: var(--bc); background: color-mix(in srgb, var(--bc) 13%, transparent); border: 1px solid color-mix(in srgb, var(--bc) 30%, transparent); }
@@ -1805,9 +1829,15 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   background: color-mix(in srgb, var(--bc) 11%, transparent);
   border: 1px solid color-mix(in srgb, var(--bc) 26%, transparent); }
 @media (max-width: 560px) {
-  /* Keep the card one line tall on phones: show the first two chips only. */
-  .lb-sub { flex-wrap: nowrap; overflow: hidden; }
+  /* Still cap it at two chips so the list stays dense — but let them WRAP rather
+     than sit in a nowrap/overflow:hidden row. That combination didn't shorten a
+     chip that overflowed, it sliced it mid-word ("19 commente"), which reads as a
+     broken card. A second line costs ~18px and only when the two don't fit. */
+  .lb-sub { flex-wrap: wrap; }
   .lb-chip:nth-child(n+3) { display: none; }
+  /* Last resort for a very long single chip on a narrow phone: ellipsis beats a
+     hard cut, and beats pushing the points column off the card. */
+  .lb-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 }
 .lb-rating { text-align: center; }
 .lb-rating-num { font-size: 22px; font-weight: 800; line-height: 1; }
@@ -1824,7 +1854,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .lb-unranked-chip:hover { border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); background: var(--surface); }
 .lb-unranked-name { font-size: 13px; font-weight: 600; }
 
-.lb-spark { display: block; }
+.lb-spark { display: block; width: 100%; }
 .lb-modal .lb-modal-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
 .lb-modal-name { font-size: 18px; font-weight: 800; }
 .lb-modal-rating { margin-left: auto; text-align: right; }
@@ -1842,7 +1872,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 
 @media (max-width: 720px) {
   .lb-card { grid-template-columns: 30px 34px 1fr auto; row-gap: 6px; }
-  .lb-name { flex-wrap: wrap; }
 }
 
 /* ---- App feedback (rate this app) ------------------------------------------- */
@@ -1974,6 +2003,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
      colour nothing else owns, and tapping it should land somewhere that looks the
      same rather than a different product. */
   .bn-mic {
+    position: relative;
     flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center;
     justify-content: flex-end; gap: 5px; border: none; background: transparent;
     /* Matches .bn-item's bottom padding so "AI" lands on the same baseline as the
@@ -1989,11 +2019,20 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
     background:
       radial-gradient(circle at 50% 42%, #0d2a1c 0%, #06150e 62%, #030b07 100%) padding-box,
       conic-gradient(from 210deg, #6ffbb4, #2ee27f 22%, #12b866 42%, #2ee27f 62%, #9dffcb 78%, #6ffbb4 100%) border-box;
-    /* Order matters: the opaque surface ring paints first (on top) to cut the orb
-       out of the bar; the glows sit behind it and bleed past its 5px edge. */
-    box-shadow: 0 0 0 5px var(--surface), 0 0 16px 2px rgba(46,226,127,.55), 0 0 30px 6px rgba(18,184,102,.4);
-    animation: bn-orb-breathe 3.2s ease-in-out infinite;
+    /* Just the opaque ring that cuts the orb out of the bar. The coloured halo is
+       .bn-mic-glow behind it — a shadow could only do one flat colour per layer. */
+    box-shadow: 0 0 0 5px var(--surface);
     transition: transform .14s ease;
+  }
+  /* Green→orange halo: a blurred gradient disc, slightly larger than the orb and
+     centred on it. Sized/offset off the orb's own 62px + (-28px) so the two move
+     together if either is retuned. */
+  .bn-mic-glow {
+    position: absolute; left: 50%; top: -34px; width: 74px; height: 74px;
+    transform: translateX(-50%); border-radius: 50%; pointer-events: none;
+    background: linear-gradient(135deg, #2ee27f 0%, #7ad04a 45%, #f2622e 100%);
+    filter: blur(11px); opacity: .8;
+    animation: bn-orb-breathe 3.2s ease-in-out infinite;
   }
   /* Two faint concentric rings inside the core — the scanning-depth cue. */
   .bn-mic-btn::before, .bn-mic-btn::after {
@@ -2027,14 +2066,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
     width: 22px; height: 2px; border-radius: 2px;
     background: linear-gradient(90deg, rgba(46,226,127,0), #12b866, #2ee27f, rgba(46,226,127,0));
   }
+  /* translateX is repeated in both frames — an animation's transform REPLACES the
+     rule's, so omitting it would snap the halo left by half its width. */
   @keyframes bn-orb-breathe {
-    0%, 100% { box-shadow: 0 0 0 5px var(--surface), 0 0 16px 2px rgba(46,226,127,.55), 0 0 30px 6px rgba(18,184,102,.4); }
-    50% { box-shadow: 0 0 0 5px var(--surface), 0 0 22px 4px rgba(46,226,127,.75), 0 0 44px 12px rgba(18,184,102,.55); }
+    0%, 100% { opacity: .72; transform: translateX(-50%) scale(1); }
+    50% { opacity: 1; transform: translateX(-50%) scale(1.12); }
   }
   @keyframes bn-wave-bounce { 0%, 100% { transform: scaleY(.45) } 50% { transform: scaleY(1) } }
   /* The orb idles with two infinite animations — kill both when motion is unwelcome. */
   @media (prefers-reduced-motion: reduce) {
-    .bn-mic-btn, .bn-wave i { animation: none; }
+    .bn-mic-glow, .bn-wave i { animation: none; }
   }
   .bn-item {
     flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
