@@ -205,6 +205,11 @@ function Layout({ children }: { children: React.ReactNode }) {
           aria-label="Open voice assistant"
           title="Talk to the AI assistant"
         >
+          {/* The halo. Its own element rather than a box-shadow on the orb, because
+              a shadow takes one flat colour per layer and this one is a green→orange
+              gradient. First child so it paints UNDER the orb by document order —
+              no z-index, and so nothing here can escape the tab bar's stacking. */}
+          <span className="bn-mic-glow" aria-hidden="true" />
           <span className="bn-mic-btn">
             {/* The orb face: a mic flanked by a live waveform. Both wave groups are
                 identical markup — CSS mirrors the right one so the tall bars sit

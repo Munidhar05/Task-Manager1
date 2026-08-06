@@ -113,12 +113,16 @@ function actMeta(a: any): { text: React.ReactNode; color: string; icon: React.Re
 // Recent activity feed — task events only (created / status changes / approvals /
 // comments), backed by the org audit log returned with the manager dashboard.
 function RecentActivity({ items }: { items: any[] }) {
+  // Own state rather than the page's: nothing outside this card cares whether it
+  // is expanded, and the toggle lives with the list it controls.
+  const [showAll, setShowAll] = useState(false)
+  const rows = items || []
   return (
     <div className="pbi-card">
       <div className="pbi-head"><h3>Recent activity</h3></div>
       <div className="act-list">
-        {(!items || items.length === 0) && <div className="muted" style={{ padding: '10px 4px', fontSize: 13 }}>No task activity yet.</div>}
-        {items && items.map((a: any) => {
+        {rows.length === 0 && <div className="muted" style={{ padding: '10px 4px', fontSize: 13 }}>No task activity yet.</div>}
+        {(showAll ? rows : rows.slice(0, 5)).map((a: any) => {
           const m = actMeta(a)
           return (
             <div key={a.id} className="act-row">
@@ -128,6 +132,12 @@ function RecentActivity({ items }: { items: any[] }) {
             </div>
           )
         })}
+        {rows.length > 5 && (
+          <button className="view-more-btn" onClick={() => setShowAll((s) => !s)}>
+            {showAll ? 'View less' : `View all ${rows.length} events`}
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: showAll ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+        )}
       </div>
     </div>
   )
@@ -413,6 +423,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   const [datePopOpen, setDatePopOpen] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [showAllWorkload, setShowAllWorkload] = useState(false)
+  const [showAllOverdue, setShowAllOverdue] = useState(false)
   const datePopRef = React.useRef<HTMLDivElement>(null)
   const d = useDrawer()
   const navigate = useNavigate()
@@ -518,6 +529,9 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   // Open (not Done) tasks per priority — the server already returns the four
   // levels in Critical→Low order, so the ring and legend share one array.
   const donutData = data.by_priority.map((p: any) => ({ label: p.priority, value: p.count, color: PRIORITY_COLORS[p.priority] }))
+  // Bars scale against the biggest status, not the total — Done usually dwarfs
+  // everything, and against the total the live statuses would be invisible slivers.
+  const maxStatus = Math.max(...data.by_status.map((x: any) => x.count), 1)
   // Clicking a slice or a legend row drills into that priority's open tasks.
   const openPriority = (label: string) => navigate(`/tasks?priority=${encodeURIComponent(label)}&view=active`)
   return (
@@ -528,7 +542,13 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
         <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#f2622e" onClick={() => navigate('/tasks')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
         <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" alert={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
-        <Kpi value={c.blocked} label="Blocked" icon={KPI_ICONS.blocked} color="#f59e0b" onClick={() => navigate('/tasks?status=Blocked')} />
+        {/* Pending = everything not Done, the same meaning as the employee
+            dashboard's tile of that name. The manager payload calls the count
+            `open`, the employee one calls it `pending`. Blocked sat here before:
+            one status out of six, usually 0 or 1, so it spent most of its life as
+            a dead tile in the most valuable row on the page. Blocked work is still
+            a click away through the status filter. */}
+        <Kpi value={c.open} label="Pending" icon={KPI_ICONS.pending} color="#3b82f6" onClick={() => navigate('/tasks?view=active')} />
       </div>
 
       <div className="pbi-body">
@@ -605,13 +625,48 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
           </div>
         </div>
 
+        {/* The employee dashboard has this as "My work by status"; here the same
+            breakdown is the whole org's, so it is named for what it shows. The
+            server already returned by_status for this endpoint — it was simply
+            never rendered. Rows drill into that status, matching the priority
+            donut beside it. */}
+        <div className="pbi-card">
+          <div className="pbi-head"><h3>Tasks by status</h3></div>
+          <div className="pbi-scroll">
+            {data.by_status.map((s: any) => {
+              const clickable = s.count > 0
+              const open = () => navigate(`/tasks?status=${encodeURIComponent(s.status)}`)
+              return (
+                <div key={s.status} className={'st-row' + (clickable ? ' clickable' : '')}
+                  onClick={clickable ? open : undefined}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } } : undefined}
+                  title={clickable ? `Open ${s.status} tasks (${s.count})` : undefined}
+                >
+                  <div className="spread" style={{ marginBottom: 5 }}>
+                    <span className="row" style={{ gap: 8, fontSize: 13 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 3, background: STATUS_COLORS[s.status] || '#94a3b8' }} />
+                      {s.status}
+                    </span>
+                    <strong>{s.count}</strong>
+                  </div>
+                  <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#f2622e'} />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
         <div className="pbi-card pbi-overdue">
           <div className="pbi-head"><h3>Overdue tasks</h3>{data.overdue.length > 0 && <span className="badge" style={{ marginLeft: 'auto', background: '#fee2e2', color: '#ef4444' }}>{c.overdue}</span>}</div>
           <div className="pbi-scroll" style={{ padding: 0 }}>
             <table>
               <tbody>
                 {data.overdue.length === 0 && <tr><td className="muted">Nothing overdue</td></tr>}
-                {data.overdue.map((t: any) => (
+                {/* Top 5 by default — the card sits beside three others and a long
+                    list pushed everything below it off the page. */}
+                {(showAllOverdue ? data.overdue : data.overdue.slice(0, 5)).map((t: any) => (
                   <tr key={t.id} className="clickable" onClick={() => d.setOpenId(t.id)}
                     role="button" tabIndex={0} aria-label={`Open ${t.title}`}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
@@ -622,6 +677,20 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                 ))}
               </tbody>
             </table>
+            {data.overdue.length > 5 && (
+              <button className="view-more-btn" onClick={() => setShowAllOverdue((s) => !s)}>
+                {showAllOverdue ? 'View less' : `View all ${data.overdue.length} overdue`}
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: showAllOverdue ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+              </button>
+            )}
+            {/* The API caps this list, so once expanded the count can still fall short
+                of the KPI. Say so and point at the full list rather than letting the
+                card quietly imply it is showing everything. */}
+            {showAllOverdue && c.overdue > data.overdue.length && (
+              <button className="view-more-btn" onClick={() => navigate('/tasks?view=overdue')}>
+                See all {c.overdue} in Tasks
+              </button>
+            )}
           </div>
         </div>
 
