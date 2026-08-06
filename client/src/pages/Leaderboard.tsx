@@ -46,7 +46,11 @@ function DayBars({ history, w = 320, h = 54 }: { history: { day: string; points:
   const gap = 2
   const bw = Math.max(2, (w - gap * (history.length - 1)) / history.length)
   return (
-    <svg width={w} height={h} className="lb-spark" aria-hidden="true">
+    // viewBox + width:100% instead of a fixed 320px canvas: the modal is fluid, so
+    // a fixed width overflowed its card on anything narrower than a large phone.
+    // preserveAspectRatio="none" lets the bars stretch to fill — heights still read
+    // correctly because the height attribute is fixed.
+    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" className="lb-spark" aria-hidden="true">
       {history.map((d, i) => {
         const bh = d.points ? Math.max(2, (d.points / max) * (h - 6)) : 1
         return <rect key={d.day} x={i * (bw + gap)} y={h - bh} width={bw} height={bh} rx={1.5}
