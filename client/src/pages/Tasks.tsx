@@ -113,16 +113,17 @@ const tieBreak = (a: Task, b: Task): number =>
 const DEFAULT_DIR: Record<SortKey, SortDir> = {
   time: 'desc', priority: 'desc', status: 'asc', assignee: 'asc', due: 'asc', task: 'asc',
 }
-// Default is the chronological feed and keeps its day headings; asking for any
-// other column means you want one ordered list, not a re-shuffle inside each day.
+// The chronological feed keeps its day headings; every other column is one
+// ordered list, not a re-shuffle inside each day. (No longer the default —
+// priority is — but picking Newest still gives you the day-grouped feed.)
 const isGroupedSort = (key: SortKey) => key === 'time'
 
 // A nicely themed sort control (replaces the plain native <select>, whose popup
 // can't be styled). Shows the active option, opens a rounded menu with a check on
 // the current choice, and closes on outside-click or selection.
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: 'time', label: 'Default' },
   { key: 'priority', label: 'Priority' },
+  { key: 'time', label: 'Newest' },
   { key: 'status', label: 'Status' },
   { key: 'assignee', label: 'Assignee' },
   { key: 'due', label: 'Due date' },
@@ -415,7 +416,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [quickView, setQuickView] = useState<'active' | 'overdue' | 'today' | 'completed'>(initialQuick)
   const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: searchParams.get('priority') || '', status: searchParams.get('status') || '', assignee: searchParams.get('assignee') || '' })
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'time', dir: DEFAULT_DIR.time })
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'priority', dir: DEFAULT_DIR.priority })
   // Pick a column: reversing the one you're already on, otherwise switching to it
   // the way round that column is normally read. Shared by the desktop column
   // headers and the mobile Sort menu, so both behave identically.
@@ -729,8 +730,8 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               <SearchIcon />
             </button>
           )}
-          {/* MOBILE-ONLY: sort the visible tasks. 'time' (newest first) is the default
-              "show everything" order; the rest pick a sensible direction per column. */}
+          {/* MOBILE-ONLY: sort the visible tasks. 'priority' (Critical first) is the
+              default; each column picks a sensible direction when first chosen. */}
           {view === 'list' && (
             <SortMenu sortKey={sort.key} sortDir={sort.dir} onPick={toggleSort} />
           )}
