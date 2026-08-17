@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
-import { authRequired, requireRole, verifyToken } from '../auth.js'
+import { authRequired, verifyToken } from '../auth.js'
 import { id, now, audit, notify, notifyManagers, dueDateForPriority } from '../util.js'
 import { resolveUser } from '../ai/extractor.js'
 import { indexTask, removeEmbedding } from '../ai/ragIndex.js'
@@ -420,9 +420,18 @@ r.post('/:id/status', (req, res) => {
   db.prepare('UPDATE tasks SET status=?, approval_status=?, progress=?, submitted_at=?, completed_at=?, visible_to_manager=?, updated_at=? WHERE id=?')
     .run(status, approval, progress, submittedAt, completedAt, visible, now(), t.id)
   audit(req.user.org_id, req.user.id, 'task.status', 'task', t.id, status)
-  // Employee submitted work for approval → ping the managers.
+  // Employee submitted work for approval → ping the managers, and the assigner
+  // (who can now approve it too — e.g. the colleague who split this part off).
+  // Managers were all covered by the first call, so only an EMPLOYEE assigner
+  // needs the extra ping; anyone else would be notified twice.
   if (status === 'In Review') {
     notifyManagers(t.org_id, 'task_submitted', `${req.user.name} submitted "${t.title}" for approval`, t.id, req.user.id)
+    if (t.assigned_by_id && t.assigned_by_id !== req.user.id) {
+      const assigner = db.prepare('SELECT role FROM users WHERE id=?').get(t.assigned_by_id)
+      if (assigner?.role === 'employee') {
+        notify(t.org_id, t.assigned_by_id, 'task_submitted', `${req.user.name} submitted "${t.title}" for your approval`, t.id)
+      }
+    }
   }
   if (t.parent_task_id) syncParentStatus(t.parent_task_id) // a shared part changed → re-roll the parent
   indexTask(t.id) // status change updates the embedded metadata
@@ -475,11 +484,21 @@ r.post('/:id/split', (req, res) => {
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(parent.id)))
 })
 
-// APPROVAL workflow (managers/admins)
-r.post('/:id/approve', requireRole('manager', 'admin'), (req, res) => {
+// APPROVAL workflow — managers/admins, or the task's own assigner. The assigner
+// check is per-task, not a role grant: an employee who assigned (or split a part
+// to) a colleague decides only that work, nothing else. Assigner==assignee is
+// excluded — self-created work never enters the approval flow anyway (see
+// isOwnSelfCreated), so that combination reaching here means someone else
+// submitted it and a real reviewer is required.
+r.post('/:id/approve', (req, res) => {
   const { decision } = req.body || {} // approved | rejected
   const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!t) return res.status(404).json({ error: 'Not found' })
+  const isManager = req.user.role === 'manager' || req.user.role === 'admin'
+  const isAssigner = !!t.assigned_by_id && t.assigned_by_id === req.user.id && t.assignee_id !== req.user.id
+  if (!isManager && !isAssigner) {
+    return res.status(403).json({ error: 'Only a manager or the person who assigned this task can approve it.' })
+  }
   const approved = decision === 'approved'
   db.prepare('UPDATE tasks SET approval_status=?, status=?, completed_at=?, updated_at=? WHERE id=?')
     .run(approved ? 'approved' : 'rejected', approved ? 'Done' : 'Reopened', approved ? now() : null, now(), t.id)
@@ -491,6 +510,10 @@ r.post('/:id/approve', requireRole('manager', 'admin'), (req, res) => {
     approved ? `✓ "${t.title}" was approved by ${req.user.name}` : `↩ "${t.title}" needs changes — reopened by ${req.user.name}`,
     t.id,
   )
+  // Approving a shared part is how a split normally completes now, so the parent
+  // must re-roll here just like on a direct status change — without this the
+  // last part's approval left the parent container open forever.
+  if (t.parent_task_id) syncParentStatus(t.parent_task_id)
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
 

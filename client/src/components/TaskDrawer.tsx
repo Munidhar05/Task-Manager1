@@ -150,6 +150,9 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     <div className="overlay" onClick={onClose}><div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Loading task" onClick={(e) => e.stopPropagation()}><div className="card-pad" style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div></div></div>
   )
   const isManager = user?.role !== 'employee'
+  // The person who handed this task out (assigned it, or split the part off) can
+  // decide its submission too — mirrors the per-task check on POST /:id/approve.
+  const isAssigner = !!user && task.assigned_by_id === user.id && task.assignee?.id !== user.id
   // A task you raised for yourself: yours to finish or bin, no manager sign-off.
   // Mirrors isOwnSelfCreated() on the server, which enforces it — split parts and
   // work reassigned onto you came from someone else's plan and keep the approval
@@ -342,13 +345,21 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               </>
             ) : task.status === 'Done' ? (
               <div className="card-pad" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, color: '#047857' }}>
-                ✓ Completed — approved by your manager.
+                ✓ Completed — the work was approved.
               </div>
             ) : task.approval_status === 'pending' ? (
               <div className="card-pad" style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 10 }}>
                 <strong className="row" style={{ gap: 7 }}><Ic name="clock" size={15} /> Submitted for review</strong>
-                <p className="muted" style={{ margin: '4px 0 10px' }}>Waiting for your manager to approve. You'll get it back if changes are needed.</p>
-                <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => setStatus('In Progress')}><Ic name="reply" size={14} /> Withdraw &amp; keep working</button>
+                {task.assignee?.id === user?.id ? (
+                  /* The assignee: their work is parked with the reviewer. */
+                  <>
+                    <p className="muted" style={{ margin: '4px 0 10px' }}>Waiting for your manager — or whoever assigned it to you — to approve. You'll get it back if changes are needed.</p>
+                    <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => setStatus('In Progress')}><Ic name="reply" size={14} /> Withdraw &amp; keep working</button>
+                  </>
+                ) : (
+                  /* The assigner viewing via "Assigned by me": their decision panel is below. */
+                  <p className="muted" style={{ margin: '4px 0 0' }}>{task.assignee?.name || 'The assignee'} submitted this — approve it or send it back below.</p>
+                )}
               </div>
             ) : (
               <>
@@ -368,7 +379,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
                 <button className="btn btn-primary" style={{ marginTop: 10, width: '100%' }} disabled={busy} onClick={() => setStatus('In Review')}>
                   {busy ? <span className="spinner" /> : '✓ Submit as complete'}
                 </button>
-                <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Sends this task to your manager for approval.</p>
+                <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Sends this task for approval — to your manager, or to whoever assigned it to you.</p>
               </>
             )}
           </div>
@@ -404,10 +415,12 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
           )}
 
-          {isManager && task.approval_status === 'pending' && (
+          {(isManager || isAssigner) && task.approval_status === 'pending' && (
             <div className="card-pad" style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, marginBottom: 16 }}>
               <strong>Approval requested</strong>
-              <p className="muted" style={{ margin: '4px 0 10px' }}>This task is in review and awaiting your approval.</p>
+              <p className="muted" style={{ margin: '4px 0 10px' }}>
+                {isManager ? 'This task is in review and awaiting your approval.' : 'You handed this task out — it\'s submitted and waiting for you to accept the work.'}
+              </p>
               <div className="row">
                 <button className="btn btn-primary btn-sm" onClick={() => approve('approved')}>✓ Approve & close</button>
                 <button className="btn btn-sm btn-danger" onClick={() => approve('rejected')} title="Send back to the owner to keep working">Send back for changes</button>
