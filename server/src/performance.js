@@ -40,9 +40,10 @@ const SQL_COMPLETED = `
   WHERE org_id=? AND status='Done' AND assignee_id IS NOT NULL AND completed_at IS NOT NULL
     AND substr(completed_at,1,10) >= ?
     AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id=t.id)`
-// +1 per TASK commented on, not per comment — ten replies on one task is one point.
+// +1 per COMMENT — ten replies on one task is ten points. Used to dedupe by task,
+// but the policy is now to pay every comment (see scoring.js).
 const SQL_COMMENTED = `
-  SELECT c.user_id AS uid, COUNT(DISTINCT c.task_id) AS c FROM task_comments c
+  SELECT c.user_id AS uid, COUNT(*) AS c FROM task_comments c
   JOIN tasks t ON t.id=c.task_id
   WHERE t.org_id=? AND substr(c.created_at,1,10) >= ?`
 // Status changes are no longer scored (see scoring.js), so there is no query for
@@ -153,7 +154,7 @@ function dailyPoints(orgId, userId, days) {
       WHERE org_id=? AND assignee_id=? AND status='Done' AND completed_at IS NOT NULL
         AND substr(completed_at,1,10) >= ?
         AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id=t.id) GROUP BY d`,
-    commented: `SELECT substr(c.created_at,1,10) AS d, COUNT(DISTINCT c.task_id) AS c FROM task_comments c
+    commented: `SELECT substr(c.created_at,1,10) AS d, COUNT(*) AS c FROM task_comments c
       JOIN tasks t ON t.id=c.task_id
       WHERE t.org_id=? AND c.user_id=? AND substr(c.created_at,1,10) >= ? GROUP BY d`,
   }
