@@ -467,6 +467,11 @@ export function initSchema() {
   ensureColumn('organizations', 'allowed_domains', 'TEXT')
   // Lets the super admin grant an org's own admins access to view their usage.
   ensureColumn('organizations', 'usage_access', 'INTEGER DEFAULT 0')
+  // Admin-chosen leaderboard window (the "Custom" period): inclusive UTC
+  // yyyy-mm-dd bounds. Both NULL = no custom range, everyone gets the calendar
+  // month default. Set/cleared by managers via PUT /api/scores/range.
+  ensureColumn('organizations', 'leaderboard_from', 'TEXT')
+  ensureColumn('organizations', 'leaderboard_to', 'TEXT')
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
   // Google account link: the Google user id ("sub") for accounts that have signed
   // in with Google at least once. NULL for password-only accounts. Sign-in matches

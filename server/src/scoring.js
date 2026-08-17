@@ -4,7 +4,7 @@
 //
 //   assign a task to someone  → +5  (to the assigner)
 //   complete a task           → +10 (to the assignee who finished it)
-//   comment on a task         → +1  (to the commenter, once per task)
+//   comment on a task         → +1  (to the commenter, per comment)
 //
 // Finishing work is worth the most, handing it out next, and chatter least.
 // Priority is deliberately ignored — a Critical task and a Low one are worth the
@@ -16,14 +16,14 @@
 // indefinitely — it rewarded fiddling with the board rather than doing the work.
 // Completion is still paid, via the `completed` rule, so finishing a task counts.
 //
-// One anti-double-count rule is baked into the queries in performance.js:
-//   · Commenting twice on the SAME task is one point, not two (points track tasks
-//     engaged with, matching "comments on three tasks → 3 points").
+// Comments pay per COMMENT, not per task: two comments on the same task are two
+// points. This used to be deduped by task, but the policy is now that every
+// comment counts ("5 comments → 5 points"), even on one task.
 
 // Bump when the scoring POLICY changes. Nothing is persisted any more (points are
 // counted live from tasks/task_comments/audit_logs), so this is just a marker for
 // anyone comparing behaviour across deploys.
-export const SCORING_VERSION = 'weighted-points-v2'
+export const SCORING_VERSION = 'weighted-points-v3'
 
 // What each action pays. Kept as data so the UI can render the rules and a future
 // tweak is a one-line change here — nothing else hard-codes a per-action value.
@@ -32,7 +32,7 @@ export const SCORING_VERSION = 'weighted-points-v2'
 export const POINT_RULES = [
   { key: 'assigned', points: 5, label: 'Tasks assigned', short: 'assigned', hint: 'Gave a task to someone else' },
   { key: 'completed', points: 10, label: 'Tasks completed', short: 'completed', hint: 'Finished a task assigned to them' },
-  { key: 'commented', points: 1, label: 'Tasks commented on', short: 'commented', hint: 'Counted once per task' },
+  { key: 'commented', points: 1, label: 'Comments made', short: 'commented', hint: 'Every comment counts' },
 ]
 
 export const RULE_KEYS = POINT_RULES.map((r) => r.key)

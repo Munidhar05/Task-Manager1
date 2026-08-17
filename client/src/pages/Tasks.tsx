@@ -113,16 +113,17 @@ const tieBreak = (a: Task, b: Task): number =>
 const DEFAULT_DIR: Record<SortKey, SortDir> = {
   time: 'desc', priority: 'desc', status: 'asc', assignee: 'asc', due: 'asc', task: 'asc',
 }
-// Default is the chronological feed and keeps its day headings; asking for any
-// other column means you want one ordered list, not a re-shuffle inside each day.
+// The chronological feed keeps its day headings; every other column is one
+// ordered list, not a re-shuffle inside each day. (No longer the default —
+// priority is — but picking Newest still gives you the day-grouped feed.)
 const isGroupedSort = (key: SortKey) => key === 'time'
 
 // A nicely themed sort control (replaces the plain native <select>, whose popup
 // can't be styled). Shows the active option, opens a rounded menu with a check on
 // the current choice, and closes on outside-click or selection.
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: 'time', label: 'Default' },
   { key: 'priority', label: 'Priority' },
+  { key: 'time', label: 'Newest' },
   { key: 'status', label: 'Status' },
   { key: 'assignee', label: 'Assignee' },
   { key: 'due', label: 'Due date' },
@@ -415,7 +416,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [quickView, setQuickView] = useState<'active' | 'overdue' | 'today' | 'completed'>(initialQuick)
   const [filters, setFilters] = useState<{ q: string; priority: string; status: string; assignee: string }>({ q: '', priority: searchParams.get('priority') || '', status: searchParams.get('status') || '', assignee: searchParams.get('assignee') || '' })
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'time', dir: DEFAULT_DIR.time })
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'priority', dir: DEFAULT_DIR.priority })
   // Pick a column: reversing the one you're already on, otherwise switching to it
   // the way round that column is normally read. Shared by the desktop column
   // headers and the mobile Sort menu, so both behave identically.
@@ -523,6 +524,18 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // In "My Tasks" (personal) mode, behave like a personal board even for managers:
   // own tasks only, no assignee column/picker, and new tasks are private.
   const isManager = user?.role !== 'employee' && !personal
+  // The person who handed this task out (assigned it, or split the part off) can
+  // approve its submission — mirrors the per-task check on POST /:id/approve.
+  const isAssignerOf = (t: Task) => !!user && t.assigned_by_id === user.id && t.assignee?.id !== user.id
+  // "Assigned by me" is a scope, not a view: it swaps WHAT is listed (work I
+  // handed out instead of work I got) and always renders as a list — a board of
+  // someone else's columns isn't actionable from here.
+  const effectiveView = assignedByMe ? 'list' : view
+  const setScopeAssigned = (on: boolean) => {
+    const next = new URLSearchParams(searchParams)
+    if (on) next.set('assigned_by_me', '1'); else next.delete('assigned_by_me')
+    setSearchParams(next)
+  }
   // A row is "narrowed" when a server filter or a non-default quick view is active —
   // used to tailor the empty-state copy (and offer a Clear button).
   const narrowed = !!(filters.q || filters.priority || filters.status || filters.assignee) || quickView === 'overdue' || quickView === 'today'
@@ -652,7 +665,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       <td data-label="Status">
         <span className="row" style={{ gap: 8 }}>
           <StatusBadge s={t.status} />
-          {isManager && t.status === 'In Review' && (
+          {(isManager || isAssignerOf(t)) && t.status === 'In Review' && (
             <button className="btn btn-sm btn-done" onClick={(e) => { e.stopPropagation(); markDone(t.id) }} title="Approve & mark as done">✓ Done</button>
           )}
           {(isManager || isOwnWork(t)) && t.status !== 'In Review' && t.status !== 'Done' && (
@@ -729,9 +742,9 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               <SearchIcon />
             </button>
           )}
-          {/* MOBILE-ONLY: sort the visible tasks. 'time' (newest first) is the default
-              "show everything" order; the rest pick a sensible direction per column. */}
-          {view === 'list' && (
+          {/* MOBILE-ONLY: sort the visible tasks. 'priority' (Critical first) is the
+              default; each column picks a sensible direction when first chosen. */}
+          {effectiveView === 'list' && (
             <SortMenu sortKey={sort.key} sortDir={sort.dir} onPick={toggleSort} />
           )}
           {/* MOBILE-ONLY: the priority/status/assignee filters, in a dialog — the
@@ -766,13 +779,18 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         </div>
       </div>
 
-      {/* Line 1: View toggle (left) + the "Active" chip. */}
+      {/* Line 1: View toggle (left) + the "Active" chip. List/Board show the work
+          I got; "Assigned by me" flips the scope to what I handed out or split. */}
       <div className="viewbar">
         <div className="seg">
-          <button className={'seg-btn row' + (view === 'list' ? ' active' : '')} style={{ gap: 6 }} onClick={() => setView('list')} title="List view"><Ic name="menu" size={14} /> List</button>
-          <button className={'seg-btn row' + (view === 'board' ? ' active' : '')} style={{ gap: 6 }} onClick={() => setView('board')} title="Board view"><Ic name="board" size={14} /> Board</button>
+          <button className={'seg-btn row' + (effectiveView === 'list' && !assignedByMe ? ' active' : '')} style={{ gap: 6 }} onClick={() => { setView('list'); setScopeAssigned(false) }} title="List view"><Ic name="menu" size={14} /> List</button>
+          <button className={'seg-btn row' + (effectiveView === 'board' ? ' active' : '')} style={{ gap: 6 }} onClick={() => { setView('board'); setScopeAssigned(false) }} title="Board view"><Ic name="board" size={14} /> Board</button>
+          {!personal && (
+            <button className={'seg-btn row' + (assignedByMe ? ' active' : '')} style={{ gap: 6 }} onClick={() => { setView('list'); setScopeAssigned(true) }}
+              title="Tasks you assigned to others or split with them"><Ic name="send" size={14} /> Assigned by me</button>
+          )}
         </div>
-        {view === 'list' && tasks.length > 0 && QUICK_CHIPS.filter((c) => c.key === 'active').map((c) => {
+        {effectiveView === 'list' && tasks.length > 0 && QUICK_CHIPS.filter((c) => c.key === 'active').map((c) => {
           const count = tasks.filter((t) => matchesQuick(t, c.key)).length
           return (
             <button key={c.key} className={'chip' + (quickView === c.key ? ' active' : '')} onClick={() => setQuickView(c.key)}>
@@ -784,7 +802,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {/* Line 2: quick-view stat cards (Overdue, Due today, Completed) — double as
           filters. Mirrors the template's stat-card row above the task list. */}
-      {view === 'list' && tasks.length > 0 && (
+      {effectiveView === 'list' && tasks.length > 0 && (
         <div className="task-stats">
           {([
             { key: 'overdue' as const, label: 'Overdue', color: '#ef4444', icon: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /></> },
@@ -820,7 +838,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         <div className="card table-card-wrap" aria-busy="true">
           <div className="card-pad">{Array.from({ length: 6 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div>
         </div>
-      ) : view === 'board' ? (
+      ) : effectiveView === 'board' ? (
         tasks.length === 0 ? (
           <div className="card">
             <EmptyState
@@ -839,7 +857,13 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         <>
           {visibleTasks.length === 0 ? (
             <div className="card">
-              {quickView === 'completed' ? (
+              {assignedByMe && !narrowed && quickView !== 'completed' ? (
+                <EmptyState
+                  icon={<Ic name="send" size={40} />}
+                  title="Nothing assigned to others yet"
+                  hint="Tasks you assign to a colleague — or parts you split and share — will show up here, so you can track them and approve the work when it's submitted."
+                />
+              ) : quickView === 'completed' ? (
                 <EmptyState
                   icon={<Ic name="box" size={40} />}
                   title="No completed tasks yet"

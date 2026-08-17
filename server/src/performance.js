@@ -21,8 +21,10 @@ const _cache = new Map()
 const P = (sql) => { let s = _cache.get(sql); if (!s) { s = db.prepare(sql); _cache.set(sql, s) } return s }
 
 // --- The four scoring queries -------------------------------------------------
-// Each returns {uid, c} per person for one org since a given day. `since` is a
-// UTC yyyy-mm-dd; all-time passes '0000-00-00' so the >= comparison always holds.
+// Each returns {uid, c} per person for one org within [since, until], both
+// inclusive UTC yyyy-mm-dd days. All-time passes '0000-00-00'..'9999-12-31' so
+// the BETWEEN always holds. The upper bound exists so a PAST calendar month (or
+// an admin's custom window) can be viewed without later activity bleeding in.
 //
 // Each query has an optional `AND <col>=?` slot appended for the single-user case,
 // so the leaderboard and the detail view can't drift apart.
@@ -32,19 +34,20 @@ const P = (sql) => { let s = _cache.get(sql); if (!s) { s = db.prepare(sql); _ca
 const SQL_ASSIGNED = `
   SELECT assigned_by_id AS uid, COUNT(*) AS c FROM tasks
   WHERE org_id=? AND assigned_by_id IS NOT NULL AND assignee_id IS NOT NULL
-    AND assigned_by_id != assignee_id AND substr(created_at,1,10) >= ?`
+    AND assigned_by_id != assignee_id AND substr(created_at,1,10) BETWEEN ? AND ?`
 // +1 per task this person finished (excludes split PARENTS, whose completion is a
 // roll-up of their children rather than work done directly).
 const SQL_COMPLETED = `
   SELECT assignee_id AS uid, COUNT(*) AS c FROM tasks t
   WHERE org_id=? AND status='Done' AND assignee_id IS NOT NULL AND completed_at IS NOT NULL
-    AND substr(completed_at,1,10) >= ?
+    AND substr(completed_at,1,10) BETWEEN ? AND ?
     AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id=t.id)`
-// +1 per TASK commented on, not per comment — ten replies on one task is one point.
+// +1 per COMMENT — ten replies on one task is ten points. Used to dedupe by task,
+// but the policy is now to pay every comment (see scoring.js).
 const SQL_COMMENTED = `
-  SELECT c.user_id AS uid, COUNT(DISTINCT c.task_id) AS c FROM task_comments c
+  SELECT c.user_id AS uid, COUNT(*) AS c FROM task_comments c
   JOIN tasks t ON t.id=c.task_id
-  WHERE t.org_id=? AND substr(c.created_at,1,10) >= ?`
+  WHERE t.org_id=? AND substr(c.created_at,1,10) BETWEEN ? AND ?`
 // Status changes are no longer scored (see scoring.js), so there is no query for
 // them here — the audit rows are still written, they just don't pay.
 
@@ -56,7 +59,7 @@ const RULE_SQL = {
 }
 
 // Raw action counts for every person in the org: Map<uid, {assigned,…}>.
-function gatherCounts(orgId, since, onlyUserId = null) {
+function gatherCounts(orgId, since, until, onlyUserId = null) {
   const out = new Map()
   const bump = (uid, key, c) => {
     if (!uid) return
@@ -65,7 +68,7 @@ function gatherCounts(orgId, since, onlyUserId = null) {
   }
   for (const [key, [sql, col]] of Object.entries(RULE_SQL)) {
     const q = onlyUserId ? `${sql} AND ${col}=? GROUP BY ${col}` : `${sql} GROUP BY ${col}`
-    const args = onlyUserId ? [orgId, since, onlyUserId] : [orgId, since]
+    const args = onlyUserId ? [orgId, since, until, onlyUserId] : [orgId, since, until]
     for (const row of P(q).all(...args)) bump(row.uid, key, row.c)
   }
   return out
@@ -73,22 +76,32 @@ function gatherCounts(orgId, since, onlyUserId = null) {
 
 // --- Read side ----------------------------------------------------------------
 
-// Period token → the first UTC day that still counts.
-//   day   → today only
-//   month → the last 30 days
-//   all   → everything
-export function periodSince(period) {
-  if (period === 'day') return utcDay()
-  if (period === 'all') return '0000-00-00'
-  return addDays(utcDay(), -30)
+const ALL_TIME = { since: '0000-00-00', until: '9999-12-31' }
+
+// Period token → the inclusive [since, until] UTC day range that counts.
+//   day    → today only
+//   month  → one CALENDAR month (`month` = 'yyyy-mm', defaults to the current
+//            one) — not a rolling 30 days, so April / May / June each stand alone
+//   all    → everything
+//   custom → the org's admin-chosen from/to window (falls back to the current
+//            month if the range is missing — routes/scores.js normally guards this)
+export function periodRange(period, { month, from, to } = {}) {
+  if (period === 'day') return { since: utcDay(), until: utcDay() }
+  if (period === 'all') return ALL_TIME
+  if (period === 'custom' && from && to) return { since: from, until: to }
+  const m = /^\d{4}-(0[1-9]|1[0-2])$/.test(month || '') ? month : utcDay().slice(0, 7)
+  // Last day of the month: jump to the 1st of the next month, step back one day.
+  const nextFirst = new Date(m + '-01T00:00:00Z')
+  nextFirst.setUTCMonth(nextFirst.getUTCMonth() + 1)
+  return { since: m + '-01', until: addDays(nextFirst.toISOString().slice(0, 10), -1) }
 }
 
 // The whole-org leaderboard for a period. EVERYONE in the org is listed; people
 // with no activity in range score 0 and trail the ranked list. Ranked on total
 // points — a straight count of work done, so volume is exactly what it measures.
-export function getLeaderboard(orgId, { period = 'month' } = {}) {
-  const since = periodSince(period)
-  const counts = gatherCounts(orgId, since)
+export function getLeaderboard(orgId, { period = 'month', month, from, to } = {}) {
+  const { since, until } = periodRange(period, { month, from, to })
+  const counts = gatherCounts(orgId, since, until)
   const users = db.prepare('SELECT id, name, avatar_color, avatar_file, role FROM users WHERE org_id=?').all(orgId)
 
   const rows = users.map((u) => {
@@ -109,6 +122,10 @@ export function getLeaderboard(orgId, { period = 'month' } = {}) {
   return {
     period,
     since,
+    until,
+    // Which calendar month the range represents, so the client's month picker
+    // can reflect the default ('month' with no explicit month = the current one).
+    month: period === 'month' ? since.slice(0, 7) : undefined,
     rules: pointRules(),
     ranked: [...active, ...idle],
     scored_count: active.length,
@@ -118,17 +135,18 @@ export function getLeaderboard(orgId, { period = 'month' } = {}) {
 
 // One person's detail: their points for the period, the count behind each rule,
 // their all-time total, and a per-day series for the chart.
-export function getUserDetail(userId, { period = 'month', historyDays = 30 } = {}) {
+export function getUserDetail(userId, { period = 'month', month, from, to, historyDays = 30 } = {}) {
   const u = db.prepare('SELECT id, name, avatar_color, avatar_file, role, org_id FROM users WHERE id=?').get(userId)
   if (!u) return null
-  const since = periodSince(period)
-  const { points, breakdown } = scoreCounts(gatherCounts(u.org_id, since, userId).get(userId))
-  const allTime = scoreCounts(gatherCounts(u.org_id, '0000-00-00', userId).get(userId))
+  const { since, until } = periodRange(period, { month, from, to })
+  const { points, breakdown } = scoreCounts(gatherCounts(u.org_id, since, until, userId).get(userId))
+  const allTime = scoreCounts(gatherCounts(u.org_id, ALL_TIME.since, ALL_TIME.until, userId).get(userId))
 
   return {
     user: { id: u.id, name: u.name, avatar_color: u.avatar_color, avatar_file: u.avatar_file, role: u.role },
     period,
     since,
+    until,
     points,
     breakdown,
     all_time_points: allTime.points,
@@ -153,7 +171,7 @@ function dailyPoints(orgId, userId, days) {
       WHERE org_id=? AND assignee_id=? AND status='Done' AND completed_at IS NOT NULL
         AND substr(completed_at,1,10) >= ?
         AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id=t.id) GROUP BY d`,
-    commented: `SELECT substr(c.created_at,1,10) AS d, COUNT(DISTINCT c.task_id) AS c FROM task_comments c
+    commented: `SELECT substr(c.created_at,1,10) AS d, COUNT(*) AS c FROM task_comments c
       JOIN tasks t ON t.id=c.task_id
       WHERE t.org_id=? AND c.user_id=? AND substr(c.created_at,1,10) >= ? GROUP BY d`,
   }

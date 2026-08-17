@@ -2,20 +2,29 @@ import { useEffect, useState } from 'react'
 import { api, userAvatarUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Ic, EmptyState, Bar } from '../ui'
+import { toast } from '../lib/toast'
 
 // Points leaderboard. Fixed points per action:
 //   complete a task 10 · assign a task 5 · comment on a task 1
 // Moving a task between statuses pays nothing — see the note in server/src/scoring.js.
-// Complete 10 tasks and you have 100 points. Today / last 30 days / all-time are
-// the same tally over a different window. Clicking a card shows which actions
+// Complete 10 tasks and you have 100 points. Every period is the same tally over
+// a different window: Today / one CALENDAR month (any month, via the picker) /
+// all-time / Custom — an org-wide from→to window a manager sets, which becomes
+// what everyone lands on while it's active. Clicking a card shows which actions
 // earned the points. Everything comes from /api/scores, counted live from the task
 // tables — the per-action values are the server's `rules`, never hard-coded here.
 
 const PERIODS = [
   { k: 'day', label: 'Today', hint: 'points earned today' },
-  { k: 'month', label: 'Monthly', hint: 'points earned in the last 30 days' },
+  { k: 'month', label: 'Monthly', hint: 'points earned in a calendar month' },
   { k: 'all', label: 'All-time', hint: 'every point ever earned' },
 ]
+
+const currentMonth = () => new Date().toISOString().slice(0, 7)
+// 'yyyy-mm' → "August 2026". Day 02 dodges any timezone slip off the month.
+const monthName = (m: string) => new Date(m + '-02').toLocaleString(undefined, { month: 'long', year: 'numeric' })
+// The server's yyyy-mm-dd, shown the way the rest of the app writes dates.
+const prettyDay = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 
 // One colour per rule, reused by the card chips and the detail bars so a rule is
 // recognisable at a glance. Concrete values (matches the ui.tsx convention).
@@ -62,19 +71,58 @@ function DayBars({ history, w = 320, h = 54 }: { history: { day: string; points:
 
 export default function Leaderboard() {
   const { user } = useAuth()
-  const [period, setPeriod] = useState('month')
+  const isManager = user?.role === 'manager' || user?.role === 'admin'
+  // 'auto' = no explicit choice yet: the server answers with the org's custom
+  // window if a manager has set one, else the current calendar month — so an
+  // active custom range really is what everyone lands on.
+  const [sel, setSel] = useState<{ k: string; month?: string }>({ k: 'auto' })
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
+  const query = sel.k === 'auto' ? ''
+    : sel.k === 'month' && sel.month ? `?period=month&month=${sel.month}`
+    : `?period=${sel.k}`
   const load = () => {
     setError(false); setRefreshing(true)
-    api.get(`/scores/leaderboard?period=${period}`).then(setData).catch(() => setError(true)).finally(() => setRefreshing(false))
+    api.get(`/scores/leaderboard${query}`).then(setData).catch(() => setError(true)).finally(() => setRefreshing(false))
   }
-  useEffect(load, [period])
+  useEffect(load, [sel.k, sel.month])
+
+  // Which tab lights up: the explicit pick, or whatever the server resolved 'auto' to.
+  const activeTab = sel.k === 'auto' ? (data?.period === 'custom' ? 'custom' : 'month') : sel.k
+  const shownMonth = sel.month || data?.month || currentMonth()
+
+  // Draft dates for the manager's custom-range editor, seeded from the saved range.
+  const [fromD, setFromD] = useState('')
+  const [toD, setToD] = useState('')
+  useEffect(() => {
+    if (data?.custom_range) { setFromD(data.custom_range.from); setToD(data.custom_range.to) }
+  }, [data?.custom_range?.from, data?.custom_range?.to])
+
+  const saveRange = async () => {
+    if (!fromD || !toD) { toast.error('Pick both dates first'); return }
+    try {
+      await api.put('/scores/range', { from: fromD, to: toD })
+      toast.success('Leaderboard window updated for everyone')
+      // Land on the Custom tab; if we're already there the effect won't refire, so reload by hand.
+      if (activeTab === 'custom' && sel.k !== 'auto') load(); else setSel({ k: 'custom' })
+    } catch (e: any) { toast.error(e.message || 'Could not save the range') }
+  }
+  const clearRange = async () => {
+    try {
+      await api.put('/scores/range', {})
+      toast.success('Custom window cleared — back to the monthly view')
+      setSel({ k: 'month' })
+    } catch (e: any) { toast.error(e.message || 'Could not clear the range') }
+  }
 
   if (!user) return null
+
+  // Employees only see the Custom tab while a window is actually set; managers
+  // always see it, otherwise there'd be no way to set one in the first place.
+  const tabs = [...PERIODS, ...(data?.custom_range || isManager ? [{ k: 'custom', label: 'Custom', hint: 'a date window chosen by a manager' }] : [])]
 
   return (
     <>
@@ -86,12 +134,41 @@ export default function Leaderboard() {
             : 'Points are awarded for assigning, completing and commenting on tasks.'}
         </div>
         <div className="lb-winsel" role="tablist" aria-label="Time period">
-          {PERIODS.map((p) => (
-            <button key={p.k} role="tab" aria-selected={period === p.k} title={p.hint}
-              className={'lb-win-btn' + (period === p.k ? ' active' : '')} onClick={() => setPeriod(p.k)}>{p.label}</button>
+          {tabs.map((p) => (
+            <button key={p.k} role="tab" aria-selected={activeTab === p.k} title={p.hint}
+              className={'lb-win-btn' + (activeTab === p.k ? ' active' : '')} onClick={() => setSel({ k: p.k })}>{p.label}</button>
           ))}
         </div>
       </div>
+
+      {/* Month picker — which calendar month the Monthly tab shows. */}
+      {activeTab === 'month' && (
+        <div className="lb-ctlbar section">
+          <span className="muted" style={{ fontSize: 13 }}>Showing {monthName(shownMonth)}</span>
+          <input type="month" className="lb-datein" value={shownMonth} max={currentMonth()}
+            onChange={(e) => e.target.value && setSel({ k: 'month', month: e.target.value })} aria-label="Pick a month" />
+        </div>
+      )}
+
+      {/* Custom window — everyone sees the active range; managers can change it. */}
+      {activeTab === 'custom' && (
+        <div className="lb-ctlbar section">
+          <span className="muted" style={{ fontSize: 13 }}>
+            {data?.custom_range
+              ? <>Window: <b>{prettyDay(data.custom_range.from)}</b> → <b>{prettyDay(data.custom_range.to)}</b>{!isManager && ' (set by a manager)'}</>
+              : 'No custom window set yet — pick the dates everyone should see.'}
+          </span>
+          {isManager && (
+            <span className="lb-rangectl">
+              <input type="date" className="lb-datein" value={fromD} max={toD || undefined} onChange={(e) => setFromD(e.target.value)} aria-label="From date" />
+              <span className="muted">→</span>
+              <input type="date" className="lb-datein" value={toD} min={fromD || undefined} onChange={(e) => setToD(e.target.value)} aria-label="To date" />
+              <button className="btn btn-primary btn-sm" onClick={saveRange}>Apply</button>
+              {data?.custom_range && <button className="btn btn-ghost btn-sm" onClick={clearRange}>Clear</button>}
+            </span>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="card section"><EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load the leaderboard"
@@ -115,7 +192,16 @@ export default function Leaderboard() {
         </div>
       )}
 
-      {detailId && <DetailModal userId={detailId} period={period} onClose={() => setDetailId(null)} />}
+      {detailId && (
+        <DetailModal userId={detailId} periodQuery={query}
+          periodLabel={
+            activeTab === 'day' ? 'today'
+              : activeTab === 'all' ? 'all-time'
+              : activeTab === 'custom' && data?.custom_range ? `${prettyDay(data.custom_range.from)} → ${prettyDay(data.custom_range.to)}`
+              : monthName(shownMonth)
+          }
+          onClose={() => setDetailId(null)} />
+      )}
     </>
   )
 }
@@ -151,13 +237,14 @@ function RankCard({ row, rules, onOpen }: { row: any; rules: any[]; onOpen: () =
   )
 }
 
-function DetailModal({ userId, period, onClose }: { userId: string; period: string; onClose: () => void }) {
+function DetailModal({ userId, periodQuery, periodLabel, onClose }: { userId: string; periodQuery: string; periodLabel: string; onClose: () => void }) {
   const [d, setD] = useState<any>(null)
   const [error, setError] = useState(false)
   useEffect(() => {
     setD(null); setError(false)
-    api.get(`/scores/${userId}?period=${period}`).then(setD).catch(() => setError(true))
-  }, [userId, period])
+    // Same period params as the board itself, so the numbers can't disagree.
+    api.get(`/scores/${userId}${periodQuery}`).then(setD).catch(() => setError(true))
+  }, [userId, periodQuery])
 
   // One row per rule: how many times they did it, and the points that earned.
   const rows = (d?.rules || []).map((r: any) => ({
@@ -167,7 +254,6 @@ function DetailModal({ userId, period, onClose }: { userId: string; period: stri
     points: d?.breakdown?.[r.key]?.points || 0,
   }))
   const maxPoints = Math.max(1, ...rows.map((r: any) => r.points))
-  const periodLabel = period === 'day' ? 'today' : period === 'all' ? 'all-time' : 'last 30 days'
 
   return (
     <div className="modal-center" onClick={onClose}>
