@@ -1805,6 +1805,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .lb-win-btn:hover { color: var(--text); }
 .lb-win-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 
+/* Contextual row under the tabs: the Monthly month picker, or the Custom
+   window (read-only for employees, editable dates for managers). */
+.lb-ctlbar { display: flex; align-items: center; justify-content: space-between; gap: 10px 12px; flex-wrap: wrap;
+  padding: 8px 12px; background: var(--n-100); border: 1px solid var(--border); border-radius: 10px; }
+.lb-rangectl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* width:auto beats the global `input { width: 100% }`, which otherwise makes
+   each date input take the whole row and stack the range editor vertically. */
+.lb-datein { width: auto; padding: 5px 8px; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; font: inherit; font-size: 12.5px; }
+
 .lb-list { display: flex; flex-direction: column; gap: 10px; }
 .lb-card { display: grid; grid-template-columns: 40px 40px 1fr auto; align-items: center; gap: 14px; width: 100%; text-align: left;
   padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .1s; }
