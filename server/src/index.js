@@ -25,7 +25,7 @@ import scoreRoutes from './routes/scores.js'
 import feedbackRoutes from './routes/feedback.js'
 import ttsRoutes from './routes/tts.js'
 import { startScheduler } from './scheduler.js'
-import { attachLiveTranscribe } from './ws/liveTranscribe.js'
+import { attachLiveTranscribe, attachAssistantLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
 import { hasEmbeddings, embedModel } from './ai/embeddings.js'
 import { syncAll } from './ai/ragIndex.js'
@@ -144,6 +144,10 @@ if (hasEmbeddings()) {
 
 // Live meeting transcription stream (browser <-> Sarvam) shares the HTTP server.
 attachLiveTranscribe(server)
+// Assistant streaming STT (same relay, different path/policy): transcribes voice
+// commands WHILE the user speaks, so a turn needs no upload+transcribe round-trip
+// after they stop — the single biggest latency cut in the voice loop.
+attachAssistantLive(server)
 // Real-time internal chat push shares the same HTTP server (different path).
 attachChatHub(server)
 

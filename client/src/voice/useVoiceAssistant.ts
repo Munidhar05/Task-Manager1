@@ -23,7 +23,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { startRecording, canRecord, Recording } from './recorder'
+import { startRecording, canRecord } from './recorder'
+import { startLiveListen } from './liveStt'
 import { speak, stopSpeaking, isTtsEnabled, setTtsEnabled } from './tts'
 import { runPlan, answerAndResume, type Outcome, type ToolContext } from './actionEngine'
 import { planFromServer } from './serverPlan'
@@ -72,9 +73,20 @@ export function useVoiceAssistant() {
   // can keep giving commands without re-triggering the wake word.
   const [minimized, setMinimized] = useState(false)
 
+  // What the streaming recognizer has heard SO FAR this turn — rendered live in
+  // the panel so the user watches their words land as they speak. Doubles as
+  // failure transparency: a mishear is visible before the agent acts on it.
+  const [liveText, setLiveText] = useState('')
+
   // Refs mirror state for use inside the async turn loop (avoids stale closures).
   const sessionRef = useRef(0)          // bump to invalidate an in-flight loop
-  const recRef = useRef<Recording | null>(null)
+  // Both capture paths (streaming listener / classic recorder) expose stop/cancel;
+  // the ref only ever drives those two, so the union keeps micButton path-agnostic.
+  const recRef = useRef<{ stop: () => void; cancel: () => void } | null>(null)
+  // Whether this deployment supports streaming STT. Optimistic until a connection
+  // attempt fails (no Sarvam key, proxy without WS) — then the classic
+  // record→upload→transcribe path carries every later turn, no re-probing.
+  const liveSttRef = useRef(true)
   const pendingRef = useRef<Suspended | null>(null)
   const msgsRef = useRef<VoiceMsg[]>([])
   const emptyStreakRef = useRef(0)
@@ -257,27 +269,54 @@ export function useVoiceAssistant() {
     const alive = () => sessionRef.current === mySession && openRef.current
 
     while (alive()) {
-      // 1. Listen
-      setState('listening'); setLevel(0)
-      let blob: Blob
-      try {
-        const rec = await startRecording({ onLevel: (l) => { if (alive()) setLevel(l) } })
-        recRef.current = rec
-        blob = await rec.done
-      } catch {
-        const m = 'I need microphone access to listen.'
-        push({ role: 'ai', text: m }); setState('idle'); await speak(m); return
-      }
-      recRef.current = null
-      if (!alive()) return
-
-      // 2. Transcribe. Silence ends the loop → armed; any pending confirmation
-      // stays on screen so its yes/no buttons still work.
-      setState('processing'); setLevel(0)
-      if (!blob.size) { endOnSilence(); return }
+      // 1+2. Listen and transcribe. The streaming path does both AT ONCE: PCM goes
+      // up while the user speaks, so the transcript is ready the moment they stop
+      // — no upload, no REST transcription wait. The classic record→upload path is
+      // the fallback for deployments without Sarvam streaming (and mic failures).
+      setState('listening'); setLevel(0); setLiveText('')
+      const t0 = performance.now()
       let text = ''
-      try { text = await transcribeBlob(blob) } catch { /* treat as empty */ }
-      if (!alive()) return
+      let listened = false
+      if (liveSttRef.current) {
+        try {
+          const live = await startLiveListen({
+            onPartial: (t) => { if (alive()) setLiveText(t) },
+            onLevel: (l) => { if (alive()) setLevel(l) },
+          })
+          recRef.current = live
+          text = await live.done
+          listened = true
+          console.debug(`[voice] listen+stt (streaming) ${Math.round(performance.now() - t0)}ms`)
+        } catch {
+          // Couldn't establish the stream — remember and fall through to classic.
+          liveSttRef.current = false
+        }
+        recRef.current = null
+        setLiveText('')
+        if (!alive()) return
+      }
+      if (!listened) {
+        let blob: Blob
+        try {
+          const rec = await startRecording({ onLevel: (l) => { if (alive()) setLevel(l) } })
+          recRef.current = rec
+          blob = await rec.done
+        } catch {
+          const m = 'I need microphone access to listen.'
+          push({ role: 'ai', text: m }); setState('idle'); await speak(m); return
+        }
+        recRef.current = null
+        if (!alive()) return
+
+        // Silence ends the loop → armed; any pending confirmation stays on screen
+        // so its yes/no buttons still work.
+        setState('processing'); setLevel(0)
+        if (!blob.size) { endOnSilence(); return }
+        try { text = await transcribeBlob(blob) } catch { /* treat as empty */ }
+        console.debug(`[voice] listen+stt (classic) ${Math.round(performance.now() - t0)}ms`)
+        if (!alive()) return
+      }
+      setState('processing'); setLevel(0)
       if (!text) {
         emptyStreakRef.current++
         if (emptyStreakRef.current >= 2) { endOnSilence(); return }
@@ -309,8 +348,10 @@ export function useVoiceAssistant() {
 
       // 4. Ask the brain what to do, then act on it.
       let resp: any
+      const tBrain = performance.now()
       try { resp = await sendCommand(text) }
       catch { const m = 'I had trouble with that — please try again.'; push({ role: 'ai', text: m }); await say(m); continue }
+      console.debug(`[voice] brain ${Math.round(performance.now() - tBrain)}ms`)
       if (!alive()) return
       await handleResponse(resp)
       // loop → re-open the mic for the next command
@@ -375,7 +416,7 @@ export function useVoiceAssistant() {
   useEffect(() => () => { sessionRef.current++; try { recRef.current?.cancel() } catch {}; stopSpeaking() }, [])
 
   return {
-    open, state, messages, level, pending, trace, ttsOn, minimized,
+    open, state, messages, level, pending, trace, ttsOn, minimized, liveText,
     start, stop, close, micButton, confirmPending, cancelPending, setTtsOn,
     setOpen, setMinimized,
   }

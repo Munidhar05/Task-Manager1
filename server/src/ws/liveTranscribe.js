@@ -9,12 +9,21 @@
 // us -> Sarvam:   { audio: { data, sample_rate: "16000", encoding: "audio/wav" } }
 // Sarvam -> us:   { type: "data",  data: { transcript } }  /  { type: "error", data: { message } }
 // us -> Client:   { transcript }  /  { error }
+//
+// TWO endpoints share this relay, with deliberately different policies:
+//   /api/meetings/live   managers/admins; language LOCKED (a 2h meeting mis-detected
+//                        into Malayalam poisons the whole transcript, so meetings
+//                        pin the language and let the user pick it in the recorder)
+//   /api/assistant/live  every role; language AUTO-DETECTED (a voice command is one
+//                        short code-mixed sentence — "Ravi ki assign cheyyi" locked
+//                        to en-IN comes out as English mush, and a wrong guess costs
+//                        one retry, not a meeting)
 import { WebSocketServer, WebSocket } from 'ws'
 import { verifyToken } from '../auth.js'
 
 const SARVAM_WS = 'wss://api.sarvam.ai/speech-to-text/ws'
 
-export function attachLiveTranscribe(server) {
+function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
   // `noServer` + manual upgrade routing so multiple WS endpoints can share one
   // HTTP server. (Binding with `{ server, path }` makes ws abort every mismatched
   // upgrade with a 400, which would kill the other endpoints' handshakes.)
@@ -22,24 +31,18 @@ export function attachLiveTranscribe(server) {
   server.on('upgrade', (req, socket, head) => {
     let pathname
     try { pathname = new URL(req.url, 'http://localhost').pathname } catch { return }
-    if (pathname !== '/api/meetings/live') return // not ours — let another handler take it
+    if (pathname !== path) return // not ours — let another handler take it
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
   })
 
   wss.on('connection', (client, req) => {
     const url = new URL(req.url, 'http://localhost')
     const token = url.searchParams.get('token')
-    // Lock to a single language so live audio is never mis-transcribed into other
-    // Indian languages. Client may request one of en/hi/te; otherwise (or "unknown")
-    // fall back to SARVAM_LANGUAGE (default English).
-    const requested = url.searchParams.get('language')
-    const language = (requested && requested !== 'unknown')
-      ? requested
-      : (process.env.SARVAM_LANGUAGE || 'en-IN')
+    const language = pickLanguage(url.searchParams.get('language'))
 
-    // --- Auth: only managers/admins may stream a meeting ---
+    // --- Auth ---
     const user = verifyToken(token)
-    if (!user || (user.role !== 'manager' && user.role !== 'admin')) {
+    if (!user || !allowUser(user)) {
       try { client.send(JSON.stringify({ error: 'Authentication required' })) } catch {}
       return client.close(4401, 'unauthorized')
     }
@@ -70,6 +73,10 @@ export function attachLiveTranscribe(server) {
 
     sarvam.on('open', () => {
       sarvamReady = true
+      // Tell the client the upstream is live — the assistant uses this to start
+      // its turn clock only once audio can actually flow, so a slow Sarvam
+      // handshake doesn't eat into the user's speech window.
+      toClient({ ready: true })
       while (pending.length && sarvam.readyState === WebSocket.OPEN) sarvam.send(pending.shift())
     })
     sarvam.on('message', (raw) => {
@@ -92,4 +99,30 @@ export function attachLiveTranscribe(server) {
   })
 
   return wss
+}
+
+export function attachLiveTranscribe(server) {
+  return attachSarvamRelay(server, {
+    path: '/api/meetings/live',
+    // Only managers/admins may stream a meeting.
+    allowUser: (u) => u.role === 'manager' || u.role === 'admin',
+    // Lock to a single language so live meeting audio is never mis-transcribed into
+    // other Indian languages. Client may request one of en/hi/te; otherwise (or
+    // "unknown") fall back to SARVAM_LANGUAGE (default English).
+    pickLanguage: (requested) => (requested && requested !== 'unknown')
+      ? requested
+      : (process.env.SARVAM_LANGUAGE || 'en-IN'),
+  })
+}
+
+export function attachAssistantLive(server) {
+  return attachSarvamRelay(server, {
+    path: '/api/assistant/live',
+    // Voice commands are for everyone — same as POST /assistant/command.
+    allowUser: () => true,
+    // Auto-detect by default: commands are code-mixed Telugu/Hindi/English and the
+    // meeting-style en-IN lock mangles them. VOICE_STT_LANGUAGE pins it if a
+    // deployment finds auto-detect drifting into other languages.
+    pickLanguage: () => process.env.VOICE_STT_LANGUAGE || 'unknown',
+  })
 }
