@@ -146,6 +146,7 @@ GROUNDING RULES:
 - Today's date is ${today()}. The user is ${user.name}.
 - Be concise and conversational — short sentences or compact bullet points suited to a chat bubble. No markdown headers or tables.
 - When specific tasks are relevant to your answer, put their ids in "task_ids" (max 12) so the UI can show them as clickable cards. Use [] when none apply.
+- Ids are for "task_ids" ONLY. NEVER write an internal id (task_xxx, mtg_xxx, usr_xxx) inside "answer" — the reply is SPOKEN ALOUD, and an id read out letter by letter is noise. Refer to things by their title or name.
 
 Respond with ONLY a JSON object, no markdown fences:
 {"answer": "your reply text", "task_ids": ["id1","id2"]}`
@@ -300,5 +301,14 @@ export async function chatAnswer(query, user, history = [], onUsage) {
   const byId = new Map(tasks.map((t) => [t.id, t]))
   const cards = parsed.task_ids.map((id) => byId.get(id)).filter(Boolean).map(toCard)
 
-  return { answer: parsed.answer, tasks: cards, engine }
+  // Belt and braces on top of the prompt rule: the answer is read aloud by TTS,
+  // and models still occasionally cite an internal id mid-sentence ("(task_una8…)").
+  // Strip them — the surrounding sentence already names the thing.
+  const spoken = parsed.answer
+    .replace(/\s*\(\s*(?:task|mtg|usr|ntf|conv)_[a-z0-9]+\s*\)/gi, '')
+    .replace(/\b(?:task|mtg|usr|ntf|conv)_[a-z0-9]+\b/gi, 'it')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+
+  return { answer: spoken, tasks: cards, engine }
 }

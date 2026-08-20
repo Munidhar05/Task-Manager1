@@ -39,10 +39,14 @@ function downsampleTo16k(input: Float32Array, inputRate: number): Float32Array {
 }
 
 // Start streaming mic PCM to `onFrame` (called with each base64 chunk).
-// `onError` fires if mic access fails.
+// `onError` fires if mic access fails. `onLevel` (optional) reports the RMS level
+// (0..1) of each frame — the voice assistant runs its silence detection on the
+// SAME samples it streams, so the meter and the endpointer can never disagree
+// about what the mic heard.
 export async function startPcmStream(
   onFrame: (base64: string) => void,
   onError: (message: string) => void,
+  onLevel?: (rms: number) => void,
 ): Promise<PcmStream> {
   let stream: MediaStream
   try {
@@ -63,6 +67,11 @@ export async function startPcmStream(
   const processor = ctx.createScriptProcessor(4096, 1, 1)
   processor.onaudioprocess = (e) => {
     const input = e.inputBuffer.getChannelData(0)
+    if (onLevel) {
+      let sum = 0
+      for (let i = 0; i < input.length; i++) sum += input[i] * input[i]
+      onLevel(Math.sqrt(sum / input.length))
+    }
     const down = downsampleTo16k(input, ctx.sampleRate)
     onFrame(float32ToBase64Pcm16(down))
   }

@@ -23,10 +23,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { startRecording, canRecord, Recording } from './recorder'
+import { startRecording, canRecord } from './recorder'
+import { startLiveListen } from './liveStt'
 import { speak, stopSpeaking, isTtsEnabled, setTtsEnabled } from './tts'
 import { runPlan, answerAndResume, type Outcome, type ToolContext } from './actionEngine'
-import { planFromServer } from './serverPlan'
+import { planFromServer, undoPlan } from './serverPlan'
 import { on, resetTrace, emit, type TraceStep } from './agentBus'
 import { setAgentTurn } from './agentTurn'
 // Side-effect import: registers every tool in the table. Without it the engine
@@ -55,6 +56,9 @@ export type Suspended = Extract<Outcome, { status: 'suspended' }>
 
 const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|okey|confirm|confirmed|correct|right|go ahead|do it|please do|haan|haa|ha|ji|karo|sari|sare|avunu|cheyyi|cheyandi|cheyyandi)\b/i
 const NO_RE = /\b(no|nope|nah|cancel|cancelled|don'?t|stop|nahi|nahin|mat|vddu|venda|vodhu|leave it|never mind|nevermind)\b/i
+// Undo the LAST instant mutation. Matched client-side, no LLM round-trip — the one
+// moment the user most wants speed is right after watching the wrong thing happen.
+const UNDO_RE = /\b(undo|revert|reverse (?:that|it)|take (?:that|it) back|wapas|vapas|venakki)\b/i
 
 export function useVoiceAssistant() {
   const navigate = useNavigate()
@@ -72,9 +76,34 @@ export function useVoiceAssistant() {
   // can keep giving commands without re-triggering the wake word.
   const [minimized, setMinimized] = useState(false)
 
+  // What the streaming recognizer has heard SO FAR this turn — rendered live in
+  // the panel so the user watches their words land as they speak. Doubles as
+  // failure transparency: a mishear is visible before the agent acts on it.
+  const [liveText, setLiveText] = useState('')
+
   // Refs mirror state for use inside the async turn loop (avoids stale closures).
   const sessionRef = useRef(0)          // bump to invalidate an in-flight loop
-  const recRef = useRef<Recording | null>(null)
+  // Both capture paths (streaming listener / classic recorder) expose stop/cancel;
+  // the ref only ever drives those two, so the union keeps micButton path-agnostic.
+  const recRef = useRef<{ stop: () => void; cancel: () => void } | null>(null)
+  // Whether this deployment supports streaming STT. Optimistic until a connection
+  // attempt fails (no Sarvam key, proxy without WS) — then the classic
+  // record→upload→transcribe path carries every later turn, no re-probing.
+  const liveSttRef = useRef(true)
+  // Undo-first state. `undoCandidate` is the inverse that arrived with a 'do'
+  // response — it only becomes `undoRef` (the thing "undo" replays) once the
+  // action actually SUCCEEDED, so undo can never "revert" a change that failed.
+  // One level deep by design: "undo" means the last thing, not a history walk.
+  const undoRef = useRef<{ action: any; turnId: string | null } | null>(null)
+  const undoCandidateRef = useRef<any>(undefined)   // undefined = this turn wasn't a mutation
+  const undoHintedRef = useRef(false)   // say "say undo to reverse it" once per session
+  // The server logs every command as a voice_turn and wants to know what became of
+  // it — executed, cancelled, undone, failed. That label is what turns the log into
+  // training data (and it gates alias learning), so report faithfully, best-effort.
+  const turnRef = useRef<string | null>(null)
+  const reportOutcome = (turnId: string | null, outcome: 'executed' | 'cancelled' | 'undone' | 'failed') => {
+    if (turnId) api.post(`/assistant/turns/${turnId}/outcome`, { outcome }).catch(() => {})
+  }
   const pendingRef = useRef<Suspended | null>(null)
   const msgsRef = useRef<VoiceMsg[]>([])
   const emptyStreakRef = useRef(0)
@@ -141,6 +170,8 @@ export function useVoiceAssistant() {
     sessionRef.current++
     try { recRef.current?.cancel() } catch {}
     recRef.current = null
+    undoRef.current = null
+    undoCandidateRef.current = undefined
     openRef.current = false
     setMinimized(false)
     setOpen(false)
@@ -169,19 +200,34 @@ export function useVoiceAssistant() {
     if (outcome.status === 'failed') {
       setPend(null)
       setMinimized(false)
+      undoCandidateRef.current = undefined       // a failed action must not become undoable
+      reportOutcome(turnRef.current, 'failed'); turnRef.current = null
       push({ role: 'ai', text: outcome.say })
       await say(outcome.say)
       return
     }
     setPend(null)
+    reportOutcome(turnRef.current, 'executed'); turnRef.current = null
+    // The inverse becomes live only now that the action actually succeeded — so
+    // "undo" can never claim to revert a change that never happened. Hint at it
+    // the first time only; repeating it on every action is nagging, not teaching.
+    let hint = ''
+    if (undoCandidateRef.current !== undefined) {
+      undoRef.current = undoCandidateRef.current
+      undoCandidateRef.current = undefined
+      if (undoRef.current && !undoHintedRef.current) {
+        undoHintedRef.current = true
+        hint = ' Say undo if you want to reverse it.'
+      }
+    }
     const data = outcome.results.find((r) => r.data)?.data
     // A card has figures worth reading, so expand for it. A plain success stays
     // minimized: the result is the page behind the bar (the highlighted new row),
     // and popping the panel back over it would hide the thing just accomplished.
     const card = data?.type === 'task' ? undefined : data
     if (card) setMinimized(false)
-    push({ role: 'ai', text: outcome.say, card })
-    await say(outcome.say)
+    push({ role: 'ai', text: outcome.say + hint, card })
+    await say(outcome.say + hint)
     // Speak first, THEN stand down: the reply has to be heard, and the gate's tail
     // is what keeps it off the meeting's transcript.
     if (outcome.results.some((r) => r.endSession) && sessionRef.current === turn) yieldSession()
@@ -236,6 +282,22 @@ export function useVoiceAssistant() {
       return
     }
 
+    // A fresh command changes what "undo" refers to. A MUTATING plan stages its
+    // own inverse (possibly none) and invalidates the previous one; a navigation
+    // or meeting-control plan leaves the standing undo alone — moving around the
+    // app shouldn't cost the user their safety net.
+    const MUTATING = new Set(['create_task', 'set_status', 'assign_task', 'update_task', 'add_comment',
+      'send_message', 'delete_task', 'plan', 'read_notifications', 'invite_user', 'remove_user', 'approve_suggestions'])
+    turnRef.current = resp?.turn_id || null
+    if (MUTATING.has(String(bridged.plan.intent || ''))) {
+      undoRef.current = null
+      // The turn id rides along so an eventual "undo" can relabel THIS turn as
+      // undone on the server — the strongest "the agent got it wrong" signal there is.
+      undoCandidateRef.current = bridged.undo ? { action: bridged.undo, turnId: resp?.turn_id || null } : null
+    } else {
+      undoCandidateRef.current = undefined
+    }
+
     // Shrink to the mini bar before ANY plan runs. The full-screen panel covers the
     // whole app, so leaving it up while the agent fills a form means the user is
     // told what happened but never sees it — which defeats the entire point of
@@ -257,27 +319,54 @@ export function useVoiceAssistant() {
     const alive = () => sessionRef.current === mySession && openRef.current
 
     while (alive()) {
-      // 1. Listen
-      setState('listening'); setLevel(0)
-      let blob: Blob
-      try {
-        const rec = await startRecording({ onLevel: (l) => { if (alive()) setLevel(l) } })
-        recRef.current = rec
-        blob = await rec.done
-      } catch {
-        const m = 'I need microphone access to listen.'
-        push({ role: 'ai', text: m }); setState('idle'); await speak(m); return
-      }
-      recRef.current = null
-      if (!alive()) return
-
-      // 2. Transcribe. Silence ends the loop → armed; any pending confirmation
-      // stays on screen so its yes/no buttons still work.
-      setState('processing'); setLevel(0)
-      if (!blob.size) { endOnSilence(); return }
+      // 1+2. Listen and transcribe. The streaming path does both AT ONCE: PCM goes
+      // up while the user speaks, so the transcript is ready the moment they stop
+      // — no upload, no REST transcription wait. The classic record→upload path is
+      // the fallback for deployments without Sarvam streaming (and mic failures).
+      setState('listening'); setLevel(0); setLiveText('')
+      const t0 = performance.now()
       let text = ''
-      try { text = await transcribeBlob(blob) } catch { /* treat as empty */ }
-      if (!alive()) return
+      let listened = false
+      if (liveSttRef.current) {
+        try {
+          const live = await startLiveListen({
+            onPartial: (t) => { if (alive()) setLiveText(t) },
+            onLevel: (l) => { if (alive()) setLevel(l) },
+          })
+          recRef.current = live
+          text = await live.done
+          listened = true
+          console.debug(`[voice] listen+stt (streaming) ${Math.round(performance.now() - t0)}ms`)
+        } catch {
+          // Couldn't establish the stream — remember and fall through to classic.
+          liveSttRef.current = false
+        }
+        recRef.current = null
+        setLiveText('')
+        if (!alive()) return
+      }
+      if (!listened) {
+        let blob: Blob
+        try {
+          const rec = await startRecording({ onLevel: (l) => { if (alive()) setLevel(l) } })
+          recRef.current = rec
+          blob = await rec.done
+        } catch {
+          const m = 'I need microphone access to listen.'
+          push({ role: 'ai', text: m }); setState('idle'); await speak(m); return
+        }
+        recRef.current = null
+        if (!alive()) return
+
+        // Silence ends the loop → armed; any pending confirmation stays on screen
+        // so its yes/no buttons still work.
+        setState('processing'); setLevel(0)
+        if (!blob.size) { endOnSilence(); return }
+        try { text = await transcribeBlob(blob) } catch { /* treat as empty */ }
+        console.debug(`[voice] listen+stt (classic) ${Math.round(performance.now() - t0)}ms`)
+        if (!alive()) return
+      }
+      setState('processing'); setLevel(0)
       if (!text) {
         emptyStreakRef.current++
         if (emptyStreakRef.current >= 2) { endOnSilence(); return }
@@ -300,17 +389,44 @@ export function useVoiceAssistant() {
         // confirm / recover are yes-or-no.
         const yes = YES_RE.test(text), no = NO_RE.test(text)
         if (yes && !no) { await resume(pend, true); continue }
-        if (no && !yes) { await resume(pend, false); continue }
+        if (no && !yes) {
+          // Label first: the engine answers a declined confirm with a DONE outcome
+          // ("Okay, cancelled."), which must not be recorded as executed.
+          reportOutcome(turnRef.current, 'cancelled'); turnRef.current = null
+          await resume(pend, false); continue
+        }
         // Neither, or both — the user said something else entirely, which in
         // practice means they are correcting themselves. Drop the pending plan and
         // treat this as a fresh command.
         setPend(null)
       }
 
+      // 3.5. Spoken undo — resolved right here, no server round-trip. The moment a
+      // user most wants speed is right after watching the wrong thing happen, and
+      // the inverse action is already sitting in hand.
+      if (UNDO_RE.test(text)) {
+        const u = undoRef.current
+        undoRef.current = null
+        undoCandidateRef.current = undefined     // an undo is not itself undoable
+        if (u) {
+          // Relabel the original turn as undone — the clearest correction signal
+          // the learning log gets.
+          reportOutcome(u.turnId, 'undone')
+          turnRef.current = null                 // the undo plan itself is not a server turn
+          setMinimized(true)
+          await execute(undoPlan(u.action))
+          continue
+        }
+        await say("There's nothing recent I can undo.")
+        continue
+      }
+
       // 4. Ask the brain what to do, then act on it.
       let resp: any
+      const tBrain = performance.now()
       try { resp = await sendCommand(text) }
       catch { const m = 'I had trouble with that — please try again.'; push({ role: 'ai', text: m }); await say(m); continue }
+      console.debug(`[voice] brain ${Math.round(performance.now() - tBrain)}ms`)
       if (!alive()) return
       await handleResponse(resp)
       // loop → re-open the mic for the next command
@@ -334,6 +450,10 @@ export function useVoiceAssistant() {
     recRef.current = null
     stopSpeaking()
     setPend(null)
+    // The session's context is gone with it — an "undo" spoken minutes later, cold,
+    // reverting something no longer on screen would be a surprise, not a rescue.
+    undoRef.current = null
+    undoCandidateRef.current = undefined
     setMinimized(false)
     setState('idle')
   }, [])
@@ -367,6 +487,8 @@ export function useVoiceAssistant() {
   const cancelPending = useCallback(() => {
     const p = pendingRef.current
     setPend(null)
+    undoCandidateRef.current = undefined   // the action it belonged to was abandoned
+    reportOutcome(turnRef.current, 'cancelled'); turnRef.current = null
     const m = 'Okay, cancelled.'
     push({ role: 'ai', text: m }); speak(m)
     if (p) resetTrace('cancelled')
@@ -375,7 +497,7 @@ export function useVoiceAssistant() {
   useEffect(() => () => { sessionRef.current++; try { recRef.current?.cancel() } catch {}; stopSpeaking() }, [])
 
   return {
-    open, state, messages, level, pending, trace, ttsOn, minimized,
+    open, state, messages, level, pending, trace, ttsOn, minimized, liveText,
     start, stop, close, micButton, confirmPending, cancelPending, setTtsOn,
     setOpen, setMinimized,
   }

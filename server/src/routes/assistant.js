@@ -2,17 +2,19 @@ import { Router } from 'express'
 import { authRequired } from '../auth.js'
 import { answerQuery } from '../ai/assistant.js'
 import { chatAnswer, hasLLM } from '../ai/assistantChat.js'
-import { routeCommand, STATUSES, PRIORITIES, MEETING_TITLES } from '../ai/voiceTools.js'
+import { STATUSES, PRIORITIES, MEETING_TITLES } from '../ai/voiceTools.js'
+import { agentCommand } from '../ai/voiceAgent.js'
 import { dateRange, overview, workload, groupTasks } from '../ai/voiceAnalytics.js'
 import { listMeetings, resolveMeeting, meetingSummary, askWhichMeeting } from '../ai/voiceMeetings.js'
+import { getLeaderboard } from '../performance.js'
 // The voice router works with ANY configured provider (OpenRouter/Claude/OpenAI),
 // unlike assistantChat's hasLLM which only knows about Claude/OpenAI.
 import { hasLLM as hasVoiceLLM } from '../ai/voiceTask.js'
-import { resolveUser } from '../ai/extractor.js'
+import { resolveUser, resolveUserInfo, findSpokenAlias } from '../ai/extractor.js'
 import { parseDueDate } from '../ai/dates.js'
 import { recordUsage } from '../ai/usage.js'
 import { db } from '../db.js'
-import { id, now, emailDomainAllowed, orgAllowedDomains } from '../util.js'
+import { id, now, audit, emailDomainAllowed, orgAllowedDomains } from '../util.js'
 
 // Same shape routes/users.js and routes/invites.js accept, so voice can't create
 // an address the forms would have rejected.
@@ -207,6 +209,12 @@ const clarify = (say) => ({
 })
 const answer = (say, extra = {}) => ({ mode: 'answer', say, ...extra })
 const confirm = (say, action) => ({ mode: 'confirm', say, action })
+// Undo-first: a reversible mutation runs IMMEDIATELY — no yes/no — and carries its
+// inverse, computed HERE from the row's current state (the one moment the "before"
+// values are still readable). The client keeps the inverse and replays it through
+// the same action path when the user says "undo". One-way doors (delete, remove a
+// person, message a human) never come through here; they keep `confirm`.
+const perform = (say, action, undo = null) => ({ mode: 'do', say, action, undo })
 
 // Express 4 does not catch rejections from async handlers, so an unexpected throw
 // here would take the whole process down. Wrap the dispatcher and degrade to a
@@ -228,9 +236,12 @@ async function handleCommand(req, res) {
   const tasks = commandScopedTasks(user)
   const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(user.org_id)
 
+  // The agentic loop (voiceAgent.js): investigates via search tools, then returns
+  // the same contract the legacy one-shot router produced — and falls back to that
+  // router internally on any failure, so this call site never needs to know.
   let call
   try {
-    call = await routeCommand(transcript, {
+    call = await agentCommand(transcript, {
       user, tasks, users, history,
       onUsage: (u) => recordUsage({ orgId: user.org_id, userId: user.id, feature: 'voice_command', ...u }),
     })
@@ -239,7 +250,46 @@ async function handleCommand(req, res) {
     return res.json(clarify("I couldn't process that just now — please try again."))
   }
 
+  // ---- learning log ---------------------------------------------------------
+  // Every routed turn is recorded, and the response carries its turn_id so the
+  // client can report what BECAME of it (executed / cancelled / undone / failed)
+  // — that outcome is the label that turns this log into training data. Wrapping
+  // res.json here catches every exit path of the dispatcher without threading a
+  // logger through thirty return statements.
+  const turnLearn = {}   // side-lessons (e.g. a fuzzy name match) — applied on outcome=executed
+  const tStart = Date.now()
+  const sendJson = res.json.bind(res)
+  res.json = (payload) => {
+    try {
+      const tid = id('vtn')
+      db.prepare(`INSERT INTO voice_turns
+        (id, org_id, user_id, transcript, tool, args, mode, say, engine, lookups, rounds, latency_ms, learn, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(tid, user.org_id, user.id, transcript, call.tool || null,
+          JSON.stringify(payload.action || call.args || null), payload.mode || null,
+          (payload.say || '').slice(0, 500), call.meta?.engine || null,
+          call.meta?.lookups ?? null, call.meta?.rounds ?? null,
+          call.meta?.ms ?? Date.now() - tStart,
+          Object.keys(turnLearn).length ? JSON.stringify(turnLearn) : null, now())
+      return sendJson({ ...payload, turn_id: tid })
+    } catch (err) {
+      console.warn('[assistant] turn log failed:', err.message)
+      return sendJson(payload)
+    }
+  }
+
   const a = call.args || {}
+
+  // A lesson staged by the agent's search_people lookup (the model corrects a
+  // misheard name itself and passes the CANONICAL form on, so the spoken form
+  // only survives inside the lookup). Accept it only if the final action really
+  // targets that person — a search that informed nothing teaches nothing.
+  if (call.meta?.aliasLesson) {
+    const named = a.assignee_name || a.recipient_name || a.person_name || a.person
+    const resolved = named ? resolveUser(user.org_id, named) : null
+    if (resolved && resolved.id === call.meta.aliasLesson.user_id) turnLearn.alias = call.meta.aliasLesson
+  }
+
   const findTask = (id) => tasks.find((t) => t.id === id) || null
   const t0 = new Date().toISOString().slice(0, 10)
   const dueFrom = (raw) => (raw ? parseDueDate(raw, t0).date || null : null)
@@ -326,12 +376,18 @@ async function handleCommand(req, res) {
 
     case 'create_task': {
       if (!a.title) return res.json(clarify('What should the task be?'))
-      const match = a.assignee_name ? resolveUser(user.org_id, a.assignee_name) : null
+      const info = a.assignee_name ? resolveUserInfo(user.org_id, a.assignee_name) : { user: null, tier: 0 }
+      const match = info.user
+      if (match && info.tier >= 4) turnLearn.alias = { user_id: match.id, spoken: a.assignee_name }
+      else if (match) { const near = findSpokenAlias(transcript, match); if (near) turnLearn.alias = { user_id: match.id, spoken: near } }
       const priority = PRIORITIES.includes(a.priority) ? a.priority : 'Medium'
       const due = dueFrom(a.due_date_raw)
       const who = match ? ` for ${match.name}` : (a.assignee_name ? ` for ${a.assignee_name} (not found — leaving it unassigned)` : '')
-      return res.json(confirm(
-        `Create a ${priority.toLowerCase()} priority task "${a.title}"${who}${due ? ` due ${due}` : ''}. Shall I create it?`,
+      // No undo action: employees can't delete tasks, so a create can't be inverted
+      // uniformly. It doesn't need one — the create runs through the real New Task
+      // form on screen, field by field, which IS the review step.
+      return res.json(perform(
+        `Creating a ${priority.toLowerCase()} priority task "${a.title}"${who}${due ? ` due ${due}` : ''}.`,
         { kind: 'create_task', summary: `Create "${a.title}"`, body: { title: a.title, description: a.description || '', assignee_id: match?.id || null, priority, due_date: due } },
       ))
     }
@@ -351,31 +407,57 @@ async function handleCommand(req, res) {
         body.due_date = due; body.due_date_raw = null; bits.push(`due ${due}`)
       }
       if (!bits.length) return res.json(clarify(`What should I change about "${t.title}"?`))
-      return res.json(confirm(`For "${t.title}": ${bits.join(', ')}. Confirm?`,
-        { kind: 'update_task', task_id: t.id, summary: `"${t.title}" — ${bits.join(', ')}`, body }))
+      // The "before" values of exactly the fields being changed become the undo.
+      // The scoped snapshot row doesn't carry description/progress, so read the
+      // full row while it still holds the old values.
+      const full = db.prepare('SELECT title, description, priority, progress, due_date, due_date_raw FROM tasks WHERE id=? AND org_id=?').get(t.id, user.org_id)
+      const undoBody = {}
+      for (const f of ['title', 'description', 'priority', 'progress']) if (f in body) undoBody[f] = full[f]
+      if ('due_date' in body) { undoBody.due_date = full.due_date; undoBody.due_date_raw = full.due_date_raw }
+      return res.json(perform(`Updating "${t.title}": ${bits.join(', ')}.`,
+        { kind: 'update_task', task_id: t.id, summary: `"${t.title}" — ${bits.join(', ')}`, body },
+        { kind: 'update_task', task_id: t.id, summary: `put "${t.title}" back as it was`, body: undoBody }))
     }
 
     case 'set_status': {
       const t = needTask('update'); if (t.mode) return res.json(t)
       if (!STATUSES.includes(a.status)) return res.json(clarify(`What status should "${t.title}" be?`))
-      return res.json(confirm(`Mark "${t.title}" as ${a.status}. Confirm?`,
-        { kind: 'set_status', task_id: t.id, summary: `"${t.title}" → ${a.status}`, body: { status: a.status } }))
+      return res.json(perform(`Marking "${t.title}" as ${a.status}.`,
+        { kind: 'set_status', task_id: t.id, summary: `"${t.title}" → ${a.status}`, body: { status: a.status } },
+        t.status !== a.status
+          ? { kind: 'set_status', task_id: t.id, summary: `put "${t.title}" back to ${t.status}`, body: { status: t.status } }
+          : null))
     }
 
     case 'assign_task': {
       const t = needTask('reassign'); if (t.mode) return res.json(t)
-      const match = a.assignee_name ? resolveUser(user.org_id, a.assignee_name) : null
+      const info = a.assignee_name ? resolveUserInfo(user.org_id, a.assignee_name) : { user: null, tier: 0 }
+      const match = info.user
       if (!match) return res.json(clarify(a.assignee_name ? `I couldn't find "${a.assignee_name}" — who should I assign it to?` : 'Who should I assign it to?'))
-      return res.json(confirm(`Assign "${t.title}" to ${match.name}. Confirm?`,
-        { kind: 'assign_task', task_id: t.id, summary: `"${t.title}" → ${match.name}`, body: { assignee_id: match.id } }))
+      // Tier 4-5 = the name only matched through fuzz ("Rabi Kumar" → Ravi Kumar).
+      // Stage it as an alias lesson; it's saved only if the assignment stands.
+      // Tier ≤3 can still hide a mishear: the agent normalizes names silently from
+      // its team list, so also check what the TRANSCRIPT actually called them.
+      if (info.tier >= 4) turnLearn.alias = { user_id: match.id, spoken: a.assignee_name }
+      else { const near = findSpokenAlias(transcript, match); if (near) turnLearn.alias = { user_id: match.id, spoken: near } }
+      return res.json(perform(`Assigning "${t.title}" to ${match.name}.`,
+        { kind: 'assign_task', task_id: t.id, summary: `"${t.title}" → ${match.name}`, body: { assignee_id: match.id } },
+        match.id !== t.assignee_id
+          // Undo summaries all start with "put …" so the client can speak them
+          // after "I've" and get a sentence ("Okay — I've put X back with Ravi.").
+          ? { kind: 'assign_task', task_id: t.id, summary: `put "${t.title}" back ${t.assignee_name ? `with ${t.assignee_name}` : 'to Unassigned'}`, body: { assignee_id: t.assignee_id || null } }
+          : null))
     }
 
     case 'add_comment': {
       const t = needTask('comment on'); if (t.mode) return res.json(t)
       const body = String(a.body || '').trim()
       if (!body) return res.json(clarify(`What should the comment on "${t.title}" say?`))
-      return res.json(confirm(`Comment on "${t.title}": "${body}". Post it?`,
-        { kind: 'add_comment', task_id: t.id, summary: `Comment on "${t.title}"`, body: { body } }))
+      return res.json(perform(`Adding your comment to "${t.title}": "${body}".`,
+        { kind: 'add_comment', task_id: t.id, summary: `Comment on "${t.title}"`, body: { body } },
+        // The comment's id doesn't exist yet, so the inverse is "delete my most
+        // recent comment on this task" — which is exactly what was just posted.
+        { kind: 'delete_own_comment', task_id: t.id, summary: `removed your comment from "${t.title}"` }))
     }
 
     case 'delete_task': {
@@ -386,8 +468,11 @@ async function handleCommand(req, res) {
 
     // ---- chats: send a real direct message in the Chats section -------------
     case 'send_message': {
-      const match = a.recipient_name ? resolveUser(user.org_id, a.recipient_name) : null
+      const info = a.recipient_name ? resolveUserInfo(user.org_id, a.recipient_name) : { user: null, tier: 0 }
+      const match = info.user
       if (!match) return res.json(clarify(a.recipient_name ? `I couldn't find "${a.recipient_name}" — who should I message?` : 'Who should I message?'))
+      if (info.tier >= 4) turnLearn.alias = { user_id: match.id, spoken: a.recipient_name }
+      else { const near = findSpokenAlias(transcript, match); if (near) turnLearn.alias = { user_id: match.id, spoken: near } }
       if (match.id === user.id) return res.json(clarify("That's you — who did you want to message?"))
       const body = String(a.body || '').trim()
       if (!body) return res.json(clarify(`What should I tell ${match.name}?`))
@@ -483,6 +568,93 @@ async function handleCommand(req, res) {
       return res.json(answer(say, { navigate: { url }, data: { type: 'group', title: `${what} by ${opts.group_by}`, rows, total } }))
     }
 
+    // ---- leaderboard & notifications -----------------------------------------
+    case 'get_leaderboard': {
+      // Same period resolution as routes/scores.js: an org-wide custom window (when
+      // a manager set one) is the default everyone lands on, else calendar month.
+      const o = db.prepare('SELECT leaderboard_from AS f, leaderboard_to AS t FROM organizations WHERE id=?').get(user.org_id)
+      const range = o?.f && o?.t ? { from: o.f, to: o.t } : null
+      const period = ['day', 'month', 'all'].includes(a.period) ? a.period : (range ? 'custom' : 'month')
+      const board = getLeaderboard(user.org_id, { period, from: range?.from, to: range?.to })
+      const label = { day: 'today', month: 'this month', all: 'all time', custom: 'in the current window' }[period]
+
+      if (a.person_name) {
+        const who = resolveUser(user.org_id, a.person_name)
+        if (!who) return res.json(clarify(`I couldn't find "${a.person_name}" on the team.`))
+        const row = board.ranked.find((r) => r.id === who.id)
+        const self = who.id === user.id
+        const name = self ? 'You' : who.name
+        const say = !row || !row.score
+          ? `${name} ${self ? "haven't" : "hasn't"} scored any points ${label} yet.`
+          : `${name} ${self ? 'are' : 'is'} ranked #${row.rank} ${label} with ${row.score} points.`
+        return res.json(answer(say, { navigate: { url: '/leaderboard' } }))
+      }
+
+      const top = board.ranked.filter((r) => r.score > 0).slice(0, 3)
+      const say = top.length
+        ? `${label[0].toUpperCase()}${label.slice(1)}: ${top.map((r, i) => `#${i + 1} ${r.name} with ${r.score} points`).join(', ')}.`
+        : `Nobody has scored any points ${label} yet.`
+      return res.json(answer(say, {
+        navigate: { url: '/leaderboard' },
+        data: { type: 'group', title: `Leaderboard (${label})`, rows: top.map((r) => ({ name: r.name, c: r.score })), total: board.total_points },
+      }))
+    }
+
+    case 'get_unread_messages': {
+      // Same unread definition as the chat list itself: messages from others,
+      // newer than my last-read mark, not deleted, not hidden for me.
+      const rows = db.prepare(`
+        SELECT u.name, COUNT(*) c FROM chat_messages msg
+        JOIN chat_participants me ON me.conversation_id = msg.conversation_id AND me.user_id = ?
+        JOIN users u ON u.id = msg.sender_id
+        WHERE msg.sender_id != ? AND msg.deleted_for_all = 0
+          AND msg.created_at > COALESCE(me.last_read_at, '')
+          AND msg.id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id = ?)
+        GROUP BY msg.sender_id ORDER BY c DESC
+      `).all(user.id, user.id, user.id)
+      const total = rows.reduce((s, r) => s + r.c, 0)
+      if (!total) return res.json(answer('No new messages — your chats are all caught up.'))
+      const from = rows.slice(0, 3).map((r) => `${r.c} from ${r.name}`).join(', ')
+      return res.json(answer(
+        `You have ${total} unread message${total === 1 ? '' : 's'} — ${from}${rows.length > 3 ? ', and more' : ''}.`,
+        { navigate: { url: '/chats' } },
+      ))
+    }
+
+    case 'approve_suggestions': {
+      const m = resolveMeeting(user, { title: a.title, date: a.date, latest: a.latest === true || a.latest === 'true' })
+      if (m.none) return res.json(clarify("I couldn't find that meeting."))
+      if (m.candidates) return res.json(clarify(askWhichMeeting(m.candidates)))
+      const counts = db.prepare(`
+        SELECT COUNT(*) AS pending,
+               SUM(CASE WHEN suggested_assignee_id IS NOT NULL THEN 1 ELSE 0 END) AS owned
+        FROM suggested_tasks WHERE meeting_id = ? AND status = 'pending'
+      `).get(m.meeting.id)
+      if (!counts.pending) return res.json(answer(`"${m.meeting.title}" has no pending suggestions — they've all been handled.`, { navigate: { url: `/meetings/${m.meeting.id}` } }))
+      if (!counts.owned) return res.json(answer(`"${m.meeting.title}" has ${counts.pending} pending suggestion${counts.pending === 1 ? '' : 's'}, but none has an owner yet — open the meeting to pick who does what.`, { navigate: { url: `/meetings/${m.meeting.id}` } }))
+      const skipped = counts.pending - counts.owned
+      // Confirm tier, not undo-first: this creates real tasks and notifies every
+      // assignee — outward-facing, so it stops for a yes like send_message does.
+      return res.json(confirm(
+        `Assign ${counts.owned} suggested task${counts.owned === 1 ? '' : 's'} from "${m.meeting.title}" to their owners${skipped ? ` (${skipped} without an owner will stay pending)` : ''}. Go ahead?`,
+        { kind: 'approve_suggestions', meeting_id: m.meeting.id, summary: `Assigned ${counts.owned} suggested task${counts.owned === 1 ? '' : 's'} from "${m.meeting.title}"` },
+      ))
+    }
+
+    case 'get_notifications': {
+      const rows = db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').all(user.id)
+      const unread = rows.filter((n) => !n.read)
+      if (!unread.length) return res.json(answer("You're all caught up — no unread notifications."))
+      const preview = unread.slice(0, 3).map((n) => n.message).filter(Boolean).join('. ')
+      return res.json(answer(
+        `You have ${unread.length} unread notification${unread.length === 1 ? '' : 's'}. ${preview ? `Most recent: ${preview}.` : ''}`.trim(),
+      ))
+    }
+
+    case 'mark_notifications_read':
+      return res.json(perform('Marking all your notifications as read.',
+        { kind: 'read_notifications', summary: 'Mark all notifications read' }))
+
     // ---- meetings -----------------------------------------------------------
     case 'start_meeting': {
       // Never start an untitled recording. Starting is the one meeting action that
@@ -552,6 +724,54 @@ async function handleCommand(req, res) {
       return res.json(clarify(a.question || call.say))
   }
 }
+
+// ---------------------------------------------------------------------------
+// LEARNING LOOP — outcome reports and the lessons they unlock.
+// ---------------------------------------------------------------------------
+
+// Apply a turn's staged lesson. Today that is alias learning: a spoken name that
+// only matched through fuzz gets saved as a proper alias, so the same mishear
+// resolves exactly (tier 2) forever after — the agent stops re-guessing what it
+// has already been proven right about once.
+function applyTurnLessons(turn) {
+  let lesson
+  try { lesson = JSON.parse(turn.learn || 'null') } catch { return }
+  if (!lesson?.alias) return
+  const alias = String(lesson.alias.spoken || '').toLowerCase().trim()
+  const target = db.prepare('SELECT * FROM users WHERE id=? AND org_id=?').get(lesson.alias.user_id, turn.org_id)
+  if (!target || alias.length < 3) return
+  const norm = (s) => String(s || '').toLowerCase().trim()
+  // Never learn an alias that collides with someone's actual identity — "kumar"
+  // must not silently become a shortcut to one Kumar when the org has two.
+  for (const u of db.prepare('SELECT id, name, aliases FROM users WHERE org_id=?').all(turn.org_id)) {
+    if (norm(u.name) === alias) return
+    if (u.id !== target.id && norm(u.name).split(/\s+/)[0] === alias) return
+    if ((u.aliases || '').split(',').map(norm).includes(alias)) return   // already known
+  }
+  const list = (target.aliases || '').split(',').map(norm).filter(Boolean)
+  if (list.length >= 12) return   // cap — an unbounded alias list degrades matching
+  list.push(alias)
+  db.prepare('UPDATE users SET aliases=? WHERE id=?').run(list.join(','), target.id)
+  audit(turn.org_id, turn.user_id, 'voice.alias_learned', 'user', target.id, `"${alias}" → ${target.name}`)
+  console.log(`[voice-learn] alias "${alias}" → ${target.name}`)
+}
+
+// The client reports what became of a turn: executed (it ran), cancelled (user
+// declined the confirmation), undone (user reversed it), failed (a step broke).
+// This label is what turns voice_turns into a training set — and it gates the
+// lessons: a guess is only learned once the outcome proves it right.
+const OUTCOMES = new Set(['executed', 'cancelled', 'undone', 'failed'])
+r.post('/turns/:id/outcome', (req, res) => {
+  const outcome = String(req.body?.outcome || '')
+  if (!OUTCOMES.has(outcome)) return res.status(400).json({ error: 'invalid outcome' })
+  const turn = db.prepare('SELECT * FROM voice_turns WHERE id=? AND user_id=?').get(req.params.id, req.user.id)
+  if (!turn) return res.status(404).json({ error: 'Not found' })
+  db.prepare('UPDATE voice_turns SET outcome=?, outcome_at=? WHERE id=?').run(outcome, now(), turn.id)
+  // First report only — an "undone" arriving after "executed" updates the label
+  // but must not re-apply (or un-apply) a lesson already acted on.
+  if (outcome === 'executed' && turn.learn && !turn.outcome) applyTurnLessons(turn)
+  res.json({ ok: true })
+})
 
 // Suggested prompts for the UI
 r.get('/suggestions', (req, res) => {

@@ -1,8 +1,9 @@
 // Text-to-speech proxy. The client posts a sentence and gets MP3 back; the
 // ElevenLabs key never leaves the server (see ai/speech.js for why).
 import { Router } from 'express'
+import { Readable, pipeline } from 'node:stream'
 import { authRequired } from '../auth.js'
-import { synthesize, ttsConfigured, ttsModel, TTS_MAX_CHARS } from '../ai/speech.js'
+import { synthesize, synthesizeStream, ttsConfigured, ttsModel, TTS_MAX_CHARS } from '../ai/speech.js'
 import { recordUsage } from '../ai/usage.js'
 
 const r = Router()
@@ -45,6 +46,40 @@ r.post('/speak', async (req, res) => {
     console.warn('[tts] synthesis failed:', err.message)
     // Never 500 here. A failed voice is not a failed action — the client speaks the
     // same sentence with the on-device voice and the user barely notices.
+    res.status(502).json({ error: 'TTS unavailable' })
+  }
+})
+
+// Streaming variant of /speak: MP3 bytes are piped through as ElevenLabs produces
+// them, so playback can begin before synthesis finishes. No cache-control here —
+// a partial stream must never be cached and replayed as if it were the whole clip;
+// the client keeps its own completed-blob cache instead.
+r.post('/stream', async (req, res) => {
+  const text = String(req.body?.text || '').trim()
+  if (!text) return res.status(400).json({ error: 'text required' })
+  if (!ttsConfigured()) return res.status(503).json({ error: 'TTS not configured' })
+
+  const clipped = text.slice(0, TTS_MAX_CHARS)
+
+  try {
+    const upstream = await synthesizeStream(clipped)
+    recordUsage({
+      orgId: req.user.org_id,
+      userId: req.user.id,
+      provider: 'elevenlabs',
+      feature: 'voice_tts',
+      model: ttsModel(),
+      inputTokens: clipped.length,
+    })
+    res.set('content-type', 'audio/mpeg')
+    // pipeline (not .pipe) so a barge-in — the client aborting mid-playback — tears
+    // down the upstream ElevenLabs stream instead of leaving it draining for nothing.
+    pipeline(Readable.fromWeb(upstream), res, (err) => {
+      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.warn('[tts] stream ended:', err.message)
+    })
+  } catch (err) {
+    console.warn('[tts] stream synthesis failed:', err.message)
+    // Same contract as /speak: a failed voice is not a failed action.
     res.status(502).json({ error: 'TTS unavailable' })
   }
 })

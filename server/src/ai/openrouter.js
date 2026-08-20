@@ -130,7 +130,12 @@ Respond with ONLY a JSON object (no markdown) matching this shape:
 async function callOpenRouter(systemPrompt, userMsg) {
   const key = process.env.OPENROUTER_API_KEY
   if (!key) throw new Error('No OPENROUTER_API_KEY')
-  const model = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-pro'
+  // Deliberately NOT the generic OPENROUTER_MODEL: that var is tuned for voice
+  // latency (flash-class), and meeting extraction is the opposite trade — the
+  // hardest job in the app, run rarely, where quality is everything. It gets its
+  // own var and a frontier default so a latency tweak can never quietly downgrade
+  // every meeting analysis again.
+  const model = process.env.OPENROUTER_MEETING_MODEL || 'google/gemini-2.5-pro'
 
   const res = await fetch(API_URL, {
     method: 'POST',

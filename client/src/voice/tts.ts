@@ -74,6 +74,85 @@ const cacheAudio = (text: string, url: string) => {
 }
 
 let current: HTMLAudioElement | null = null
+// In-flight streaming fetch, so a barge-in can cut synthesis off mid-generation
+// instead of only muting the player while the bytes keep arriving.
+let streamAbort: AbortController | null = null
+
+// Play `text` by STREAMING it: MP3 chunks are appended to a MediaSource as
+// ElevenLabs produces them, so audio starts a few hundred ms in instead of after
+// the whole clip is synthesized and downloaded. Resolves true if playback actually
+// started; false means "fall back" (no MSE on this browser, network error, autoplay
+// blocked). The completed clip is cached so repeats skip the network entirely.
+async function speakRemoteStream(text: string): Promise<boolean> {
+  const MS: typeof MediaSource | undefined = (window as any).MediaSource
+  if (!MS || !MS.isTypeSupported('audio/mpeg')) return false
+  const token = getToken()
+  if (!token) return false
+
+  const ctrl = new AbortController()
+  streamAbort = ctrl
+  try {
+    const res = await fetch(`${API_BASE}/api/tts/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ text }),
+      signal: ctrl.signal,
+    })
+    if (!res.ok || !res.body) {
+      if (res.status === 503) remoteAvailable = false
+      return false
+    }
+
+    const ms = new MS()
+    const audio = new Audio(URL.createObjectURL(ms))
+    current = audio
+    let started = false
+    let complete = false            // reader drained cleanly -> safe to cache
+    const chunks: BlobPart[] = []
+
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const finish = () => { if (!settled) { settled = true; resolve() } }
+      audio.onended = finish
+      audio.onerror = finish
+      // stopSpeaking() pauses for a barge-in; a paused element never fires 'ended'.
+      audio.onpause = finish
+
+      ms.addEventListener('sourceopen', async () => {
+        let sb: SourceBuffer
+        try { sb = ms.addSourceBuffer('audio/mpeg') } catch { finish(); return }
+        // appendBuffer is async and rejects overlapping calls — serialize on updateend.
+        const append = (buf: Uint8Array) => new Promise<void>((ok, fail) => {
+          sb.addEventListener('updateend', () => ok(), { once: true })
+          sb.addEventListener('error', () => fail(new Error('append failed')), { once: true })
+          try { sb.appendBuffer(buf as BufferSource) } catch (e) { fail(e as Error) }
+        })
+        const reader = res.body!.getReader()
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) { complete = true; break }
+            if (value?.length) { chunks.push(value); await append(value) }
+          }
+        } catch { /* network died or barge-in — play out whatever was buffered */ }
+        try { if (ms.readyState === 'open') ms.endOfStream() } catch {}
+      }, { once: true })
+
+      // Autoplay policy can reject before a gesture — report "did not play" so the
+      // caller falls back rather than silently swallowing the reply.
+      audio.play().then(() => { started = true }).catch(finish)
+    })
+
+    try { URL.revokeObjectURL(audio.src) } catch {}
+    if (current === audio) current = null
+    if (started && complete) cacheAudio(text, URL.createObjectURL(new Blob(chunks, { type: 'audio/mpeg' })))
+    return started
+  } catch {
+    return false
+  } finally {
+    if (streamAbort === ctrl) streamAbort = null
+  }
+}
 
 // Play `text` through ElevenLabs. Resolves true if it actually played, false if the
 // caller should fall back. Never throws — every failure is just "use the other voice".
@@ -146,6 +225,7 @@ async function speakLocal(text: string, lang: string): Promise<void> {
 // ---- public API ------------------------------------------------------------
 
 export function stopSpeaking() {
+  if (streamAbort) { try { streamAbort.abort() } catch {}; streamAbort = null }
   if (current) { try { current.pause() } catch {}; current = null }
   if (isNative()) { NativeTTS.stop().catch(() => {}) }
   try { window.speechSynthesis?.cancel() } catch {}
@@ -159,7 +239,14 @@ export async function speak(text: string, lang = 'en-US'): Promise<void> {
   // Undecided on the first reply: don't block on the probe, just use the fallback
   // this once. Deciding is worth less than answering promptly.
   if (remoteAvailable === null) probe()
-  if (remoteAvailable && await speakRemote(text)) return
+  if (remoteAvailable) {
+    // Cached sentences skip the network entirely; new ones stream so playback
+    // starts on the first synthesized chunk; the buffered path is the safety net
+    // for browsers without MSE (and for a stream that fails mid-handshake).
+    if (cache.has(text)) { if (await speakRemote(text)) return }
+    else if (await speakRemoteStream(text)) return
+    else if (remoteAvailable && await speakRemote(text)) return
+  }
 
   await speakLocal(text, lang)
 }

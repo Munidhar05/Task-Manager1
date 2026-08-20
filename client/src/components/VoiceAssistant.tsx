@@ -259,7 +259,7 @@ export default function VoiceAssistant() {
                   collapsed precisely so the user can watch the page work, so the
                   current step has to be legible here rather than only in the panel. */}
               {running ? running.label
-                : v.state === 'listening' ? 'Listening — say your next command'
+                : v.state === 'listening' ? (v.liveText || 'Listening — say your next command')
                 : v.state === 'processing' ? 'Working…'
                 : v.state === 'speaking' ? 'Speaking…'
                 : 'Tap to talk'}
@@ -299,6 +299,13 @@ export default function VoiceAssistant() {
             <div className="va-orb-action">
               {v.state === 'listening' ? 'Tap to stop' : v.state === 'idle' ? 'Tap to talk' : v.state === 'processing' ? 'Please wait a moment' :' '}
             </div>
+
+            {/* What the recognizer has heard SO FAR — words land as they're spoken.
+                Doubles as failure transparency: a mishear is visible before the
+                agent acts on it, so "it heard me wrong" replaces "it went mad". */}
+            {v.state === 'listening' && v.liveText && (
+              <div className="va-livetext">“{v.liveText}”</div>
+            )}
 
             {/* "Step 3 of 4 · Almost there…" — only once a command is in flight;
                 the idle screen has no progress to report. */}

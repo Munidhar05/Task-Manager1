@@ -1,7 +1,11 @@
 // Voice assistant TOOL REGISTRY — the thing the router LLM chooses from.
 //
 // Each tool declares who may call it, what it needs, and how it behaves:
-//   kind 'mutate'   -> changes data; the client confirms before executing
+//   kind 'mutate'   -> changes data. TRUST TIERS (decided in routes/assistant.js +
+//                      the client tool table): reversible mutations (status, assign,
+//                      edit, comment) run IMMEDIATELY and carry an undo action;
+//                      one-way doors (delete, remove/invite a person, message a
+//                      human) still stop for a yes/no first.
 //   kind 'navigate' -> moves the UI; runs immediately
 //   kind 'read'     -> answers/report; runs immediately (numbers come from SQL)
 //
@@ -84,6 +88,22 @@ export const TOOLS = [
     desc: "Group/bucket tasks and report the counts. Use for 'group the overdue tasks', 'break down tasks by priority'. Also opens the matching filtered list.",
     args: 'group_by (assignee|status|priority), overdue (true/false), status, priority, person' },
 
+  { name: 'get_leaderboard', kind: 'read', roles: ALL,
+    desc: "Performance leaderboard: who has the most points, or one person's rank and score. Use for 'who is top of the leaderboard', 'what's my score', 'how many points does Ravi have'.",
+    args: "period (day|month|all, omit for the default window), person_name|null (null = the whole board; use the speaker's own name for 'my score/rank')" },
+
+  { name: 'get_notifications', kind: 'read', roles: ALL,
+    desc: "The user's own in-app notifications. Use for 'any notifications?', 'what did I miss?', 'anything new for me?'.",
+    args: '(none)' },
+
+  { name: 'get_unread_messages', kind: 'read', roles: ALL,
+    desc: "Unread CHAT messages — how many, and from whom. Use for 'any new messages?', 'did anyone message me?', 'unread chats?'.",
+    args: '(none)' },
+
+  { name: 'mark_notifications_read', kind: 'mutate', roles: ALL,
+    desc: "Mark ALL of the user's notifications as read. Use for 'clear my notifications', 'mark them all read'.",
+    args: '(none)' },
+
   // ---- meetings (manager/admin only) ---------------------------------------
   { name: 'start_meeting', kind: 'navigate', roles: MGR,
     desc: "Begin recording a new live meeting. Use for 'start a meeting', 'record a meeting', 'begin the standup'. "
@@ -100,6 +120,10 @@ export const TOOLS = [
   { name: 'open_meeting', kind: 'navigate', roles: MGR,
     desc: "Open a specific meeting's page. Use for 'open the marketing meeting', 'show me the last meeting'.",
     args: 'title, date (YYYY-MM-DD), latest (true for the most recent)' },
+
+  { name: 'approve_suggestions', kind: 'mutate', roles: MGR,
+    desc: "Assign ALL pending AI-suggested tasks from a meeting — turns every reviewed suggestion that has an owner into a real task and notifies the assignees. Use for 'approve the tasks from the marketing meeting', 'assign all the suggestions from the last meeting'.",
+    args: 'title, date (YYYY-MM-DD), latest (true for the most recent meeting)' },
 
   { name: 'summarize_meeting', kind: 'read', roles: MGR,
     desc: "Recap what a meeting covered/decided. Use for 'summarize the last meeting', 'what happened in the marketing meeting'.",
@@ -190,8 +214,8 @@ const words = (s) => String(s || '').toLowerCase().match(/[a-z0-9]+/g)?.filter((
 
 // Rank by how well a task's title matches what was said, then by recency
 // (`tasks` arrives newest-first), keeping overdue work visible.
-function rankTasks(tasks, transcript) {
-  if (tasks.length <= MAX_SNAPSHOT_TASKS) return tasks
+function rankTasks(tasks, transcript, max = MAX_SNAPSHOT_TASKS) {
+  if (tasks.length <= max) return tasks
   const q = new Set(words(transcript))
   const t0 = today()
   const scored = tasks.map((t, i) => {
@@ -201,14 +225,14 @@ function rankTasks(tasks, transcript) {
     return { t, score: overlap * 5 + recency + overdue }
   })
   scored.sort((a, b) => b.score - a.score)
-  const kept = scored.slice(0, MAX_SNAPSHOT_TASKS).map((s) => s.t)
+  const kept = scored.slice(0, max).map((s) => s.t)
   console.log(`[voiceTools] snapshot trimmed ${tasks.length} -> ${kept.length} tasks by relevance`)
   return kept
 }
 
-function snapshot(tasks, users, user, transcript) {
+export function snapshot(tasks, users, user, transcript, max = MAX_SNAPSHOT_TASKS) {
   const t0 = today()
-  const shown = rankTasks(tasks, transcript)
+  const shown = rankTasks(tasks, transcript, max)
   const taskLines = shown.map((t) => {
     const bits = [`id=${t.id}`, `"${t.title}"`, `owner=${t.assignee_name || 'Unassigned'}`, `status=${t.status}`, `priority=${t.priority}`]
     if (t.due_date) bits.push(`due=${t.due_date}${t.due_date < t0 && t.status !== 'Done' ? ' OVERDUE' : ''}`)
@@ -221,7 +245,7 @@ function snapshot(tasks, users, user, transcript) {
   return `TASKS (${taskLines.length} of ${tasks.length}):\n${taskLines.join('\n') || '(none)'}${omitted}${people}`
 }
 
-function historyBlock(history) {
+export function historyBlock(history) {
   if (!Array.isArray(history) || !history.length) return ''
   const turns = history
     .filter((m) => m && typeof m.text === 'string' && m.text.trim() && (m.role === 'user' || m.role === 'ai'))
@@ -253,8 +277,13 @@ export async function routeCommand(transcript, { user, tasks = [], users = [], h
   }
   if (raw === undefined) throw lastErr || new Error('All providers failed')
 
-  const obj = parseJson(raw) || {}
+  return validateCall(parseJson(raw) || {}, user)
+}
 
+// Validate a model-produced tool call against the registry and the caller's role.
+// Shared by the legacy one-shot router above and the agentic loop (voiceAgent.js),
+// so however the JSON was produced, exactly one gate decides what may execute.
+export function validateCall(obj, user) {
   // Explicit refusal the model was told to emit for a restricted tool.
   if (obj.tool === 'denied') return { tool: 'denied', args: {}, say: denialFor(obj.args?.wanted) }
 

@@ -47,8 +47,9 @@ export const ttsModel = () => process.env.ELEVENLABS_MODEL || DEFAULT_MODEL
 // whole meeting transcript in and burning the account's credits on one request.
 export const TTS_MAX_CHARS = 800
 
-// Synthesize `text` to MP3. Returns a Buffer, or throws with a message safe to log.
-export async function synthesize(text, { signal } = {}) {
+// Shared request against either the buffered or the /stream endpoint. Same body,
+// same error handling; only what happens to the response bytes differs.
+async function requestTts(text, endpointSuffix, signal) {
   const key = process.env.ELEVENLABS_API_KEY
   if (!key) throw new Error('TTS not configured')
 
@@ -60,7 +61,7 @@ export async function synthesize(text, { signal } = {}) {
     voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: 1.05 },
   }
 
-  const res = await fetch(`${API}/${ttsVoice()}?output_format=mp3_44100_128`, {
+  const res = await fetch(`${API}/${ttsVoice()}${endpointSuffix}?output_format=mp3_44100_128`, {
     method: 'POST',
     headers: { 'xi-api-key': key, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -75,5 +76,21 @@ export async function synthesize(text, { signal } = {}) {
     throw new Error(`ElevenLabs ${res.status}: ${detail.slice(0, 200) || res.statusText}`)
   }
 
+  return res
+}
+
+// Synthesize `text` to MP3. Returns a Buffer, or throws with a message safe to log.
+export async function synthesize(text, { signal } = {}) {
+  const res = await requestTts(text, '', signal)
   return Buffer.from(await res.arrayBuffer())
+}
+
+// Synthesize `text` as a live MP3 stream (web ReadableStream). The first chunk
+// arrives while the tail is still being generated, so the client can START PLAYING
+// a few hundred ms in instead of waiting for the whole clip — the difference
+// between the assistant answering and the assistant hesitating.
+export async function synthesizeStream(text, { signal } = {}) {
+  const res = await requestTts(text, '/stream', signal)
+  if (!res.body) throw new Error('ElevenLabs returned no stream body')
+  return res.body
 }
