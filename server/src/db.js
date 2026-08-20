@@ -202,6 +202,33 @@ export function initSchema() {
     value TEXT
   );
 
+  -- Voice-agent learning log: one row per /assistant/command turn — what was said,
+  -- what the agent decided, and (reported back by the client afterwards) what became
+  -- of it. outcome is the LABEL that makes this a training set, not just telemetry:
+  -- executed = the routing was right; cancelled/undone = it was wrong in a way the
+  -- user had to correct; failed = it broke. "learn" holds a pending side-lesson
+  -- (e.g. a fuzzily-matched spoken name -> user alias) that is applied only once the
+  -- outcome proves the guess right. See routes/assistant.js and eval/voiceEval.mjs.
+  CREATE TABLE IF NOT EXISTS voice_turns (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    transcript TEXT NOT NULL,
+    tool TEXT,
+    args TEXT,                -- JSON: the resolved action/args the dispatcher produced
+    mode TEXT,                -- do | confirm | answer | clarify | navigate
+    say TEXT,
+    engine TEXT,              -- model that routed it (null = legacy/fallback path)
+    lookups INTEGER,
+    rounds INTEGER,
+    latency_ms INTEGER,
+    learn TEXT,               -- JSON lesson candidate, applied when outcome=executed
+    outcome TEXT,             -- executed | cancelled | undone | failed (null = unreported)
+    outcome_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_voice_turns_org_time ON voice_turns(org_id, created_at);
+
   -- RAG vector store. One row per indexed chunk of org data (a task, a meeting
   -- summary, a transcript segment, or a chat message). vector is a raw Float32
   -- BLOB; similarity is computed in JS (see ai/embeddings.js). content_hash lets

@@ -10,11 +10,11 @@ import { getLeaderboard } from '../performance.js'
 // The voice router works with ANY configured provider (OpenRouter/Claude/OpenAI),
 // unlike assistantChat's hasLLM which only knows about Claude/OpenAI.
 import { hasLLM as hasVoiceLLM } from '../ai/voiceTask.js'
-import { resolveUser } from '../ai/extractor.js'
+import { resolveUser, resolveUserInfo, findSpokenAlias } from '../ai/extractor.js'
 import { parseDueDate } from '../ai/dates.js'
 import { recordUsage } from '../ai/usage.js'
 import { db } from '../db.js'
-import { id, now, emailDomainAllowed, orgAllowedDomains } from '../util.js'
+import { id, now, audit, emailDomainAllowed, orgAllowedDomains } from '../util.js'
 
 // Same shape routes/users.js and routes/invites.js accept, so voice can't create
 // an address the forms would have rejected.
@@ -250,7 +250,46 @@ async function handleCommand(req, res) {
     return res.json(clarify("I couldn't process that just now — please try again."))
   }
 
+  // ---- learning log ---------------------------------------------------------
+  // Every routed turn is recorded, and the response carries its turn_id so the
+  // client can report what BECAME of it (executed / cancelled / undone / failed)
+  // — that outcome is the label that turns this log into training data. Wrapping
+  // res.json here catches every exit path of the dispatcher without threading a
+  // logger through thirty return statements.
+  const turnLearn = {}   // side-lessons (e.g. a fuzzy name match) — applied on outcome=executed
+  const tStart = Date.now()
+  const sendJson = res.json.bind(res)
+  res.json = (payload) => {
+    try {
+      const tid = id('vtn')
+      db.prepare(`INSERT INTO voice_turns
+        (id, org_id, user_id, transcript, tool, args, mode, say, engine, lookups, rounds, latency_ms, learn, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(tid, user.org_id, user.id, transcript, call.tool || null,
+          JSON.stringify(payload.action || call.args || null), payload.mode || null,
+          (payload.say || '').slice(0, 500), call.meta?.engine || null,
+          call.meta?.lookups ?? null, call.meta?.rounds ?? null,
+          call.meta?.ms ?? Date.now() - tStart,
+          Object.keys(turnLearn).length ? JSON.stringify(turnLearn) : null, now())
+      return sendJson({ ...payload, turn_id: tid })
+    } catch (err) {
+      console.warn('[assistant] turn log failed:', err.message)
+      return sendJson(payload)
+    }
+  }
+
   const a = call.args || {}
+
+  // A lesson staged by the agent's search_people lookup (the model corrects a
+  // misheard name itself and passes the CANONICAL form on, so the spoken form
+  // only survives inside the lookup). Accept it only if the final action really
+  // targets that person — a search that informed nothing teaches nothing.
+  if (call.meta?.aliasLesson) {
+    const named = a.assignee_name || a.recipient_name || a.person_name || a.person
+    const resolved = named ? resolveUser(user.org_id, named) : null
+    if (resolved && resolved.id === call.meta.aliasLesson.user_id) turnLearn.alias = call.meta.aliasLesson
+  }
+
   const findTask = (id) => tasks.find((t) => t.id === id) || null
   const t0 = new Date().toISOString().slice(0, 10)
   const dueFrom = (raw) => (raw ? parseDueDate(raw, t0).date || null : null)
@@ -337,7 +376,10 @@ async function handleCommand(req, res) {
 
     case 'create_task': {
       if (!a.title) return res.json(clarify('What should the task be?'))
-      const match = a.assignee_name ? resolveUser(user.org_id, a.assignee_name) : null
+      const info = a.assignee_name ? resolveUserInfo(user.org_id, a.assignee_name) : { user: null, tier: 0 }
+      const match = info.user
+      if (match && info.tier >= 4) turnLearn.alias = { user_id: match.id, spoken: a.assignee_name }
+      else if (match) { const near = findSpokenAlias(transcript, match); if (near) turnLearn.alias = { user_id: match.id, spoken: near } }
       const priority = PRIORITIES.includes(a.priority) ? a.priority : 'Medium'
       const due = dueFrom(a.due_date_raw)
       const who = match ? ` for ${match.name}` : (a.assignee_name ? ` for ${a.assignee_name} (not found — leaving it unassigned)` : '')
@@ -389,8 +431,15 @@ async function handleCommand(req, res) {
 
     case 'assign_task': {
       const t = needTask('reassign'); if (t.mode) return res.json(t)
-      const match = a.assignee_name ? resolveUser(user.org_id, a.assignee_name) : null
+      const info = a.assignee_name ? resolveUserInfo(user.org_id, a.assignee_name) : { user: null, tier: 0 }
+      const match = info.user
       if (!match) return res.json(clarify(a.assignee_name ? `I couldn't find "${a.assignee_name}" — who should I assign it to?` : 'Who should I assign it to?'))
+      // Tier 4-5 = the name only matched through fuzz ("Rabi Kumar" → Ravi Kumar).
+      // Stage it as an alias lesson; it's saved only if the assignment stands.
+      // Tier ≤3 can still hide a mishear: the agent normalizes names silently from
+      // its team list, so also check what the TRANSCRIPT actually called them.
+      if (info.tier >= 4) turnLearn.alias = { user_id: match.id, spoken: a.assignee_name }
+      else { const near = findSpokenAlias(transcript, match); if (near) turnLearn.alias = { user_id: match.id, spoken: near } }
       return res.json(perform(`Assigning "${t.title}" to ${match.name}.`,
         { kind: 'assign_task', task_id: t.id, summary: `"${t.title}" → ${match.name}`, body: { assignee_id: match.id } },
         match.id !== t.assignee_id
@@ -419,8 +468,11 @@ async function handleCommand(req, res) {
 
     // ---- chats: send a real direct message in the Chats section -------------
     case 'send_message': {
-      const match = a.recipient_name ? resolveUser(user.org_id, a.recipient_name) : null
+      const info = a.recipient_name ? resolveUserInfo(user.org_id, a.recipient_name) : { user: null, tier: 0 }
+      const match = info.user
       if (!match) return res.json(clarify(a.recipient_name ? `I couldn't find "${a.recipient_name}" — who should I message?` : 'Who should I message?'))
+      if (info.tier >= 4) turnLearn.alias = { user_id: match.id, spoken: a.recipient_name }
+      else { const near = findSpokenAlias(transcript, match); if (near) turnLearn.alias = { user_id: match.id, spoken: near } }
       if (match.id === user.id) return res.json(clarify("That's you — who did you want to message?"))
       const body = String(a.body || '').trim()
       if (!body) return res.json(clarify(`What should I tell ${match.name}?`))
@@ -672,6 +724,54 @@ async function handleCommand(req, res) {
       return res.json(clarify(a.question || call.say))
   }
 }
+
+// ---------------------------------------------------------------------------
+// LEARNING LOOP — outcome reports and the lessons they unlock.
+// ---------------------------------------------------------------------------
+
+// Apply a turn's staged lesson. Today that is alias learning: a spoken name that
+// only matched through fuzz gets saved as a proper alias, so the same mishear
+// resolves exactly (tier 2) forever after — the agent stops re-guessing what it
+// has already been proven right about once.
+function applyTurnLessons(turn) {
+  let lesson
+  try { lesson = JSON.parse(turn.learn || 'null') } catch { return }
+  if (!lesson?.alias) return
+  const alias = String(lesson.alias.spoken || '').toLowerCase().trim()
+  const target = db.prepare('SELECT * FROM users WHERE id=? AND org_id=?').get(lesson.alias.user_id, turn.org_id)
+  if (!target || alias.length < 3) return
+  const norm = (s) => String(s || '').toLowerCase().trim()
+  // Never learn an alias that collides with someone's actual identity — "kumar"
+  // must not silently become a shortcut to one Kumar when the org has two.
+  for (const u of db.prepare('SELECT id, name, aliases FROM users WHERE org_id=?').all(turn.org_id)) {
+    if (norm(u.name) === alias) return
+    if (u.id !== target.id && norm(u.name).split(/\s+/)[0] === alias) return
+    if ((u.aliases || '').split(',').map(norm).includes(alias)) return   // already known
+  }
+  const list = (target.aliases || '').split(',').map(norm).filter(Boolean)
+  if (list.length >= 12) return   // cap — an unbounded alias list degrades matching
+  list.push(alias)
+  db.prepare('UPDATE users SET aliases=? WHERE id=?').run(list.join(','), target.id)
+  audit(turn.org_id, turn.user_id, 'voice.alias_learned', 'user', target.id, `"${alias}" → ${target.name}`)
+  console.log(`[voice-learn] alias "${alias}" → ${target.name}`)
+}
+
+// The client reports what became of a turn: executed (it ran), cancelled (user
+// declined the confirmation), undone (user reversed it), failed (a step broke).
+// This label is what turns voice_turns into a training set — and it gates the
+// lessons: a guess is only learned once the outcome proves it right.
+const OUTCOMES = new Set(['executed', 'cancelled', 'undone', 'failed'])
+r.post('/turns/:id/outcome', (req, res) => {
+  const outcome = String(req.body?.outcome || '')
+  if (!OUTCOMES.has(outcome)) return res.status(400).json({ error: 'invalid outcome' })
+  const turn = db.prepare('SELECT * FROM voice_turns WHERE id=? AND user_id=?').get(req.params.id, req.user.id)
+  if (!turn) return res.status(404).json({ error: 'Not found' })
+  db.prepare('UPDATE voice_turns SET outcome=?, outcome_at=? WHERE id=?').run(outcome, now(), turn.id)
+  // First report only — an "undone" arriving after "executed" updates the label
+  // but must not re-apply (or un-apply) a lesson already acted on.
+  if (outcome === 'executed' && turn.learn && !turn.outcome) applyTurnLessons(turn)
+  res.json({ ok: true })
+})
 
 // Suggested prompts for the UI
 r.get('/suggestions', (req, res) => {

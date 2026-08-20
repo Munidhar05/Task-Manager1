@@ -1,0 +1,55 @@
+[
+  { "as": "manager", "say": "mark the staging server task as done",
+    "expect": { "tool": "set_status", "args": { "status": "Done" }, "task_like": "staging" } },
+
+  { "as": "manager", "say": "assign the deployment documentation task to Rabi Kumar",
+    "expect": { "tool": "assign_task", "args_re": { "assignee_name": "ra[bv]i" }, "task_like": "deployment documentation" } },
+
+  { "as": "manager", "say": "payment gateway task ni Anjali ki assign cheyyi",
+    "expect": { "tool": "assign_task", "args_re": { "assignee_name": "anjali" }, "task_like": "payment gateway" } },
+
+  { "as": "manager", "say": "staging server task status In Progress ki marchandi",
+    "expect": { "tool": "set_status", "args": { "status": "In Progress" }, "task_like": "staging" } },
+
+  { "as": "manager", "say": "dashboard ui task ki priority critical karo",
+    "expect": { "tool": "update_task", "args": { "priority": "Critical" }, "task_like": "dashboard" } },
+
+  { "as": "manager", "say": "what's my score on the leaderboard",
+    "expect": { "tool": "get_leaderboard" } },
+
+  { "as": "manager", "say": "who is top of the leaderboard this month",
+    "expect": { "tool": "get_leaderboard" } },
+
+  { "as": "manager", "say": "do I have any new messages",
+    "expect": { "tool": "get_unread_messages" } },
+
+  { "as": "manager", "say": "any notifications for me",
+    "expect": { "tool": "get_notifications" } },
+
+  { "as": "manager", "say": "clear all my notifications",
+    "expect": { "tool": "mark_notifications_read" } },
+
+  { "as": "manager", "say": "open the blocked tasks",
+    "expect": { "tool": "navigate" } },
+
+  { "as": "manager", "say": "how did the team do this week",
+    "expect": { "tool": "get_overview" } },
+
+  { "as": "manager", "say": "reassign all of Ravi's tasks to Karthik",
+    "expect": { "tool": "plan", "min_steps": 2 } },
+
+  { "as": "manager", "say": "delete the sure priya task",
+    "expect": { "tool": "delete_task", "task_like": "sure priya" } },
+
+  { "as": "manager", "say": "summarize the last meeting",
+    "expect": { "tool": "summarize_meeting" } },
+
+  { "as": "manager", "say": "approve the suggested tasks from the sprint planning meeting",
+    "expect": { "tool": "approve_suggestions" } },
+
+  { "as": "employee", "say": "show me Priya's tasks",
+    "expect": { "tool_any": ["navigate", "denied", "clarify", "get_workload"] } },
+
+  { "as": "employee", "say": "mark my login api task as done",
+    "expect": { "tool": "set_status", "args": { "status": "Done" }, "task_like": "login api" } }
+]

@@ -94,9 +94,16 @@ export function useVoiceAssistant() {
   // response — it only becomes `undoRef` (the thing "undo" replays) once the
   // action actually SUCCEEDED, so undo can never "revert" a change that failed.
   // One level deep by design: "undo" means the last thing, not a history walk.
-  const undoRef = useRef<any>(null)
+  const undoRef = useRef<{ action: any; turnId: string | null } | null>(null)
   const undoCandidateRef = useRef<any>(undefined)   // undefined = this turn wasn't a mutation
   const undoHintedRef = useRef(false)   // say "say undo to reverse it" once per session
+  // The server logs every command as a voice_turn and wants to know what became of
+  // it — executed, cancelled, undone, failed. That label is what turns the log into
+  // training data (and it gates alias learning), so report faithfully, best-effort.
+  const turnRef = useRef<string | null>(null)
+  const reportOutcome = (turnId: string | null, outcome: 'executed' | 'cancelled' | 'undone' | 'failed') => {
+    if (turnId) api.post(`/assistant/turns/${turnId}/outcome`, { outcome }).catch(() => {})
+  }
   const pendingRef = useRef<Suspended | null>(null)
   const msgsRef = useRef<VoiceMsg[]>([])
   const emptyStreakRef = useRef(0)
@@ -194,11 +201,13 @@ export function useVoiceAssistant() {
       setPend(null)
       setMinimized(false)
       undoCandidateRef.current = undefined       // a failed action must not become undoable
+      reportOutcome(turnRef.current, 'failed'); turnRef.current = null
       push({ role: 'ai', text: outcome.say })
       await say(outcome.say)
       return
     }
     setPend(null)
+    reportOutcome(turnRef.current, 'executed'); turnRef.current = null
     // The inverse becomes live only now that the action actually succeeded — so
     // "undo" can never claim to revert a change that never happened. Hint at it
     // the first time only; repeating it on every action is nagging, not teaching.
@@ -279,9 +288,12 @@ export function useVoiceAssistant() {
     // app shouldn't cost the user their safety net.
     const MUTATING = new Set(['create_task', 'set_status', 'assign_task', 'update_task', 'add_comment',
       'send_message', 'delete_task', 'plan', 'read_notifications', 'invite_user', 'remove_user', 'approve_suggestions'])
+    turnRef.current = resp?.turn_id || null
     if (MUTATING.has(String(bridged.plan.intent || ''))) {
       undoRef.current = null
-      undoCandidateRef.current = bridged.undo || null
+      // The turn id rides along so an eventual "undo" can relabel THIS turn as
+      // undone on the server — the strongest "the agent got it wrong" signal there is.
+      undoCandidateRef.current = bridged.undo ? { action: bridged.undo, turnId: resp?.turn_id || null } : null
     } else {
       undoCandidateRef.current = undefined
     }
@@ -377,7 +389,12 @@ export function useVoiceAssistant() {
         // confirm / recover are yes-or-no.
         const yes = YES_RE.test(text), no = NO_RE.test(text)
         if (yes && !no) { await resume(pend, true); continue }
-        if (no && !yes) { await resume(pend, false); continue }
+        if (no && !yes) {
+          // Label first: the engine answers a declined confirm with a DONE outcome
+          // ("Okay, cancelled."), which must not be recorded as executed.
+          reportOutcome(turnRef.current, 'cancelled'); turnRef.current = null
+          await resume(pend, false); continue
+        }
         // Neither, or both — the user said something else entirely, which in
         // practice means they are correcting themselves. Drop the pending plan and
         // treat this as a fresh command.
@@ -392,8 +409,12 @@ export function useVoiceAssistant() {
         undoRef.current = null
         undoCandidateRef.current = undefined     // an undo is not itself undoable
         if (u) {
+          // Relabel the original turn as undone — the clearest correction signal
+          // the learning log gets.
+          reportOutcome(u.turnId, 'undone')
+          turnRef.current = null                 // the undo plan itself is not a server turn
           setMinimized(true)
-          await execute(undoPlan(u))
+          await execute(undoPlan(u.action))
           continue
         }
         await say("There's nothing recent I can undo.")
@@ -467,6 +488,7 @@ export function useVoiceAssistant() {
     const p = pendingRef.current
     setPend(null)
     undoCandidateRef.current = undefined   // the action it belonged to was abandoned
+    reportOutcome(turnRef.current, 'cancelled'); turnRef.current = null
     const m = 'Okay, cancelled.'
     push({ role: 'ai', text: m }); speak(m)
     if (p) resetTrace('cancelled')

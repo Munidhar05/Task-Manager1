@@ -21,7 +21,7 @@
 // Claude/OpenAI — the no-keys-at-all deployment still works.
 import { db } from '../db.js'
 import { routeCommand, validateCall, toolsFor, snapshot, historyBlock, STATUSES, PRIORITIES } from './voiceTools.js'
-import { resolveUser } from './extractor.js'
+import { resolveUser, resolveUserInfo } from './extractor.js'
 import { parseJson } from './voiceTask.js'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -163,15 +163,31 @@ function searchTasks(user, args = {}) {
 
 function searchPeople(user, args = {}) {
   // Names and roles only — enough to address a task or a message, nothing more.
-  const exact = resolveUser(user.org_id, args.query)
-  if (exact) return { matches: [{ name: exact.name, role: exact.role }] }
-  const q = words(args.query)
-  const rows = db.prepare("SELECT name, role, aliases FROM users WHERE org_id = ? AND role != 'admin'").all(user.org_id)
+  //
+  // `_lesson` is NOT for the model (the loop strips it before relaying results):
+  // it records that a spoken name only resolved through fuzz, so the route can
+  // stage it as an alias to learn. This is the only place the SPOKEN form still
+  // exists — by the time the model emits its final call it has already copied the
+  // canonical name from these results, and the mishear is gone from the args.
+  const spoken = String(args.query || '').trim()
+  const info = resolveUserInfo(user.org_id, spoken)
+  if (info.user) {
+    return {
+      matches: [{ name: info.user.name, role: info.user.role }],
+      _lesson: info.tier >= 4 ? { user_id: info.user.id, spoken } : null,
+    }
+  }
+  const q = words(spoken)
+  const rows = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id = ? AND role != 'admin'").all(user.org_id)
   const hits = rows.filter((u) => {
     const hay = words(u.name + ' ' + (u.aliases || ''))
     return q.some((w) => hay.some((h) => h.startsWith(w) || w.startsWith(h)))
   })
-  return { matches: hits.slice(0, 6).map((u) => ({ name: u.name, role: u.role })) }
+  return {
+    matches: hits.slice(0, 6).map((u) => ({ name: u.name, role: u.role })),
+    // A UNIQUE fuzzy hit is a confident correction; several hits is a guess, not a lesson.
+    _lesson: hits.length === 1 ? { user_id: hits[0].id, spoken } : null,
+  }
 }
 
 function searchMeetings(user, args = {}) {
@@ -306,6 +322,7 @@ export async function agentCommand(transcript, opts = {}) {
     let model = fastModel()
     let lookups = 0
     let escalated = false
+    let aliasLesson = null   // staged by search_people when a name resolved via fuzz
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const canEscalate = !escalated && smartModel() !== model
@@ -330,6 +347,12 @@ export async function agentCommand(transcript, opts = {}) {
           } else {
             lookups++
             result = runLookup(name, user, args)
+            // Lessons travel out-of-band — the model gets clean results, the
+            // route gets the learning candidate.
+            if (result && result._lesson !== undefined) {
+              if (result._lesson) aliasLesson = result._lesson
+              delete result._lesson
+            }
           }
           messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) })
         }
@@ -339,7 +362,11 @@ export async function agentCommand(transcript, opts = {}) {
       const obj = parseJson(msg.content || '')
       if (obj && obj.tool) {
         console.log(`[voiceAgent] ${obj.tool} via ${model} (${lookups} lookup${lookups === 1 ? '' : 's'}, ${round + 1} round${round ? 's' : ''}, ${Date.now() - t0}ms)`)
-        return validateCall(obj, user)
+        const call = validateCall(obj, user)
+        // Routing telemetry for the voice_turns learning log — how this decision
+        // was reached, not just what it was.
+        call.meta = { engine: model, lookups, rounds: round + 1, ms: Date.now() - t0, aliasLesson }
+        return call
       }
       // Not the contract. One nudge, then give up to the fallback.
       if (round === MAX_ROUNDS - 1) break
