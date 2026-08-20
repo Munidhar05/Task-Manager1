@@ -313,7 +313,9 @@ export const TOOLS: ToolDef[] = [
     // one-way doors, so those still stop and ask.
     // invite_user belongs here with the others: it emails a stranger and puts them
     // in the org. Visible to someone else, and not silently undoable.
-    destructive: ({ action }) => ['delete_task', 'remove_user', 'send_message', 'invite_user'].includes(action?.kind),
+    // approve_suggestions creates real tasks and notifies every assignee — as
+    // outward-facing as send_message, so it stops for the same yes.
+    destructive: ({ action }) => ['delete_task', 'remove_user', 'send_message', 'invite_user', 'approve_suggestions'].includes(action?.kind),
     summarize: ({ action }) => {
       const s = action?.summary || 'apply that change'
       return s.charAt(0).toUpperCase() + s.slice(1)
@@ -340,6 +342,10 @@ export const TOOLS: ToolDef[] = [
       } else if (action.kind === 'read_notifications') {
         // Stay put — clearing the bell is not a reason to yank the user anywhere.
         window.dispatchEvent(new Event('notifications-changed'))
+      } else if (action.kind === 'approve_suggestions') {
+        // Land on the meeting so the user sees the queue drain and the tasks appear.
+        window.dispatchEvent(new CustomEvent('tasks-changed'))
+        ctx.navigate(`/meetings/${action.meeting_id}`)
       } else {
         window.dispatchEvent(new CustomEvent('tasks-changed'))
         ctx.navigate('/tasks')
@@ -400,6 +406,10 @@ async function runAction(action: any, password?: string): Promise<void> {
       break
     }
     case 'read_notifications': await api.post('/notifications/read-all'); break
+    case 'delete_own_comment': await api.del(`/tasks/${action.task_id}/comments/latest-own`); break
+    // Empty ids = every pending suggestion that has an owner, same as the meeting
+    // page's own "Assign all" button.
+    case 'approve_suggestions': await api.post(`/meetings/${action.meeting_id}/assign`, {}); break
     case 'remove_user': {
       // Re-auth first: a spoken command must never be sufficient on its own to
       // delete a colleague's account.

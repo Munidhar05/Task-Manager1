@@ -537,6 +537,23 @@ r.post('/:id/comments', (req, res) => {
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
 
+// UNDO a just-posted comment: delete the CALLER'S most recent comment on the task.
+// Deliberately "latest own" rather than /comments/:cid — the voice flow posts the
+// comment through the drawer, which never surfaces the new row's id, and the only
+// thing a spoken "undo" can honestly mean is "the comment I just left". Own
+// comments only, so this can never be aimed at someone else's words.
+r.delete('/:id/comments/latest-own', (req, res) => {
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const c = db.prepare('SELECT * FROM task_comments WHERE task_id=? AND user_id=? ORDER BY created_at DESC LIMIT 1').get(t.id, req.user.id)
+  if (!c) return res.status(404).json({ error: 'No comment of yours to remove' })
+  db.prepare('DELETE FROM task_comments WHERE id=?').run(c.id)
+  // The leaderboard counts comments live from task_comments, so the undone
+  // comment's point disappears with it — exactly what an undo should mean.
+  audit(req.user.org_id, req.user.id, 'task.comment.delete', 'task', t.id)
+  res.json({ ok: true })
+})
+
 // ATTACHMENTS — upload a reference image / PDF / video onto a task. One file per
 // request (the client loops for multiple). Anyone in the task's org may attach.
 const runAttachUpload = (req, res, next) => attachUpload.single('file')(req, res, (err) => {

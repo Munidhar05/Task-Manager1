@@ -76,6 +76,20 @@ const INVESTIGATE = [
   {
     type: 'function',
     function: {
+      name: 'search_meetings',
+      description: 'List recent meetings — optionally filtered by words from the title — with their dates and how many AI-suggested tasks are still pending on each. MANAGERS/ADMINS ONLY. Use before approve_suggestions / open_meeting / summarize_meeting whenever you are not sure which meeting the user means; copy the exact title from the results into your final call.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'words from the meeting title, if any were spoken' },
+          limit: { type: 'integer', minimum: 1, maximum: 15 },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_task',
       description: 'Fetch one task\'s full details (description, dates, progress) by its exact id. Use when the user asks ABOUT a task ("what is the logo task about", "when is it due") and the snapshot row is not enough.',
       parameters: {
@@ -160,6 +174,26 @@ function searchPeople(user, args = {}) {
   return { matches: hits.slice(0, 6).map((u) => ({ name: u.name, role: u.role })) }
 }
 
+function searchMeetings(user, args = {}) {
+  // Meetings are manager/admin territory — same wall the meeting routes enforce.
+  if (user.role !== 'manager' && user.role !== 'admin') return { error: 'meetings are not visible to this role' }
+  let rows = db.prepare(`
+    SELECT m.id, m.title, m.meeting_date,
+           (SELECT COUNT(*) FROM suggested_tasks s WHERE s.meeting_id = m.id AND s.status = 'pending') AS pending_suggestions
+    FROM meetings m WHERE m.org_id = ?
+    ORDER BY m.meeting_date DESC, m.created_at DESC LIMIT 25
+  `).all(user.org_id)
+  const q = words(args.query)
+  if (q.length) {
+    rows = rows.filter((m) => {
+      const hay = words(m.title)
+      return q.some((w) => hay.some((h) => h.startsWith(w) || w.startsWith(h)))
+    })
+  }
+  const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 15)
+  return { matches: rows.slice(0, limit).map((m) => ({ title: m.title, date: m.meeting_date, pending_suggestions: m.pending_suggestions })) }
+}
+
 function getTask(user, args = {}) {
   const t = db.prepare(`
     SELECT t.id, t.title, t.description, t.status, t.priority, t.due_date, t.progress,
@@ -178,6 +212,7 @@ function getTask(user, args = {}) {
 function runLookup(name, user, args) {
   if (name === 'search_tasks') return searchTasks(user, args)
   if (name === 'search_people') return searchPeople(user, args)
+  if (name === 'search_meetings') return searchMeetings(user, args)
   if (name === 'get_task') return getTask(user, args)
   // Models sometimes try to function-call an ACTION tool (delete_task, navigate…).
   // Those are never callable — they are the final JSON reply. Say exactly that,
@@ -197,7 +232,7 @@ function agentSystem(role) {
 The user may speak English, Hindi, Telugu, or a code-mixed blend, and speech-to-text OFTEN mishears words and names — read for INTENT, not letters. Always write task titles, descriptions and your "say" reply in clear ENGLISH.
 
 INVESTIGATE, THEN ACT:
-- You have lookup tools (search_tasks, search_people, get_task). Use them whenever the task or person the user means is not plainly in the snapshot — NEVER guess or invent a task_id, and never claim someone doesn't exist without searching first.
+- You have lookup tools (search_tasks, search_people, search_meetings, get_task). Use them whenever the task, person, or meeting the user means is not plainly in front of you — NEVER guess or invent a task_id, never claim something doesn't exist without searching first, and never ask the user "which meeting?" before search_meetings has shown you what exists.
 - If a search narrows to ONE plausible match, act on it. If several are plausible, finish with "clarify" naming the top options. If none match, finish with "clarify" saying what you looked for.
 - Investigate at most a few times, then commit. Speed matters — this is a live voice conversation.
 

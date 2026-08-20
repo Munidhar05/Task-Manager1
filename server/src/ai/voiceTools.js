@@ -96,6 +96,10 @@ export const TOOLS = [
     desc: "The user's own in-app notifications. Use for 'any notifications?', 'what did I miss?', 'anything new for me?'.",
     args: '(none)' },
 
+  { name: 'get_unread_messages', kind: 'read', roles: ALL,
+    desc: "Unread CHAT messages — how many, and from whom. Use for 'any new messages?', 'did anyone message me?', 'unread chats?'.",
+    args: '(none)' },
+
   { name: 'mark_notifications_read', kind: 'mutate', roles: ALL,
     desc: "Mark ALL of the user's notifications as read. Use for 'clear my notifications', 'mark them all read'.",
     args: '(none)' },
@@ -116,6 +120,10 @@ export const TOOLS = [
   { name: 'open_meeting', kind: 'navigate', roles: MGR,
     desc: "Open a specific meeting's page. Use for 'open the marketing meeting', 'show me the last meeting'.",
     args: 'title, date (YYYY-MM-DD), latest (true for the most recent)' },
+
+  { name: 'approve_suggestions', kind: 'mutate', roles: MGR,
+    desc: "Assign ALL pending AI-suggested tasks from a meeting — turns every reviewed suggestion that has an owner into a real task and notifies the assignees. Use for 'approve the tasks from the marketing meeting', 'assign all the suggestions from the last meeting'.",
+    args: 'title, date (YYYY-MM-DD), latest (true for the most recent meeting)' },
 
   { name: 'summarize_meeting', kind: 'read', roles: MGR,
     desc: "Recap what a meeting covered/decided. Use for 'summarize the last meeting', 'what happened in the marketing meeting'.",

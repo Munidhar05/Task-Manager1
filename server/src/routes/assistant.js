@@ -404,10 +404,11 @@ async function handleCommand(req, res) {
       const t = needTask('comment on'); if (t.mode) return res.json(t)
       const body = String(a.body || '').trim()
       if (!body) return res.json(clarify(`What should the comment on "${t.title}" say?`))
-      // No undo: there is no delete-comment endpoint. A comment is additive and
-      // low-stakes, and the drawer stays open on it — visible, if not reversible.
       return res.json(perform(`Adding your comment to "${t.title}": "${body}".`,
-        { kind: 'add_comment', task_id: t.id, summary: `Comment on "${t.title}"`, body: { body } }))
+        { kind: 'add_comment', task_id: t.id, summary: `Comment on "${t.title}"`, body: { body } },
+        // The comment's id doesn't exist yet, so the inverse is "delete my most
+        // recent comment on this task" — which is exactly what was just posted.
+        { kind: 'delete_own_comment', task_id: t.id, summary: `removed your comment from "${t.title}"` }))
     }
 
     case 'delete_task': {
@@ -545,6 +546,47 @@ async function handleCommand(req, res) {
         navigate: { url: '/leaderboard' },
         data: { type: 'group', title: `Leaderboard (${label})`, rows: top.map((r) => ({ name: r.name, c: r.score })), total: board.total_points },
       }))
+    }
+
+    case 'get_unread_messages': {
+      // Same unread definition as the chat list itself: messages from others,
+      // newer than my last-read mark, not deleted, not hidden for me.
+      const rows = db.prepare(`
+        SELECT u.name, COUNT(*) c FROM chat_messages msg
+        JOIN chat_participants me ON me.conversation_id = msg.conversation_id AND me.user_id = ?
+        JOIN users u ON u.id = msg.sender_id
+        WHERE msg.sender_id != ? AND msg.deleted_for_all = 0
+          AND msg.created_at > COALESCE(me.last_read_at, '')
+          AND msg.id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id = ?)
+        GROUP BY msg.sender_id ORDER BY c DESC
+      `).all(user.id, user.id, user.id)
+      const total = rows.reduce((s, r) => s + r.c, 0)
+      if (!total) return res.json(answer('No new messages — your chats are all caught up.'))
+      const from = rows.slice(0, 3).map((r) => `${r.c} from ${r.name}`).join(', ')
+      return res.json(answer(
+        `You have ${total} unread message${total === 1 ? '' : 's'} — ${from}${rows.length > 3 ? ', and more' : ''}.`,
+        { navigate: { url: '/chats' } },
+      ))
+    }
+
+    case 'approve_suggestions': {
+      const m = resolveMeeting(user, { title: a.title, date: a.date, latest: a.latest === true || a.latest === 'true' })
+      if (m.none) return res.json(clarify("I couldn't find that meeting."))
+      if (m.candidates) return res.json(clarify(askWhichMeeting(m.candidates)))
+      const counts = db.prepare(`
+        SELECT COUNT(*) AS pending,
+               SUM(CASE WHEN suggested_assignee_id IS NOT NULL THEN 1 ELSE 0 END) AS owned
+        FROM suggested_tasks WHERE meeting_id = ? AND status = 'pending'
+      `).get(m.meeting.id)
+      if (!counts.pending) return res.json(answer(`"${m.meeting.title}" has no pending suggestions — they've all been handled.`, { navigate: { url: `/meetings/${m.meeting.id}` } }))
+      if (!counts.owned) return res.json(answer(`"${m.meeting.title}" has ${counts.pending} pending suggestion${counts.pending === 1 ? '' : 's'}, but none has an owner yet — open the meeting to pick who does what.`, { navigate: { url: `/meetings/${m.meeting.id}` } }))
+      const skipped = counts.pending - counts.owned
+      // Confirm tier, not undo-first: this creates real tasks and notifies every
+      // assignee — outward-facing, so it stops for a yes like send_message does.
+      return res.json(confirm(
+        `Assign ${counts.owned} suggested task${counts.owned === 1 ? '' : 's'} from "${m.meeting.title}" to their owners${skipped ? ` (${skipped} without an owner will stay pending)` : ''}. Go ahead?`,
+        { kind: 'approve_suggestions', meeting_id: m.meeting.id, summary: `Assigned ${counts.owned} suggested task${counts.owned === 1 ? '' : 's'} from "${m.meeting.title}"` },
+      ))
     }
 
     case 'get_notifications': {

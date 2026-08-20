@@ -278,7 +278,7 @@ export function useVoiceAssistant() {
     // or meeting-control plan leaves the standing undo alone — moving around the
     // app shouldn't cost the user their safety net.
     const MUTATING = new Set(['create_task', 'set_status', 'assign_task', 'update_task', 'add_comment',
-      'send_message', 'delete_task', 'plan', 'read_notifications', 'invite_user', 'remove_user'])
+      'send_message', 'delete_task', 'plan', 'read_notifications', 'invite_user', 'remove_user', 'approve_suggestions'])
     if (MUTATING.has(String(bridged.plan.intent || ''))) {
       undoRef.current = null
       undoCandidateRef.current = bridged.undo || null
