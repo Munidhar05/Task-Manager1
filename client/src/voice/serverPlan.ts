@@ -22,9 +22,13 @@
 import type { ActionPlan } from './actionEngine'
 
 export interface ServerResponse {
-  mode?: 'confirm' | 'navigate' | 'answer' | 'clarify'
+  // 'do' is the undo-first tier: a reversible mutation that runs immediately —
+  // no yes/no — carrying its inverse in `undo` so a spoken "undo" can put it back.
+  mode?: 'do' | 'confirm' | 'navigate' | 'answer' | 'clarify'
   say?: string
   action?: any
+  // The inverse of `action`, computed server-side from the row's pre-change state.
+  undo?: any
   navigate?: { url?: string }
   data?: any
   // Live-recording control. Present only for start_meeting / control_meeting.
@@ -40,6 +44,9 @@ export interface Bridged {
   // A view change that accompanies an answer ("here are the overdue ones" while
   // opening the filtered list). Not a plan step: it is scenery for the reply.
   navigateUrl?: string
+  // Present on mode:'do' — kept by the conversation loop until the next mutation,
+  // so "undo" reverses the LAST thing done, not an arbitrary earlier one.
+  undo?: any
 }
 
 // A single server action → one plan step.
@@ -82,11 +89,32 @@ const stepFor = (action: any) => {
 const titleFrom = (summary?: string) => summary?.match(/"([^"]+)"/)?.[1] || null
 const nameFrom = (summary?: string) => summary?.match(/\bto ([^"]+)$/)?.[1]?.trim() || null
 
+// Turn a stored inverse action into a runnable plan. Deliberately routed through
+// `api_action` rather than the on-screen workflow tools: an undo is "put it back,
+// fast" — the user just watched the original happen and named it themselves, so
+// replaying the drawer choreography would be theatre. (It also has to be
+// api_action: an undo can restore "Unassigned", which the drawer tool's required
+// assignee_id slot would refuse.)
+export function undoPlan(undo: any): ActionPlan {
+  // Undo summaries are phrased server-side to follow "I've …" ("put X back to
+  // To Do"), so the spoken line reads as a sentence, not a log entry.
+  const summary = String(undo?.summary || 'reversed that').trim()
+  return {
+    intent: 'undo',
+    say: `Okay — I've ${summary}.`,
+    steps: [{ tool: 'api_action', args: { action: undo } }],
+  }
+}
+
 export function planFromServer(resp: ServerResponse | null | undefined): Bridged {
   const say = String(resp?.say || '').trim()
   const url = resp?.navigate?.url
 
   switch (resp?.mode) {
+    // 'do' and 'confirm' build the same plan — the difference is trust tier, and
+    // that is enforced where it always was: the tool table's `destructive`
+    // predicates. 'do' additionally carries the inverse action for spoken undo.
+    case 'do':
     case 'confirm': {
       const action = resp.action
       if (!action) return { plan: null, say, data: resp.data }
@@ -103,6 +131,7 @@ export function planFromServer(resp: ServerResponse | null | undefined): Bridged
         plan: { intent: action.kind, say, steps },
         say,
         data: resp.data,
+        undo: resp.mode === 'do' ? resp.undo || null : null,
       }
     }
 

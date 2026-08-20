@@ -1,7 +1,11 @@
 // Voice assistant TOOL REGISTRY — the thing the router LLM chooses from.
 //
 // Each tool declares who may call it, what it needs, and how it behaves:
-//   kind 'mutate'   -> changes data; the client confirms before executing
+//   kind 'mutate'   -> changes data. TRUST TIERS (decided in routes/assistant.js +
+//                      the client tool table): reversible mutations (status, assign,
+//                      edit, comment) run IMMEDIATELY and carry an undo action;
+//                      one-way doors (delete, remove/invite a person, message a
+//                      human) still stop for a yes/no first.
 //   kind 'navigate' -> moves the UI; runs immediately
 //   kind 'read'     -> answers/report; runs immediately (numbers come from SQL)
 //
@@ -83,6 +87,18 @@ export const TOOLS = [
   { name: 'group_tasks', kind: 'read', roles: ALL,
     desc: "Group/bucket tasks and report the counts. Use for 'group the overdue tasks', 'break down tasks by priority'. Also opens the matching filtered list.",
     args: 'group_by (assignee|status|priority), overdue (true/false), status, priority, person' },
+
+  { name: 'get_leaderboard', kind: 'read', roles: ALL,
+    desc: "Performance leaderboard: who has the most points, or one person's rank and score. Use for 'who is top of the leaderboard', 'what's my score', 'how many points does Ravi have'.",
+    args: "period (day|month|all, omit for the default window), person_name|null (null = the whole board; use the speaker's own name for 'my score/rank')" },
+
+  { name: 'get_notifications', kind: 'read', roles: ALL,
+    desc: "The user's own in-app notifications. Use for 'any notifications?', 'what did I miss?', 'anything new for me?'.",
+    args: '(none)' },
+
+  { name: 'mark_notifications_read', kind: 'mutate', roles: ALL,
+    desc: "Mark ALL of the user's notifications as read. Use for 'clear my notifications', 'mark them all read'.",
+    args: '(none)' },
 
   // ---- meetings (manager/admin only) ---------------------------------------
   { name: 'start_meeting', kind: 'navigate', roles: MGR,

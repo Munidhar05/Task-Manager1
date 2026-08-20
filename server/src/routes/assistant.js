@@ -6,6 +6,7 @@ import { STATUSES, PRIORITIES, MEETING_TITLES } from '../ai/voiceTools.js'
 import { agentCommand } from '../ai/voiceAgent.js'
 import { dateRange, overview, workload, groupTasks } from '../ai/voiceAnalytics.js'
 import { listMeetings, resolveMeeting, meetingSummary, askWhichMeeting } from '../ai/voiceMeetings.js'
+import { getLeaderboard } from '../performance.js'
 // The voice router works with ANY configured provider (OpenRouter/Claude/OpenAI),
 // unlike assistantChat's hasLLM which only knows about Claude/OpenAI.
 import { hasLLM as hasVoiceLLM } from '../ai/voiceTask.js'
@@ -208,6 +209,12 @@ const clarify = (say) => ({
 })
 const answer = (say, extra = {}) => ({ mode: 'answer', say, ...extra })
 const confirm = (say, action) => ({ mode: 'confirm', say, action })
+// Undo-first: a reversible mutation runs IMMEDIATELY — no yes/no — and carries its
+// inverse, computed HERE from the row's current state (the one moment the "before"
+// values are still readable). The client keeps the inverse and replays it through
+// the same action path when the user says "undo". One-way doors (delete, remove a
+// person, message a human) never come through here; they keep `confirm`.
+const perform = (say, action, undo = null) => ({ mode: 'do', say, action, undo })
 
 // Express 4 does not catch rejections from async handlers, so an unexpected throw
 // here would take the whole process down. Wrap the dispatcher and degrade to a
@@ -334,8 +341,11 @@ async function handleCommand(req, res) {
       const priority = PRIORITIES.includes(a.priority) ? a.priority : 'Medium'
       const due = dueFrom(a.due_date_raw)
       const who = match ? ` for ${match.name}` : (a.assignee_name ? ` for ${a.assignee_name} (not found — leaving it unassigned)` : '')
-      return res.json(confirm(
-        `Create a ${priority.toLowerCase()} priority task "${a.title}"${who}${due ? ` due ${due}` : ''}. Shall I create it?`,
+      // No undo action: employees can't delete tasks, so a create can't be inverted
+      // uniformly. It doesn't need one — the create runs through the real New Task
+      // form on screen, field by field, which IS the review step.
+      return res.json(perform(
+        `Creating a ${priority.toLowerCase()} priority task "${a.title}"${who}${due ? ` due ${due}` : ''}.`,
         { kind: 'create_task', summary: `Create "${a.title}"`, body: { title: a.title, description: a.description || '', assignee_id: match?.id || null, priority, due_date: due } },
       ))
     }
@@ -355,30 +365,48 @@ async function handleCommand(req, res) {
         body.due_date = due; body.due_date_raw = null; bits.push(`due ${due}`)
       }
       if (!bits.length) return res.json(clarify(`What should I change about "${t.title}"?`))
-      return res.json(confirm(`For "${t.title}": ${bits.join(', ')}. Confirm?`,
-        { kind: 'update_task', task_id: t.id, summary: `"${t.title}" — ${bits.join(', ')}`, body }))
+      // The "before" values of exactly the fields being changed become the undo.
+      // The scoped snapshot row doesn't carry description/progress, so read the
+      // full row while it still holds the old values.
+      const full = db.prepare('SELECT title, description, priority, progress, due_date, due_date_raw FROM tasks WHERE id=? AND org_id=?').get(t.id, user.org_id)
+      const undoBody = {}
+      for (const f of ['title', 'description', 'priority', 'progress']) if (f in body) undoBody[f] = full[f]
+      if ('due_date' in body) { undoBody.due_date = full.due_date; undoBody.due_date_raw = full.due_date_raw }
+      return res.json(perform(`Updating "${t.title}": ${bits.join(', ')}.`,
+        { kind: 'update_task', task_id: t.id, summary: `"${t.title}" — ${bits.join(', ')}`, body },
+        { kind: 'update_task', task_id: t.id, summary: `put "${t.title}" back as it was`, body: undoBody }))
     }
 
     case 'set_status': {
       const t = needTask('update'); if (t.mode) return res.json(t)
       if (!STATUSES.includes(a.status)) return res.json(clarify(`What status should "${t.title}" be?`))
-      return res.json(confirm(`Mark "${t.title}" as ${a.status}. Confirm?`,
-        { kind: 'set_status', task_id: t.id, summary: `"${t.title}" → ${a.status}`, body: { status: a.status } }))
+      return res.json(perform(`Marking "${t.title}" as ${a.status}.`,
+        { kind: 'set_status', task_id: t.id, summary: `"${t.title}" → ${a.status}`, body: { status: a.status } },
+        t.status !== a.status
+          ? { kind: 'set_status', task_id: t.id, summary: `put "${t.title}" back to ${t.status}`, body: { status: t.status } }
+          : null))
     }
 
     case 'assign_task': {
       const t = needTask('reassign'); if (t.mode) return res.json(t)
       const match = a.assignee_name ? resolveUser(user.org_id, a.assignee_name) : null
       if (!match) return res.json(clarify(a.assignee_name ? `I couldn't find "${a.assignee_name}" — who should I assign it to?` : 'Who should I assign it to?'))
-      return res.json(confirm(`Assign "${t.title}" to ${match.name}. Confirm?`,
-        { kind: 'assign_task', task_id: t.id, summary: `"${t.title}" → ${match.name}`, body: { assignee_id: match.id } }))
+      return res.json(perform(`Assigning "${t.title}" to ${match.name}.`,
+        { kind: 'assign_task', task_id: t.id, summary: `"${t.title}" → ${match.name}`, body: { assignee_id: match.id } },
+        match.id !== t.assignee_id
+          // Undo summaries all start with "put …" so the client can speak them
+          // after "I've" and get a sentence ("Okay — I've put X back with Ravi.").
+          ? { kind: 'assign_task', task_id: t.id, summary: `put "${t.title}" back ${t.assignee_name ? `with ${t.assignee_name}` : 'to Unassigned'}`, body: { assignee_id: t.assignee_id || null } }
+          : null))
     }
 
     case 'add_comment': {
       const t = needTask('comment on'); if (t.mode) return res.json(t)
       const body = String(a.body || '').trim()
       if (!body) return res.json(clarify(`What should the comment on "${t.title}" say?`))
-      return res.json(confirm(`Comment on "${t.title}": "${body}". Post it?`,
+      // No undo: there is no delete-comment endpoint. A comment is additive and
+      // low-stakes, and the drawer stays open on it — visible, if not reversible.
+      return res.json(perform(`Adding your comment to "${t.title}": "${body}".`,
         { kind: 'add_comment', task_id: t.id, summary: `Comment on "${t.title}"`, body: { body } }))
     }
 
@@ -486,6 +514,52 @@ async function handleCommand(req, res) {
         : opts.priority ? `${opts.priority} priority tasks` : 'Tasks'
       return res.json(answer(say, { navigate: { url }, data: { type: 'group', title: `${what} by ${opts.group_by}`, rows, total } }))
     }
+
+    // ---- leaderboard & notifications -----------------------------------------
+    case 'get_leaderboard': {
+      // Same period resolution as routes/scores.js: an org-wide custom window (when
+      // a manager set one) is the default everyone lands on, else calendar month.
+      const o = db.prepare('SELECT leaderboard_from AS f, leaderboard_to AS t FROM organizations WHERE id=?').get(user.org_id)
+      const range = o?.f && o?.t ? { from: o.f, to: o.t } : null
+      const period = ['day', 'month', 'all'].includes(a.period) ? a.period : (range ? 'custom' : 'month')
+      const board = getLeaderboard(user.org_id, { period, from: range?.from, to: range?.to })
+      const label = { day: 'today', month: 'this month', all: 'all time', custom: 'in the current window' }[period]
+
+      if (a.person_name) {
+        const who = resolveUser(user.org_id, a.person_name)
+        if (!who) return res.json(clarify(`I couldn't find "${a.person_name}" on the team.`))
+        const row = board.ranked.find((r) => r.id === who.id)
+        const self = who.id === user.id
+        const name = self ? 'You' : who.name
+        const say = !row || !row.score
+          ? `${name} ${self ? "haven't" : "hasn't"} scored any points ${label} yet.`
+          : `${name} ${self ? 'are' : 'is'} ranked #${row.rank} ${label} with ${row.score} points.`
+        return res.json(answer(say, { navigate: { url: '/leaderboard' } }))
+      }
+
+      const top = board.ranked.filter((r) => r.score > 0).slice(0, 3)
+      const say = top.length
+        ? `${label[0].toUpperCase()}${label.slice(1)}: ${top.map((r, i) => `#${i + 1} ${r.name} with ${r.score} points`).join(', ')}.`
+        : `Nobody has scored any points ${label} yet.`
+      return res.json(answer(say, {
+        navigate: { url: '/leaderboard' },
+        data: { type: 'group', title: `Leaderboard (${label})`, rows: top.map((r) => ({ name: r.name, c: r.score })), total: board.total_points },
+      }))
+    }
+
+    case 'get_notifications': {
+      const rows = db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').all(user.id)
+      const unread = rows.filter((n) => !n.read)
+      if (!unread.length) return res.json(answer("You're all caught up — no unread notifications."))
+      const preview = unread.slice(0, 3).map((n) => n.message).filter(Boolean).join('. ')
+      return res.json(answer(
+        `You have ${unread.length} unread notification${unread.length === 1 ? '' : 's'}. ${preview ? `Most recent: ${preview}.` : ''}`.trim(),
+      ))
+    }
+
+    case 'mark_notifications_read':
+      return res.json(perform('Marking all your notifications as read.',
+        { kind: 'read_notifications', summary: 'Mark all notifications read' }))
 
     // ---- meetings -----------------------------------------------------------
     case 'start_meeting': {

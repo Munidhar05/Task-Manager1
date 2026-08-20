@@ -179,7 +179,10 @@ function runLookup(name, user, args) {
   if (name === 'search_tasks') return searchTasks(user, args)
   if (name === 'search_people') return searchPeople(user, args)
   if (name === 'get_task') return getTask(user, args)
-  return { error: 'unknown tool' }
+  // Models sometimes try to function-call an ACTION tool (delete_task, navigate…).
+  // Those are never callable — they are the final JSON reply. Say exactly that,
+  // echoing the args back, so the model recovers instead of apologizing.
+  return { error: `${name} is not a lookup — it is an ACTION. Finish NOW with your final JSON reply: {"tool":"${name}","args":${JSON.stringify(args || {})},"say":"..."}` }
 }
 
 // ---- prompt ------------------------------------------------------------------
@@ -198,7 +201,7 @@ INVESTIGATE, THEN ACT:
 - If a search narrows to ONE plausible match, act on it. If several are plausible, finish with "clarify" naming the top options. If none match, finish with "clarify" saying what you looked for.
 - Investigate at most a few times, then commit. Speed matters — this is a live voice conversation.
 
-ACTION TOOLS (your FINAL reply picks exactly one):
+ACTION TOOLS (your FINAL reply picks exactly one — these are NEVER called as functions; only the lookup tools are callable functions):
 ${lines}
 
 RULES:

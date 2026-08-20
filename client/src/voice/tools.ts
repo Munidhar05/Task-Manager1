@@ -337,6 +337,9 @@ export const TOOLS: ToolDef[] = [
       } else if (action.kind === 'send_message') {
         window.dispatchEvent(new Event('chat-unread-changed'))
         ctx.navigate('/chats')
+      } else if (action.kind === 'read_notifications') {
+        // Stay put — clearing the bell is not a reason to yank the user anywhere.
+        window.dispatchEvent(new Event('notifications-changed'))
       } else {
         window.dispatchEvent(new CustomEvent('tasks-changed'))
         ctx.navigate('/tasks')
@@ -396,6 +399,7 @@ async function runAction(action: any, password?: string): Promise<void> {
       await api.post(`/chat/conversations/${conv.id}/messages`, { body: action.text })
       break
     }
+    case 'read_notifications': await api.post('/notifications/read-all'); break
     case 'remove_user': {
       // Re-auth first: a spoken command must never be sufficient on its own to
       // delete a colleague's account.
