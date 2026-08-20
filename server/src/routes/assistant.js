@@ -2,7 +2,8 @@ import { Router } from 'express'
 import { authRequired } from '../auth.js'
 import { answerQuery } from '../ai/assistant.js'
 import { chatAnswer, hasLLM } from '../ai/assistantChat.js'
-import { routeCommand, STATUSES, PRIORITIES, MEETING_TITLES } from '../ai/voiceTools.js'
+import { STATUSES, PRIORITIES, MEETING_TITLES } from '../ai/voiceTools.js'
+import { agentCommand } from '../ai/voiceAgent.js'
 import { dateRange, overview, workload, groupTasks } from '../ai/voiceAnalytics.js'
 import { listMeetings, resolveMeeting, meetingSummary, askWhichMeeting } from '../ai/voiceMeetings.js'
 // The voice router works with ANY configured provider (OpenRouter/Claude/OpenAI),
@@ -228,9 +229,12 @@ async function handleCommand(req, res) {
   const tasks = commandScopedTasks(user)
   const users = db.prepare("SELECT id, name, role, aliases FROM users WHERE org_id=? AND role != 'admin'").all(user.org_id)
 
+  // The agentic loop (voiceAgent.js): investigates via search tools, then returns
+  // the same contract the legacy one-shot router produced — and falls back to that
+  // router internally on any failure, so this call site never needs to know.
   let call
   try {
-    call = await routeCommand(transcript, {
+    call = await agentCommand(transcript, {
       user, tasks, users, history,
       onUsage: (u) => recordUsage({ orgId: user.org_id, userId: user.id, feature: 'voice_command', ...u }),
     })

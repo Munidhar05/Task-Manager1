@@ -190,8 +190,8 @@ const words = (s) => String(s || '').toLowerCase().match(/[a-z0-9]+/g)?.filter((
 
 // Rank by how well a task's title matches what was said, then by recency
 // (`tasks` arrives newest-first), keeping overdue work visible.
-function rankTasks(tasks, transcript) {
-  if (tasks.length <= MAX_SNAPSHOT_TASKS) return tasks
+function rankTasks(tasks, transcript, max = MAX_SNAPSHOT_TASKS) {
+  if (tasks.length <= max) return tasks
   const q = new Set(words(transcript))
   const t0 = today()
   const scored = tasks.map((t, i) => {
@@ -201,14 +201,14 @@ function rankTasks(tasks, transcript) {
     return { t, score: overlap * 5 + recency + overdue }
   })
   scored.sort((a, b) => b.score - a.score)
-  const kept = scored.slice(0, MAX_SNAPSHOT_TASKS).map((s) => s.t)
+  const kept = scored.slice(0, max).map((s) => s.t)
   console.log(`[voiceTools] snapshot trimmed ${tasks.length} -> ${kept.length} tasks by relevance`)
   return kept
 }
 
-function snapshot(tasks, users, user, transcript) {
+export function snapshot(tasks, users, user, transcript, max = MAX_SNAPSHOT_TASKS) {
   const t0 = today()
-  const shown = rankTasks(tasks, transcript)
+  const shown = rankTasks(tasks, transcript, max)
   const taskLines = shown.map((t) => {
     const bits = [`id=${t.id}`, `"${t.title}"`, `owner=${t.assignee_name || 'Unassigned'}`, `status=${t.status}`, `priority=${t.priority}`]
     if (t.due_date) bits.push(`due=${t.due_date}${t.due_date < t0 && t.status !== 'Done' ? ' OVERDUE' : ''}`)
@@ -221,7 +221,7 @@ function snapshot(tasks, users, user, transcript) {
   return `TASKS (${taskLines.length} of ${tasks.length}):\n${taskLines.join('\n') || '(none)'}${omitted}${people}`
 }
 
-function historyBlock(history) {
+export function historyBlock(history) {
   if (!Array.isArray(history) || !history.length) return ''
   const turns = history
     .filter((m) => m && typeof m.text === 'string' && m.text.trim() && (m.role === 'user' || m.role === 'ai'))
@@ -253,8 +253,13 @@ export async function routeCommand(transcript, { user, tasks = [], users = [], h
   }
   if (raw === undefined) throw lastErr || new Error('All providers failed')
 
-  const obj = parseJson(raw) || {}
+  return validateCall(parseJson(raw) || {}, user)
+}
 
+// Validate a model-produced tool call against the registry and the caller's role.
+// Shared by the legacy one-shot router above and the agentic loop (voiceAgent.js),
+// so however the JSON was produced, exactly one gate decides what may execute.
+export function validateCall(obj, user) {
   // Explicit refusal the model was told to emit for a restricted tool.
   if (obj.tool === 'denied') return { tool: 'denied', args: {}, say: denialFor(obj.args?.wanted) }
 

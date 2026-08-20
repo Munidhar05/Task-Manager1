@@ -50,7 +50,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     ai_engine: process.env.OPENROUTER_API_KEY
-      ? `openrouter (${process.env.OPENROUTER_MODEL || 'google/gemini-2.5-pro'})`
+      ? `openrouter (voice: ${process.env.VOICE_MODEL_FAST || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash'} → ${process.env.VOICE_MODEL_SMART || 'google/gemini-2.5-pro'}, meetings: ${process.env.OPENROUTER_MEETING_MODEL || 'google/gemini-2.5-pro'})`
       : (process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'rule-based (offline)')),
     transcription: process.env.TRANSCRIPTION_PROVIDER || 'none',
     rag: {
@@ -104,7 +104,7 @@ const PORT = process.env.PORT || 4000
 const server = app.listen(PORT, () => {
   console.log(`\n  SmartTask AI server → http://localhost:${PORT}`)
   console.log(`  AI engine: ${process.env.OPENROUTER_API_KEY
-    ? `OpenRouter (${process.env.OPENROUTER_MODEL || 'google/gemini-2.5-pro'})`
+    ? `OpenRouter (voice: ${process.env.VOICE_MODEL_FAST || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash'} → ${process.env.VOICE_MODEL_SMART || 'google/gemini-2.5-pro'}, meetings: ${process.env.OPENROUTER_MEETING_MODEL || 'google/gemini-2.5-pro'})`
     : (process.env.ANTHROPIC_API_KEY ? 'Claude (online)' : 'rule-based (offline fallback)')}`)
   const ragCount = db.prepare('SELECT COUNT(*) c FROM embeddings').get().c
   console.log(`  RAG: ${hasEmbeddings() ? `ON (${embedModel()}, ${ragCount} items indexed)` : 'OFF (no embedding key set)'}`)
