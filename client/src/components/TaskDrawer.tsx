@@ -32,9 +32,21 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const updatePart = (i: number, patch: Partial<{ title: string; assignee_id: string }>) =>
     setParts((ps) => ps.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
 
+  // Progress slider: while the user is dragging, `dragProgress` owns the value so a
+  // re-render (or a save still in flight) can't yank the thumb back to the stale
+  // server number. null = nobody is dragging, the saved value is the truth.
+  const [dragProgress, setDragProgress] = useState<number | null>(null)
+  const draggingRef = useRef(false)                    // pointer is down on the slider
+  const pendingProgress = useRef<number | null>(null)  // value still to be saved
+  const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const [loadErr, setLoadErr] = useState(false)
   const load = () => { setLoadErr(false); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
-  useEffect(() => { setEditing(false); load(); api.get('/users').then(setUsers).catch(() => {}) }, [taskId])
+  useEffect(() => {
+    setEditing(false); load(); api.get('/users').then(setUsers).catch(() => {})
+    setDragProgress(null); pendingProgress.current = null; draggingRef.current = false
+  }, [taskId])
+  useEffect(() => () => { if (progressTimer.current) clearTimeout(progressTimer.current) }, [])
   // Keep the member picker in sync whenever the task's current owner changes.
   useEffect(() => { setPendingAssignee(task?.assignee?.id || '') }, [task?.assignee?.id])
   // Reset the pending status whenever the saved status changes (incl. after Accept).
@@ -66,6 +78,27 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     mutate(() => api.del(`/tasks/attachments/${a.id}`))
   }
   const setProgress = (progress: number) => mutate(() => api.patch(`/tasks/${taskId}`, { progress }))
+  // Save once, when the user lets go — not once per pixel of travel. Dragging only
+  // moves the local value, so the thumb stays exactly where the finger left it.
+  const commitProgress = async () => {
+    if (progressTimer.current) { clearTimeout(progressTimer.current); progressTimer.current = null }
+    draggingRef.current = false
+    const value = pendingProgress.current
+    pendingProgress.current = null
+    // Hand the slider back to the saved value only if no newer drag has started.
+    const release = () => { if (pendingProgress.current === null && !draggingRef.current) setDragProgress(null) }
+    if (value === null) return
+    if (value === task?.progress) { release(); return }
+    try { await setProgress(value) } catch { toast.error("Couldn't save the progress — try again.") } finally { release() }
+  }
+  const onProgressInput = (value: number) => {
+    setDragProgress(value)
+    pendingProgress.current = value
+    // Keyboard and assistive changes never send a pointer release — save shortly
+    // after the last one instead. While a pointer is down, the release saves.
+    if (progressTimer.current) clearTimeout(progressTimer.current)
+    if (!draggingRef.current) progressTimer.current = setTimeout(commitProgress, 400)
+  }
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
 
@@ -294,9 +327,13 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
           </div>
 
           <div style={{ margin: '14px 0' }}>
-            <label htmlFor="task-progress">Progress — {task.progress}%</label>
-            <input id="task-progress" type="range" min={0} max={100} step={10} value={task.progress}
-              aria-valuetext={`${task.progress} percent`} onChange={(e) => setProgress(Number(e.target.value))} />
+            <label htmlFor="task-progress">Progress — {dragProgress ?? task.progress}%</label>
+            <input id="task-progress" type="range" min={0} max={100} step={10} value={dragProgress ?? task.progress}
+              aria-valuetext={`${dragProgress ?? task.progress} percent`}
+              onChange={(e) => onProgressInput(Number(e.target.value))}
+              onPointerDown={() => { draggingRef.current = true }}
+              onPointerUp={commitProgress} onPointerCancel={commitProgress} onLostPointerCapture={commitProgress}
+              onKeyUp={commitProgress} onBlur={commitProgress} />
           </div>
 
           <div style={{ margin: '16px 0' }}>
