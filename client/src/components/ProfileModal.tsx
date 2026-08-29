@@ -3,6 +3,7 @@ import { api, getToken, API_BASE, userAvatarUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, LANG_LABEL, Ic } from '../ui'
 import { WALLPAPERS, getWallpaperId, applyWallpaper } from '../lib/wallpaper'
+import { THEME_OPTIONS, ThemeChoice, getThemeChoice, applyTheme, resolveTheme } from '../lib/theme'
 import { useEscape } from '../lib/useEscape'
 import { confirmDialog, confirmLogout } from '../lib/confirm'
 
@@ -67,6 +68,7 @@ export default function ProfileModal({ onClose, onFeedback }: { onClose: () => v
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [wallpaper, setWallpaper] = useState(getWallpaperId())
+  const [theme, setTheme] = useState<ThemeChoice>(getThemeChoice())
   const [prefs, setPrefs] = useState<Record<string, boolean>>(() => {
     const p = (user as any)?.notif_prefs || {}
     return Object.fromEntries(NOTIF_ROWS.map((r) => [r.key, p[r.key] !== false]))
@@ -189,6 +191,9 @@ export default function ProfileModal({ onClose, onFeedback }: { onClose: () => v
   }
 
   const pickWallpaper = (id: string) => { setWallpaper(id); applyWallpaper(id) }
+  // Applies as you pick, like the wallpaper beside it — a theme you have to save
+  // is a theme you cannot judge, since the whole point is what it looks like.
+  const pickTheme = (id: ThemeChoice) => { setTheme(id); applyTheme(id) }
 
   const note = (id: SectionId) => msg && msg.section === id
     ? <div className={'profile-msg ' + msg.kind}>{msg.text}</div> : null
@@ -251,6 +256,29 @@ export default function ProfileModal({ onClose, onFeedback }: { onClose: () => v
 
       case 'appearance': return (
         <>
+          <div className="pf-sub">Theme</div>
+          <div className="muted pf-hint" style={{ marginTop: -4 }}>
+            {theme === 'system'
+              ? `Following your device, which is currently ${resolveTheme('system')}.`
+              : 'Applies on this device.'}
+          </div>
+          <div className="pf-themes" role="radiogroup" aria-label="Theme">
+            {THEME_OPTIONS.map((t) => (
+              <button
+                key={t.id}
+                role="radio"
+                aria-checked={theme === t.id}
+                className={'pf-theme' + (theme === t.id ? ' on' : '')}
+                onClick={() => pickTheme(t.id)}
+              >
+                <span className={'pf-theme-swatch pf-theme-swatch--' + t.id} aria-hidden="true" />
+                <span className="pf-theme-label">{t.label}</span>
+                <span className="muted pf-theme-hint">{t.hint}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="pf-divide" />
           <div className="pf-sub">App wallpaper</div>
           <div className="muted pf-hint" style={{ marginTop: -4 }}>Applies as you pick, on this device.</div>
           <div className="wallpaper-grid">
