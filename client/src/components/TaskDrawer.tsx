@@ -40,8 +40,15 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const pendingProgress = useRef<number | null>(null)  // value still to be saved
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Who changed what, newest first — read back from the audit trail the server
+  // has always written. Fetched alongside the task and refreshed after every
+  // mutation, so an edit shows its author the moment it is made.
+  type Edit = { actor_id: string; actor_name: string; avatar_color?: string; fields: string[]; reassigned: boolean; at: string }
+  const [edits, setEdits] = useState<Edit[]>([])
+  const loadEdits = () => api.get(`/tasks/${taskId}/history`).then(setEdits).catch(() => setEdits([]))
+
   const [loadErr, setLoadErr] = useState(false)
-  const load = () => { setLoadErr(false); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
+  const load = () => { setLoadErr(false); loadEdits(); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
   useEffect(() => {
     setEditing(false); load(); api.get('/users').then(setUsers).catch(() => {})
     setDragProgress(null); pendingProgress.current = null; draggingRef.current = false
@@ -54,7 +61,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
 
   const mutate = async (fn: () => Promise<any>) => {
     setBusy(true)
-    try { const t = await fn(); if (t?.id) setTask(t); else await load(); onChange?.(t?.id ? t : undefined) }
+    try { const t = await fn(); if (t?.id) setTask(t); else await load(); await loadEdits(); onChange?.(t?.id ? t : undefined) }
     finally { setBusy(false) }
   }
   const setStatus = (status: string) => mutate(() => api.post(`/tasks/${taskId}/status`, { status }))
@@ -334,6 +341,28 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="check" size={14} /> Completed</span><span style={{ color: task.completed_at ? 'var(--success-ink)' : 'inherit' }}>{fmtDateTime(task.completed_at)}</span></div>
             </div>
           </div>
+
+          {edits.length > 0 && (
+            <div style={{ margin: '16px 0' }}>
+              <label>Edited by</label>
+              <div style={{ fontSize: 13, display: 'grid', gap: 8 }}>
+                {edits.map((e, i) => (
+                  <div key={i} className="spread" style={{ alignItems: 'flex-start', gap: 10 }}>
+                    <span className="row" style={{ gap: 7, minWidth: 0 }}>
+                      <Avatar name={e.actor_name} color={e.avatar_color} size={22} />
+                      <span style={{ minWidth: 0 }}>
+                        <b>{e.actor_name}</b>{' '}
+                        <span className="muted">
+                          {e.reassigned ? 'reassigned it and changed ' : 'changed '}{e.fields.join(', ')}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(e.at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div style={{ margin: '14px 0' }}>
             <label htmlFor="task-progress">Progress — {dragProgress ?? task.progress}%</label>
