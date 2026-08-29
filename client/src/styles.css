@@ -1065,6 +1065,10 @@ tbody tr:hover { background: var(--n-50); }
 /* ---- modal / drawer ---- */
 .overlay { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 50; display: flex; justify-content: flex-end; }
 .drawer { background: var(--surface); width: 540px; max-width: 92vw; height: 100%; overflow-y: auto; box-shadow: var(--shadow-lg); animation: slideIn .2s ease; }
+/* Reaching the end of an overlay's own scroller must not hand the rest of the
+   gesture to the page underneath — the scroll lock covers the wheel, this covers
+   the momentum fling that would otherwise carry straight through it. */
+.drawer, .modal, .pf-body, .pf-nav, .pf-panel { overscroll-behavior: contain; }
 /* Keep the foot of the drawer clear of the floating "Ask BTM" pill. It is fixed
    to the bottom-right at z-index 1200 — above the drawer — so with a long thread
    the comment box scrolled underneath it and the Post button became unreachable.
