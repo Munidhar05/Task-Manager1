@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { lockBodyScroll, unlockBodyScroll } from './scrollLock'
 
 // Accessibility hook for modal dialogs. Attach the returned ref to the dialog
 // container and it will:
@@ -16,6 +17,14 @@ export function useDialog<T extends HTMLElement>(onClose: () => void, enabled = 
   const ref = useRef<T | null>(null)
   const closeRef = useRef(onClose)
   useEffect(() => { closeRef.current = onClose }, [onClose])
+
+  // Same `enabled` gate as the focus trap: a docked pane is part of the page and
+  // must leave the page scrolling normally.
+  useEffect(() => {
+    if (!enabled) return
+    lockBodyScroll()
+    return () => unlockBodyScroll()
+  }, [enabled])
 
   useEffect(() => {
     if (!enabled) return

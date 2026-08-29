@@ -543,6 +543,22 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // The pane only makes sense on the list: the board already fills the width,
   // and the completed archive is a read-only table nobody drills into.
   const split = wide && effectiveView === 'list' && quickView !== 'completed'
+  // Whether the page is ACTUALLY two columns right now. `split` only says the
+  // layout is available; until a task is picked there is nothing to put beside
+  // the list, so the table keeps the full width and the page behaves exactly as
+  // it did before the pane existed. Choosing a task is what splits the screen.
+  const paneOpen = split && !!openId
+  // With the pane open the two columns own the scrolling, so the document must
+  // not also scroll, or reading down the task pane drags the whole page, header
+  // and all, out from under it. A class on <body> rather than styles here,
+  // because the chain that has to stop growing (.app -> .main -> .content) sits
+  // above this page. It reverts when the pane closes and on unmount, so the page
+  // always gets its normal scrolling back.
+  useEffect(() => {
+    if (!paneOpen) return
+    document.body.classList.add('is-split-view')
+    return () => document.body.classList.remove('is-split-view')
+  }, [paneOpen])
   const setScopeAssigned = (on: boolean) => {
     const next = new URLSearchParams(searchParams)
     if (on) next.set('assigned_by_me', '1'); else next.delete('assigned_by_me')
@@ -707,8 +723,9 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       )}
       <td data-label="Due">{dueLabel(t)}</td>
       {/* Dropped while the detail pane is open: six columns in half the width
-          is unreadable, and this is the one the pane itself repeats. */}
-      {!split && (
+          is unreadable, and this is the one the pane itself repeats. Back again
+          the moment the pane closes and the table has the screen to itself. */}
+      {!paneOpen && (
         <td data-label="Time">
           <div style={{ fontSize: 12.5 }}>{fmtDateTime(givenOf(t))}</div>
           <div className="muted" style={{ fontSize: 11 }}>{givenLabel(t)}</div>
@@ -913,7 +930,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               </table>
             </div>
           ) : (
-            <div className={'tasks-splitwrap' + (split ? ' tasks-split' : '')}>
+            <div className={'tasks-splitwrap' + (paneOpen ? ' tasks-split' : '')}>
             <div className="card table-card-wrap tasks-split-list">
               <table className="table-cards table-tasks">
                 <thead><tr>
@@ -922,7 +939,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                   {sortTh('Status', 'status')}
                   {!personal && sortTh('Assignee', 'assignee')}
                   {sortTh('Due', 'due')}
-                  {!split && sortTh('Time', 'time')}
+                  {!paneOpen && sortTh('Time', 'time')}
                 </tr></thead>
                 <tbody>
                   {!isGroupedSort(sort.key)
@@ -930,7 +947,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                     : groupedByDay.map((g) => (
                       <React.Fragment key={g.day}>
                         <tr className="day-group-row">
-                          <td colSpan={(personal ? 5 : 6) - (split ? 1 : 0)}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
+                          <td colSpan={(personal ? 5 : 6) - (paneOpen ? 1 : 0)}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
                         </tr>
                         {g.items.map(renderRow)}
                       </React.Fragment>
@@ -938,23 +955,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                 </tbody>
               </table>
             </div>
-            {/* The pane is always here on a wide screen, not only once something
-                is picked — an empty half is exactly the space this was meant to
-                use, so it offers the next action instead of sitting blank. */}
-            {split && (
+            {/* Only once a task is picked. An empty pane reserved half the screen
+                to say nothing, and took the Time column with it — so the table now
+                keeps the full width until there is something to show beside it. */}
+            {paneOpen && (
               <aside className="tasks-split-pane">
-                {openId
-                  ? <TaskDrawer key={openId} taskId={openId} variant="pane" onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />
-                  : (
-                    <div className="card tasks-pane-empty">
-                      <EmptyState
-                        icon={<Ic name="doc" size={40} />}
-                        title="Select a task"
-                        hint="Pick a row to read it, change its status, or reply — it opens here instead of covering the list."
-                        action={<button className="btn btn-primary btn-sm row" style={{ gap: 5 }} onClick={() => setShowNew(true)}><Ic name="plus" size={15} /> New task</button>}
-                      />
-                    </div>
-                  )}
+                <TaskDrawer key={openId} taskId={openId!} variant="pane" onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />
               </aside>
             )}
             </div>
@@ -970,7 +976,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {/* Drawer edits patch the single row in place when the mutation returned the
           updated task; anything else (delete, uploads) falls back to a reload. */}
-      {openId && !split && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
+      {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
       {filtersOpen && (
