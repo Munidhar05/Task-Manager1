@@ -187,6 +187,23 @@ export function initSchema() {
   CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read);
 
   -- FCM device tokens for native push (one row per device; pushes target a user's rows).
+  -- One row per LOGIN, so "where am I signed in?" has an answer. JWTs are
+  -- stateless and long-lived (30d), so without this a token could not be taken
+  -- back once issued: signing out on a lost phone did nothing to the token in
+  -- its storage. Each token now carries its session id and every request checks
+  -- the row, which is what makes revoking real.
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device TEXT,                                -- 'Android app', 'Chrome on Windows', …
+    ip TEXT,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    revoked_at TEXT,                            -- set = signed out, token refused
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, last_seen_at);
+
   CREATE TABLE IF NOT EXISTS device_tokens (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -504,6 +521,10 @@ export function initSchema() {
   // or "What could we improve?" (1-3★). A JSON array of labels, NULL when none
   // were picked. Stored on both the current opinion and every event behind it,
   // so a rating that moved from 2★ to 5★ keeps what was said at each step.
+  // Which notifications this person wants. JSON object keyed by category
+  // (tasks/chat/deadlines/approvals); NULL means "never chose", which reads as
+  // everything on — the behaviour before the setting existed.
+  ensureColumn('users', 'notif_prefs', 'TEXT')
   ensureColumn('app_feedback', 'tags', 'TEXT')
   ensureColumn('feedback_events', 'tags', 'TEXT')
   // Google account link: the Google user id ("sub") for accounts that have signed

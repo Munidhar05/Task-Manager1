@@ -82,11 +82,56 @@ const PUSH_TITLES = {
   chat_message: 'New message',
 }
 
+// A short, human name for the client behind a request — "Android app",
+// "Chrome on Windows". Used by the session list and by feedback's context line.
+export function deviceLabel(ua = '') {
+  const s = String(ua)
+  if (/SmartTask|Capacitor|wv\)/i.test(s) && /Android/i.test(s)) return 'Android app'
+  const os = /Windows/i.test(s) ? 'Windows'
+    : /iPhone|iPad|iPod/i.test(s) ? 'iOS'
+    : /Android/i.test(s) ? 'Android'
+    : /Mac OS X/i.test(s) ? 'macOS'
+    : /Linux/i.test(s) ? 'Linux' : ''
+  // Order matters — Edge and Chrome both claim "Chrome", Chrome claims "Safari".
+  const browser = /Edg\//i.test(s) ? 'Edge'
+    : /OPR\//i.test(s) ? 'Opera'
+    : /Firefox\//i.test(s) ? 'Firefox'
+    : /Chrome\//i.test(s) ? 'Chrome'
+    : /Safari\//i.test(s) ? 'Safari' : ''
+  if (browser && os) return `${browser} on ${os}`
+  return browser || os || 'Unknown device'
+}
+
+// Which notification categories a person still wants. Every type maps to one
+// category so a toggle governs a whole family rather than a single message.
+export const NOTIF_CATEGORIES = {
+  task_assigned: 'tasks',
+  task_reassigned: 'tasks',
+  task_submitted: 'approvals',
+  task_approved: 'approvals',
+  task_reopened: 'approvals',
+  task_comment: 'comments',
+  chat_message: 'chat',
+  task_due_soon: 'deadlines',
+}
+// NULL prefs = never chose = everything on, which is how it behaved before the
+// setting existed. Only an explicit false turns a category off.
+export function notifAllowed(userId, type) {
+  const cat = NOTIF_CATEGORIES[type]
+  if (!cat) return true
+  const row = db.prepare('SELECT notif_prefs FROM users WHERE id=?').get(userId)
+  if (!row?.notif_prefs) return true
+  try { return JSON.parse(row.notif_prefs)[cat] !== false } catch { return true }
+}
+
 // Create an in-app notification for a single recipient, and fire a native push
 // to their devices (no-op if FCM isn't configured). Push is fire-and-forget so a
 // slow/failed send never blocks the request.
 export function notify(orgId, userId, type, message, taskId = null) {
   if (!userId) return
+  // A muted category is dropped outright rather than filed and hidden — a bell
+  // that still counts messages you asked not to receive is not switched off.
+  if (!notifAllowed(userId, type)) return
   db.prepare(
     `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, read, created_at)
      VALUES (?,?,?,?,?,?,0,?)`
