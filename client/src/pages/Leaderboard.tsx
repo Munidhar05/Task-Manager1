@@ -54,18 +54,63 @@ function DayBars({ history, w = 320, h = 54 }: { history: { day: string; points:
   const max = Math.max(1, ...history.map((d) => d.points))
   const gap = 2
   const bw = Math.max(2, (w - gap * (history.length - 1)) / history.length)
+  const [hot, setHot] = useState<number | null>(null)
+
+  // A bar can be 2px wide and a zero day is a 1px line, so the painted mark is
+  // not the hit target — each column gets a full-height transparent rect covering
+  // its bar AND the gap beside it. Aim anywhere in the column and it registers.
+  const colW = bw + gap
+  const barTop = (d: { points: number }) => h - (d.points ? Math.max(2, (d.points / max) * (h - 6)) : 1)
+  // Percent, not pixels: preserveAspectRatio="none" stretches the x axis to the
+  // card's width, so anything measured in viewBox units would drift as it resizes.
+  const centrePct = (i: number) => ((i * colW + bw / 2) / w) * 100
+
+  const fmtDay = (day: string) => {
+    // Bare yyyy-mm-dd parses as UTC and lands on the previous evening in western
+    // zones — pin it to local midnight so the label matches the bar.
+    const dt = new Date(day + 'T00:00:00')
+    return isNaN(dt.getTime()) ? day : dt.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+  }
+
+  const active = hot === null ? null : history[hot]
+
   return (
-    // viewBox + width:100% instead of a fixed 320px canvas: the modal is fluid, so
-    // a fixed width overflowed its card on anything narrower than a large phone.
-    // preserveAspectRatio="none" lets the bars stretch to fill — heights still read
-    // correctly because the height attribute is fixed.
-    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" className="lb-spark" aria-hidden="true">
-      {history.map((d, i) => {
-        const bh = d.points ? Math.max(2, (d.points / max) * (h - 6)) : 1
-        return <rect key={d.day} x={i * (bw + gap)} y={h - bh} width={bw} height={bh} rx={1.5}
-          fill={d.points ? '#f2622e' : 'var(--n-300)'} />
-      })}
-    </svg>
+    <div className="lb-spark-wrap" onPointerLeave={() => setHot(null)}>
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" className="lb-spark"
+        role="img" aria-label={`Points per day over the last ${history.length} days`}>
+        {history.map((d, i) => (
+          <rect key={d.day} className={'lb-bar' + (hot === i ? ' is-hot' : '')}
+            x={i * colW} y={barTop(d)} width={bw} height={h - barTop(d)} rx={1.5}
+            fill={d.points ? 'var(--primary)' : 'var(--n-300)'} />
+        ))}
+        {/* Hit layer on top, so a thin bar is never the thing you have to hit. */}
+        {history.map((d, i) => (
+          <rect key={'hit-' + d.day} x={i * colW} y={0} width={colW} height={h} fill="transparent"
+            className="lb-bar-hit"
+            // Focusable only where there is something to read, or this is 30 tab
+            // stops through mostly empty days.
+            tabIndex={d.points ? 0 : -1}
+            aria-label={`${fmtDay(d.day)}: ${d.points} ${d.points === 1 ? 'point' : 'points'}`}
+            onPointerEnter={() => setHot(i)}
+            onFocus={() => setHot(i)}
+            onBlur={() => setHot(null)} />
+        ))}
+      </svg>
+      {active && (
+        // The value leads and the date follows: the reader already knows roughly
+        // which day they are pointing at — the number is what they came for.
+        <div className="lb-tip" role="status" style={{
+          left: centrePct(hot!) + '%',
+          bottom: h - barTop(active) + 8,
+          // Keep it inside the card at both ends instead of letting it clip.
+          transform: centrePct(hot!) < 15 ? 'translateX(0)'
+            : centrePct(hot!) > 85 ? 'translateX(-100%)' : 'translateX(-50%)',
+        }}>
+          <span className="lb-tip-val">{active.points} {active.points === 1 ? 'point' : 'points'}</span>
+          <span className="lb-tip-day">{fmtDay(active.day)}</span>
+        </div>
+      )}
+    </div>
   )
 }
 
