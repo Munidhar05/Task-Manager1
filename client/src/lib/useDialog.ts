@@ -8,12 +8,17 @@ import { useEffect, useRef } from 'react'
 //   • move focus into the dialog on open, and
 //   • restore focus to the previously-focused element on close.
 // Pair with role="dialog" (or "alertdialog") + aria-modal="true" on the container.
-export function useDialog<T extends HTMLElement>(onClose: () => void) {
+// `enabled` turns the whole behaviour off while keeping the hook call in place
+// (hooks can't be called conditionally). A panel docked beside the page is not a
+// dialog: trapping Tab inside it and stealing focus on open would strand the
+// keyboard away from the list it sits next to.
+export function useDialog<T extends HTMLElement>(onClose: () => void, enabled = true) {
   const ref = useRef<T | null>(null)
   const closeRef = useRef(onClose)
   useEffect(() => { closeRef.current = onClose }, [onClose])
 
   useEffect(() => {
+    if (!enabled) return
     const prevActive = document.activeElement as HTMLElement | null
 
     const selector = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
@@ -43,7 +48,7 @@ export function useDialog<T extends HTMLElement>(onClose: () => void) {
       // Restore focus to whatever opened the dialog.
       if (prevActive && typeof prevActive.focus === 'function') prevActive.focus()
     }
-  }, [])
+  }, [enabled])
 
   return ref
 }

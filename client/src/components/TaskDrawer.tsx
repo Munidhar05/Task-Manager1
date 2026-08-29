@@ -13,9 +13,23 @@ const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reope
 // onChange receives the updated task when the mutation returned one, so list pages
 // can patch that row in place instead of re-fetching everything; called with no
 // argument (→ caller should re-fetch) after deletes/uploads.
-export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void }) {
+// `variant` decides how the drawer is mounted, not what it contains. 'modal' is
+// the overlay it has always been; 'pane' docks the same content beside the list
+// on a wide screen, where covering the page to read one task wastes the room.
+export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal' }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void; variant?: 'modal' | 'pane' }) {
   const { user } = useAuth()
-  const drawerRef = useDialog<HTMLDivElement>(onClose)
+  const pane = variant === 'pane'
+  const drawerRef = useDialog<HTMLDivElement>(onClose, !pane)
+  // A plain function, deliberately not a component: a component declared inside
+  // render is a new type every render, so React would unmount and remount the
+  // whole drawer on each keystroke and every field would lose what was typed.
+  const shell = (label: string, children: React.ReactNode) => pane
+    ? <div className="drawer drawer-pane" ref={drawerRef} aria-label={label}>{children}</div>
+    : (
+      <div className="overlay" onClick={onClose}>
+        <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={label} onClick={(e) => e.stopPropagation()}>{children}</div>
+      </div>
+    )
   const [task, setTask] = useState<Task | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [comment, setComment] = useState('')
@@ -173,9 +187,8 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     finally { setBusy(false) }
   }
 
-  if (loadErr) return (
-    <div className="overlay" onClick={onClose}>
-      <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Task" onClick={(e) => e.stopPropagation()}>
+  if (loadErr) return shell('Task', (
+      <>
         <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>Task</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="empty-state">
           <div className="empty-state-icon"><Ic name="warning" size={40} /></div>
@@ -183,12 +196,11 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
           <div className="empty-state-hint">Check your connection and try again.</div>
           <div className="empty-state-action"><button className="btn btn-primary btn-sm" onClick={load}>Retry</button></div>
         </div>
-      </div>
-    </div>
-  )
-  if (!task) return (
-    <div className="overlay" onClick={onClose}><div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Loading task" onClick={(e) => e.stopPropagation()}><div className="card-pad" style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div></div></div>
-  )
+      </>
+  ))
+  if (!task) return shell('Loading task', (
+    <div className="card-pad" style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div>
+  ))
   const isManager = user?.role !== 'employee'
   // The person who handed this task out (assigned it, or split the part off) can
   // decide its submission too — mirrors the per-task check on POST /:id/approve.
@@ -218,9 +230,8 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const subPct = subs.length ? Math.round((subDone / subs.length) * 100) : 0
   const lookupUser = (uid?: string | null) => users.find((u) => u.id === uid)
 
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={task.title} onClick={(e) => e.stopPropagation()}>
+  return shell(task.title, (
+      <>
         <div className="card-head spread">
           <div className="dr-headtitle">Task details</div>
           <div className="row">
@@ -588,7 +599,6 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
           </div>
         )}
-      </div>
-    </div>
-  )
+      </>
+  ))
 }

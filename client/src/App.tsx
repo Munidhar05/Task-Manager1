@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
+import { confirmLogout } from './lib/confirm'
 import { runBackHandlers } from './back'
 import { api, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
@@ -151,13 +152,25 @@ function Layout({ children }: { children: React.ReactNode }) {
             <div className="n">{user.name}</div>
             <div className="r">{user.role}</div>
           </button>
-          <button className="btn btn-ghost btn-sm logout-btn" onClick={logout} title="Log out" aria-label="Log out">
+          <button className="btn btn-ghost btn-sm logout-btn" onClick={async () => { if (await confirmLogout()) logout() }} title="Log out" aria-label="Log out">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 3v9" />
               <path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
             </svg>
           </button>
         </div>
+        {/* Phones only. The sidebar profile row above (and the power button in
+            it) is hidden on mobile, so the drawer had no way to sign out at all
+            — the only route was the top-bar avatar into Profile › Security. The
+            drawer stays open behind the confirmation, which sits above it, so a
+            cancel leaves you exactly where you were. */}
+        <button className="sidebar-logout-m" onClick={async () => { if (await confirmLogout()) logout() }}>
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3v9" />
+            <path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
+          </svg>
+          Log out
+        </button>
         <div className="sidebar-foot">
           <div className={'sidebar-sync' + (online ? '' : ' offline')} title={online ? 'Your workspace is live' : 'Trying to reconnect…'}>
             <span className="sidebar-sync-dot" />
