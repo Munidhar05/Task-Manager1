@@ -988,6 +988,14 @@ tbody tr:hover { background: var(--n-50); }
 /* ---- modal / drawer ---- */
 .overlay { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 50; display: flex; justify-content: flex-end; }
 .drawer { background: var(--surface); width: 540px; max-width: 92vw; height: 100%; overflow-y: auto; box-shadow: var(--shadow-lg); animation: slideIn .2s ease; }
+/* Keep the foot of the drawer clear of the floating "Ask BTM" pill. It is fixed
+   to the bottom-right at z-index 1200 — above the drawer — so with a long thread
+   the comment box scrolled underneath it and the Post button became unreachable.
+   Reserved space lets the composer scroll clear instead. Only where the pill is
+   actually shown: on phones it is display:none (the mic lives in the tab bar),
+   and the drawer covers the tab bar anyway. */
+@media (min-width: 721px) {
+  .drawer { padding-bottom: 104px; }
 
 /* Task-details drawer — template field-row layout. */
 .dr-headtitle { font-weight: 800; font-size: 16px; color: var(--text); }
