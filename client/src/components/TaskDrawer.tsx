@@ -40,8 +40,15 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const pendingProgress = useRef<number | null>(null)  // value still to be saved
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Who changed what, newest first — read back from the audit trail the server
+  // has always written. Fetched alongside the task and refreshed after every
+  // mutation, so an edit shows its author the moment it is made.
+  type Edit = { actor_id: string; actor_name: string; avatar_color?: string; fields: string[]; reassigned: boolean; at: string }
+  const [edits, setEdits] = useState<Edit[]>([])
+  const loadEdits = () => api.get(`/tasks/${taskId}/history`).then(setEdits).catch(() => setEdits([]))
+
   const [loadErr, setLoadErr] = useState(false)
-  const load = () => { setLoadErr(false); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
+  const load = () => { setLoadErr(false); loadEdits(); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
   useEffect(() => {
     setEditing(false); load(); api.get('/users').then(setUsers).catch(() => {})
     setDragProgress(null); pendingProgress.current = null; draggingRef.current = false
@@ -54,7 +61,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
 
   const mutate = async (fn: () => Promise<any>) => {
     setBusy(true)
-    try { const t = await fn(); if (t?.id) setTask(t); else await load(); onChange?.(t?.id ? t : undefined) }
+    try { const t = await fn(); if (t?.id) setTask(t); else await load(); await loadEdits(); onChange?.(t?.id ? t : undefined) }
     finally { setBusy(false) }
   }
   const setStatus = (status: string) => mutate(() => api.post(`/tasks/${taskId}/status`, { status }))
@@ -197,6 +204,15 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const canDelete = isManager || isOwnWork || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
   // The task owner (or a manager) can split a top-level task into shared parts.
   const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
+  // Whoever set the work owns what it asks for: managers, and the person who
+  // handed it out. Being given a task is NOT a licence to rewrite it — the
+  // assignee moves status and progress and nothing else, so they can't quietly
+  // reword, reprioritise or hand on the brief someone set them. This gates the
+  // whole brief, not just the title: assignee, priority, category and due date
+  // hang off it too. `assigned_by_id` rather than isAssigner, so a task you
+  // raised for yourself stays yours to edit (isAssigner excludes exactly that
+  // case — you may not approve your own submission, but you may edit it).
+  const canEdit = isManager || (!!user && task.assigned_by_id === user.id)
   const subs = task.subtasks || []
   const subDone = subs.filter((s: any) => s.status === 'Done').length
   const subPct = subs.length ? Math.round((subDone / subs.length) * 100) : 0
@@ -208,7 +224,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
         <div className="card-head spread">
           <div className="dr-headtitle">Task details</div>
           <div className="row">
-            {isManager && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
+            {canEdit && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
             {canDelete && <button className="btn btn-sm btn-danger row" style={{ gap: 6 }} disabled={busy} onClick={del} title="Delete task"><Ic name="trash" size={14} /> Delete</button>}
             <button className="btn btn-ghost" onClick={onClose}>✕</button>
           </div>
@@ -258,7 +274,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field dr-field--tall">
               <span className="dr-field-label">Assignee</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <div className="row" style={{ gap: 8 }}>
                     <select data-va="task.drawer.assignee" value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
                       <option value="">Select member…</option>
@@ -282,7 +298,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field">
               <span className="dr-field-label">Priority</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <select value={task.priority} onChange={(e) => setPriority(e.target.value)} style={{ width: 'auto' }}>
                     {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
                   </select>
@@ -292,7 +308,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field">
               <span className="dr-field-label">Category</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <select value={task.category || ''} onChange={(e) => setCategory(e.target.value)} style={{ width: 'auto' }}>
                     <option value="">Uncategorized</option>
                     {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -325,6 +341,28 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
               <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="check" size={14} /> Completed</span><span style={{ color: task.completed_at ? 'var(--success-ink)' : 'inherit' }}>{fmtDateTime(task.completed_at)}</span></div>
             </div>
           </div>
+
+          {edits.length > 0 && (
+            <div style={{ margin: '16px 0' }}>
+              <label>Edited by</label>
+              <div style={{ fontSize: 13, display: 'grid', gap: 8 }}>
+                {edits.map((e, i) => (
+                  <div key={i} className="spread" style={{ alignItems: 'flex-start', gap: 10 }}>
+                    <span className="row" style={{ gap: 7, minWidth: 0 }}>
+                      <Avatar name={e.actor_name} color={e.avatar_color} size={22} />
+                      <span style={{ minWidth: 0 }}>
+                        <b>{e.actor_name}</b>{' '}
+                        <span className="muted">
+                          {e.reassigned ? 'reassigned it and changed ' : 'changed '}{e.fields.join(', ')}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(e.at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div style={{ margin: '14px 0' }}>
             <label htmlFor="task-progress">Progress — {dragProgress ?? task.progress}%</label>
