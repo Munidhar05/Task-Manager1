@@ -500,6 +500,12 @@ export function initSchema() {
   ensureColumn('organizations', 'leaderboard_from', 'TEXT')
   ensureColumn('organizations', 'leaderboard_to', 'TEXT')
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
+  // Feedback prompt tags — the chips picked under "What do you like most?" (4-5★)
+  // or "What could we improve?" (1-3★). A JSON array of labels, NULL when none
+  // were picked. Stored on both the current opinion and every event behind it,
+  // so a rating that moved from 2★ to 5★ keeps what was said at each step.
+  ensureColumn('app_feedback', 'tags', 'TEXT')
+  ensureColumn('feedback_events', 'tags', 'TEXT')
   // Google account link: the Google user id ("sub") for accounts that have signed
   // in with Google at least once. NULL for password-only accounts. Sign-in matches
   // on email first (login-only — we never create accounts from Google), then stamps

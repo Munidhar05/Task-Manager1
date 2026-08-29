@@ -44,11 +44,41 @@ function cleanPage(raw) {
   return p.slice(0, 120) || null
 }
 
+// The chips offered under the rating, split by which question was asked. A
+// submission is only allowed to carry labels from this list: they are a fixed
+// vocabulary so they can be counted across people, which free text can't be.
+// Both halves are accepted on write whatever the rating — the band a rating
+// falls in is the client's business, and rejecting a mismatch would only lose
+// feedback someone actually gave.
+export const FEEDBACK_TAGS = {
+  like: ['Easy to use', 'Voice assistant', 'Task tracking', 'Meeting notes', 'Notifications', 'Speed'],
+  improve: ['Ease of use', 'Voice accuracy', 'Task tracking', 'Meeting notes', 'Notifications', 'Speed', 'Bugs & crashes'],
+}
+const ALL_TAGS = new Set([...FEEDBACK_TAGS.like, ...FEEDBACK_TAGS.improve])
+// Store NULL rather than '[]' for "none picked", so the column reads the same as
+// every other optional one and older rows need no backfill.
+function cleanTags(raw) {
+  if (!Array.isArray(raw)) return null
+  const picked = [...new Set(raw.map((t) => String(t || '').trim()))].filter((t) => ALL_TAGS.has(t)).slice(0, 8)
+  return picked.length ? JSON.stringify(picked) : null
+}
+// Rows carry tags as stored JSON; every reader wants the array.
+const withTags = (row) => {
+  if (!row) return row
+  let tags = []
+  try { tags = JSON.parse(row.tags || '[]') } catch { tags = [] }
+  return { ...row, tags: Array.isArray(tags) ? tags : [] }
+}
+
+// The tag vocabulary, so the form renders the same labels the server accepts
+// rather than a second copy that can drift out of step with it.
+r.get('/tags', (_req, res) => res.json(FEEDBACK_TAGS))
+
 // The signed-in user's own current rating (null if they haven't rated), so the
 // form can open pre-filled and read "update" rather than "submit".
 r.get('/mine', (req, res) => {
-  const row = db.prepare('SELECT rating, comment, updated_at FROM app_feedback WHERE user_id=?').get(req.user.id)
-  res.json(row || null)
+  const row = db.prepare('SELECT rating, comment, tags, updated_at FROM app_feedback WHERE user_id=?').get(req.user.id)
+  res.json(row ? withTags(row) : null)
 })
 
 // Submit or update the user's rating. One row per user in app_feedback (UNIQUE
@@ -60,6 +90,7 @@ r.post('/', (req, res) => {
     return res.status(400).json({ error: 'Rating must be a whole number from 1 to 5.' })
   }
   const comment = String(req.body?.comment || '').trim().slice(0, 2000) || null
+  const tags = cleanTags(req.body?.tags)
   const page = cleanPage(req.body?.page)
   const appVersion = String(req.body?.app_version || '').trim().slice(0, 40) || null
   const device = deviceLabel(req.get('user-agent'))
@@ -68,17 +99,17 @@ r.post('/', (req, res) => {
   const ts = now()
   db.transaction(() => {
     if (existing) {
-      db.prepare('UPDATE app_feedback SET rating=?, comment=?, updated_at=? WHERE id=?').run(rating, comment, ts, existing.id)
+      db.prepare('UPDATE app_feedback SET rating=?, comment=?, tags=?, updated_at=? WHERE id=?').run(rating, comment, tags, ts, existing.id)
     } else {
-      db.prepare('INSERT INTO app_feedback (id, org_id, user_id, rating, comment, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
-        .run(id('fb'), req.user.org_id, req.user.id, rating, comment, ts, ts)
+      db.prepare('INSERT INTO app_feedback (id, org_id, user_id, rating, comment, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)')
+        .run(id('fb'), req.user.org_id, req.user.id, rating, comment, tags, ts, ts)
     }
-    db.prepare(`INSERT INTO feedback_events (id, org_id, user_id, rating, comment, kind, page, device, app_version, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)`)
-      .run(id('fbe'), req.user.org_id, req.user.id, rating, comment, existing ? 'update' : 'new', page, device, appVersion, ts)
+    db.prepare(`INSERT INTO feedback_events (id, org_id, user_id, rating, comment, tags, kind, page, device, app_version, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(id('fbe'), req.user.org_id, req.user.id, rating, comment, tags, existing ? 'update' : 'new', page, device, appVersion, ts)
   })()
 
-  res.status(existing ? 200 : 201).json({ ok: true, rating, comment })
+  res.status(existing ? 200 : 201).json({ ok: true, rating, comment, tags: tags ? JSON.parse(tags) : [] })
 })
 
 // The whole org's feedback + summary — managers/admins only. Ratings are the
@@ -87,7 +118,7 @@ r.post('/', (req, res) => {
 // submitted, when they first did, and the screen/device of their latest send.
 r.get('/', requireRole('manager', 'admin'), (req, res) => {
   const rows = db.prepare(`
-    SELECT f.id, f.user_id, f.rating, f.comment, f.created_at, f.updated_at,
+    SELECT f.id, f.user_id, f.rating, f.comment, f.tags, f.created_at, f.updated_at,
            u.name AS user_name, u.email AS user_email, u.avatar_color, u.avatar_file, u.role,
            (SELECT COUNT(*) FROM feedback_events e WHERE e.user_id=f.user_id) AS submissions,
            (SELECT e.page FROM feedback_events e WHERE e.user_id=f.user_id ORDER BY e.created_at DESC LIMIT 1) AS page,
@@ -98,7 +129,7 @@ r.get('/', requireRole('manager', 'admin'), (req, res) => {
   const average = count ? Math.round((rows.reduce((s, x) => s + x.rating, 0) / count) * 10) / 10 : null
   // Star histogram (5→1) for a quick distribution bar.
   const distribution = [5, 4, 3, 2, 1].map((star) => ({ star, count: rows.filter((x) => x.rating === star).length }))
-  res.json({ average, count, distribution, reviews: rows })
+  res.json({ average, count, distribution, reviews: rows.map(withTags) })
 })
 
 // The submission trail — every send and edit, newest first. Managers/admins only.
@@ -107,13 +138,13 @@ r.get('/history', requireRole('manager', 'admin'), (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500)
   const userId = req.query.userId ? String(req.query.userId) : null
   const rows = db.prepare(`
-    SELECT e.id, e.user_id, e.rating, e.comment, e.kind, e.page, e.device, e.app_version, e.created_at,
+    SELECT e.id, e.user_id, e.rating, e.comment, e.tags, e.kind, e.page, e.device, e.app_version, e.created_at,
            u.name AS user_name, u.email AS user_email, u.avatar_color, u.avatar_file, u.role
     FROM feedback_events e JOIN users u ON u.id=e.user_id
     WHERE e.org_id=? ${userId ? 'AND e.user_id=?' : ''}
     ORDER BY e.created_at DESC LIMIT ?`)
     .all(...(userId ? [req.user.org_id, userId, limit] : [req.user.org_id, limit]))
-  res.json({ count: rows.length, events: rows })
+  res.json({ count: rows.length, events: rows.map(withTags) })
 })
 
 export default r
