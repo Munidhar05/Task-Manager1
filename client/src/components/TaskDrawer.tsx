@@ -197,12 +197,15 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const canDelete = isManager || isOwnWork || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
   // The task owner (or a manager) can split a top-level task into shared parts.
   const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
-  // Anyone who can open the task can edit what it says. Deliberately open: the
-  // drawer only ever shows tasks inside your own org, and PATCH /tasks/:id has
-  // never checked more than org membership either — so a narrower button here
-  // would hide the action without actually preventing it. Every edit is audited
-  // as 'task.update' with the author, which is what makes this safe to allow.
-  const canEdit = !!user
+  // Whoever set the work owns what it asks for: managers, and the person who
+  // handed it out. Being given a task is NOT a licence to rewrite it — the
+  // assignee moves status and progress and nothing else, so they can't quietly
+  // reword, reprioritise or hand on the brief someone set them. This gates the
+  // whole brief, not just the title: assignee, priority, category and due date
+  // hang off it too. `assigned_by_id` rather than isAssigner, so a task you
+  // raised for yourself stays yours to edit (isAssigner excludes exactly that
+  // case — you may not approve your own submission, but you may edit it).
+  const canEdit = isManager || (!!user && task.assigned_by_id === user.id)
   const subs = task.subtasks || []
   const subDone = subs.filter((s: any) => s.status === 'Done').length
   const subPct = subs.length ? Math.round((subDone / subs.length) * 100) : 0
@@ -264,7 +267,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field dr-field--tall">
               <span className="dr-field-label">Assignee</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <div className="row" style={{ gap: 8 }}>
                     <select data-va="task.drawer.assignee" value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
                       <option value="">Select member…</option>
@@ -288,7 +291,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field">
               <span className="dr-field-label">Priority</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <select value={task.priority} onChange={(e) => setPriority(e.target.value)} style={{ width: 'auto' }}>
                     {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
                   </select>
@@ -298,7 +301,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field">
               <span className="dr-field-label">Category</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <select value={task.category || ''} onChange={(e) => setCategory(e.target.value)} style={{ width: 'auto' }}>
                     <option value="">Uncategorized</option>
                     {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
