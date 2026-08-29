@@ -1377,12 +1377,39 @@ tbody tr:hover { background: var(--n-50); }
    the table card was a direct child before, and quietly gaining a block parent
    is how a wrapper breaks the page it was only meant to group. */
 .tasks-splitwrap { display: contents; }
-.tasks-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(380px, .85fr); gap: 14px; align-items: start; }
+
+/* The split view turns the page into a fixed frame: the shell stops growing, and
+   the only things that scroll are the task list and the details pane. Every step
+   of the chain needs min-height:0 — a flex item's default min-height is its
+   content, so without it the table simply pushes the frame taller and the
+   document scrolls again, which is the bug this exists to fix. Applied via a body
+   class so it lasts exactly as long as the split is on screen, and reverts on
+   every other page and breakpoint. */
+body.is-split-view { overflow: hidden; }
+body.is-split-view .app { height: 100vh; min-height: 0; overflow: hidden; }
+body.is-split-view .main { min-height: 0; overflow: hidden; }
+body.is-split-view .content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* App.tsx wraps the routed page in a bare <div>; it has to carry the height down
+   too, or the frame stops one element short of the page that needs it.
+   :last-child, not > div — the verify-email banner is also a direct child, and
+   flexing it too would let it claim half the frame.
+   The Tasks page returns a FRAGMENT, so the toolbar, view bar, stat cards and the
+   split are all direct children of this wrapper — there is no page root to flex,
+   and .tasks-split claims the leftover row itself. */
+body.is-split-view .content > div:last-child { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tasks-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(380px, .85fr); gap: 14px;
+  /* Fill whatever the flex chain below leaves, and stretch both columns to it —
+     `align-items: start` would collapse each to its content and hand the overflow
+     back to the page. min-height:0 so a tall table can actually shrink to fit. */
+  align-items: stretch; flex: 1; min-height: 0; }
 /* Scoped under .tasks-split on purpose. The list carries .tasks-split-list at
    every width (it is the same table either way), so an unscoped height cap here
-   would put a phone's task list in a short inner scroll box it never had. */
-.tasks-split > .tasks-split-list { min-width: 0; max-height: calc(100vh - 300px); overflow-y: auto; }
-.tasks-split > .tasks-split-pane { position: sticky; top: 12px; min-width: 0; max-height: calc(100vh - 300px); display: flex; }
+   would put a phone's task list in a short inner scroll box it never had.
+   Height comes from the grid row, not a calc(100vh - guess): the old 300px was a
+   stand-in for the toolbar, view bar, stat cards and padding above, and it was
+   wrong the moment any of them wrapped — which is what let the page scroll. */
+.tasks-split > .tasks-split-list { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.tasks-split > .tasks-split-pane { min-width: 0; min-height: 0; display: flex; overscroll-behavior: contain; }
 /* The pane is a column in the page, not a sheet over it: no fixed position, no
    shadow, no rounded left edge butting against the list. */
 .tasks-split > .tasks-split-pane .drawer-pane { width: 100%; max-width: none; height: 100%; overflow-y: auto;
@@ -1392,7 +1419,6 @@ tbody tr:hover { background: var(--n-50); }
   animation: pane-in .15s ease; }
 @keyframes pane-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .tasks-split > .tasks-split-pane .drawer-pane { animation: none; } }
-.tasks-pane-empty { width: 100%; display: grid; place-items: center; padding: 28px 18px; }
 
 .profile-modal { width: 460px; }
 
