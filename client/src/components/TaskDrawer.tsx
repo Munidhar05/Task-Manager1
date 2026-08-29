@@ -197,6 +197,12 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const canDelete = isManager || isOwnWork || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
   // The task owner (or a manager) can split a top-level task into shared parts.
   const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
+  // Anyone who can open the task can edit what it says. Deliberately open: the
+  // drawer only ever shows tasks inside your own org, and PATCH /tasks/:id has
+  // never checked more than org membership either — so a narrower button here
+  // would hide the action without actually preventing it. Every edit is audited
+  // as 'task.update' with the author, which is what makes this safe to allow.
+  const canEdit = !!user
   const subs = task.subtasks || []
   const subDone = subs.filter((s: any) => s.status === 'Done').length
   const subPct = subs.length ? Math.round((subDone / subs.length) * 100) : 0
@@ -208,7 +214,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
         <div className="card-head spread">
           <div className="dr-headtitle">Task details</div>
           <div className="row">
-            {isManager && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
+            {canEdit && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
             {canDelete && <button className="btn btn-sm btn-danger row" style={{ gap: 6 }} disabled={busy} onClick={del} title="Delete task"><Ic name="trash" size={14} /> Delete</button>}
             <button className="btn btn-ghost" onClick={onClose}>✕</button>
           </div>
