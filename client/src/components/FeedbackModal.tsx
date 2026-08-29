@@ -23,6 +23,11 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
 
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
+  // Which chips are picked, and the vocabulary they come from. The list is
+  // fetched rather than hard-coded so the form can only offer labels the server
+  // will actually accept — a second copy here would drift the moment either moved.
+  const [tags, setTags] = useState<string[]>([])
+  const [tagOptions, setTagOptions] = useState<{ like: string[]; improve: string[] }>({ like: [], improve: [] })
   const [existing, setExisting] = useState(false)   // has the user rated before?
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -33,9 +38,25 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
   // Load the user's own rating, to pre-fill the form.
   useEffect(() => {
     api.get('/feedback/mine').then((r) => {
-      if (r) { setRating(r.rating); setComment(r.comment || ''); setExisting(true) }
+      if (r) { setRating(r.rating); setComment(r.comment || ''); setTags(r.tags || []); setExisting(true) }
     }).catch(() => {}).finally(() => setLoaded(true))
+    api.get('/feedback/tags').then(setTagOptions).catch(() => {})
   }, [])
+
+  // 4-5★ asks what worked, 1-3★ asks what didn't. Nothing is asked until a
+  // rating is picked — the question only makes sense once we know which one it is.
+  const positive = rating >= 4
+  const question = positive ? 'What do you like most?' : 'What could we improve?'
+  const options = positive ? tagOptions.like : tagOptions.improve
+  // Crossing the 3/4 boundary swaps the question, so keep only the chips that
+  // exist in the new list. Without this a 5★ "Easy to use" would silently ride
+  // along on a 2★ answer to a question it was never given for.
+  const pickRating = (n: number) => {
+    const next = n >= 4 ? tagOptions.like : tagOptions.improve
+    setTags((cur) => cur.filter((t) => next.includes(t)))
+    setRating(n)
+  }
+  const toggleTag = (t: string) => setTags((cur) => cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t])
 
   const submit = async () => {
     if (rating < 1) { toast.error('Please pick a star rating first.'); return }
@@ -44,6 +65,7 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
       await api.post('/feedback', {
         rating,
         comment: comment.trim(),
+        tags,
         page: loc.pathname,
         app_version: typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : undefined,
       })
@@ -67,12 +89,35 @@ export default function FeedbackModal({ onClose }: { onClose: () => void }) {
           {/* Your rating */}
           <section className="fb-rate">
             <div className="fb-rate-q">{existing ? 'Your rating' : 'How would you rate VoTask?'}</div>
-            <Stars value={rating} onPick={setRating} size={30} />
+            <Stars value={rating} onPick={pickRating} size={30} />
+            {rating > 0 && options.length > 0 && (
+              <div className="fb-ask">
+                <div className="fb-ask-q" id="fb-ask-q">{question}</div>
+                <div className="fb-chips" role="group" aria-labelledby="fb-ask-q">
+                  {options.map((t) => {
+                    const on = tags.includes(t)
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        className={'fb-chip' + (on ? ' on' : '')}
+                        aria-pressed={on}
+                        onClick={() => toggleTag(t)}
+                      >
+                        {t}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
             <textarea
               className="fb-comment"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              placeholder="Tell us what's working well or what could be better (optional)"
+              placeholder={rating === 0
+                ? "Tell us what's working well or what could be better (optional)"
+                : positive ? 'Anything else you like? (optional)' : 'Tell us more about what to fix (optional)'}
               rows={3}
               maxLength={2000}
             />
