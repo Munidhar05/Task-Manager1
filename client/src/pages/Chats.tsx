@@ -516,15 +516,19 @@ export default function Chats() {
           )}
 
           <div className="chat-log" ref={logRef}>
+            {/* The New chat button is offered whether or not there are existing
+                chats. Gating it on an empty list meant the one screen with room
+                for it lost the button the moment you had a single conversation,
+                leaving this panel blank with nothing to act on. */}
             {!active && (
               <div style={{ margin: 'auto' }}>
                 <EmptyState
                   icon={<Ic name="chat" size={40} />}
                   title={convos.length ? 'Select a conversation' : 'No conversations yet'}
                   hint={convos.length
-                    ? 'Choose a chat from the list to read and reply to messages.'
+                    ? 'Choose a chat from the list to read and reply to messages — or start a new one.'
                     : 'Start a new chat with a teammate or create a group to begin messaging.'}
-                  action={!convos.length ? <button className="btn btn-primary btn-sm row" style={{ gap: 5 }} onClick={() => setShowNew(true)}><Ic name="plus" size={15} /> New chat</button> : undefined}
+                  action={<button className="btn btn-primary btn-sm row" style={{ gap: 5 }} onClick={() => setShowNew(true)}><Ic name="plus" size={15} /> New chat</button>}
                 />
               </div>
             )}
