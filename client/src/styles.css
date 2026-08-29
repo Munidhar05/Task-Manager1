@@ -53,6 +53,83 @@
   --shadow: var(--e-1);      /* legacy alias */
   --shadow-lg: var(--e-3);   /* legacy alias */
 
+}
+
+/* ============================================================================
+   DARK THEME. Only tokens are redefined here — the whole system already routes
+   through them, so one block re-skins the app. `data-theme` is set on <html> by
+   an inline script in index.html before first paint, so there is no white flash.
+
+   The neutral ramp INVERTS rather than darkens: components use the low numbers
+   for surfaces and the high ones for text, so n-50 becomes the darkest and n-700
+   the lightest. Coral stays coral — it is the brand, and it carries on a dark
+   ground.
+   ============================================================================ */
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --border: #2b323b;
+  --text: #e7eaee;
+  --primary: #ff7245;       /* lifted a little: coral on near-black needs it to hold contrast */
+  --primary-dark: #f2622e;
+  --accent: #f7b955;
+  --sidebar: #131820;
+  --sidebar-muted: #7c8590;
+
+  --n-50:  #1b2027;
+  --n-100: #1f252d;
+  --n-200: #262d36;
+  --n-300: #343c47;
+  --n-400: #6d7682;
+  --n-500: #98a1ac;
+  --n-600: #c0c7d0;
+  --n-700: #e2e6ec;
+  --muted: var(--n-500);
+
+  /* Semantics: the ink lightens and the fill darkens, so tinted chips keep their
+     meaning without glowing on a dark card. */
+  --success: #34d399;  --success-bg: #10241c;  --success-border: #1c4636;  --success-ink: #5fe0ac;
+  --danger:  #f87171;  --danger-bg:  #2a1416;  --danger-border:  #5a2529;  --danger-ink:  #ff9b9b;
+  --warning: #fbbf24;  --warning-bg: #2a1f0d;  --warning-border: #573f16;  --warning-ink: #fcd170;
+  --info:    #60a5fa;  --info-bg:    #101d2f;  --info-border:    #23405f;  --info-ink:    #8dc0ff;
+
+  /* Shadows are near-useless on dark, so they carry less blur and more black. */
+  --e-1: 0 1px 2px rgba(0,0,0,.4), 0 1px 3px rgba(0,0,0,.3);
+  --e-2: 0 6px 16px rgba(0,0,0,.45), 0 2px 5px rgba(0,0,0,.3);
+  --e-3: 0 18px 44px rgba(0,0,0,.6), 0 5px 14px rgba(0,0,0,.4);
+
+  color-scheme: dark;   /* native scrollbars, form controls and caret follow */
+}
+
+/* The handful of places that hard-code white rather than a token. Each one is a
+   surface, so it maps to --surface; left as raw #fff in the light theme so this
+   stays a purely additive change. */
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] .modal,
+:root[data-theme="dark"] .task-mini,
+:root[data-theme="dark"] .back-btn,
+:root[data-theme="dark"] .vc,
+:root[data-theme="dark"] .profile-logout,
+:root[data-theme="dark"] .sidebar-logout-m { background: var(--surface); }
+/* These two tint against white to make a soft wash; on dark that lightens the
+   card instead of tinting it, so mix against the surface. */
+:root[data-theme="dark"] .nav a.active { background: color-mix(in srgb, var(--primary) 20%, var(--surface)); }
+:root[data-theme="dark"] .profile-role { background: color-mix(in srgb, var(--primary) 22%, var(--surface)); }
+:root[data-theme="dark"] .profile-logout,
+:root[data-theme="dark"] .sidebar-logout-m { color: var(--danger-ink); border-color: var(--danger-border); }
+:root[data-theme="dark"] .pf-nav-logout,
+:root[data-theme="dark"] .pf-nav-logout .pf-nav-label { color: var(--danger-ink); }
+:root[data-theme="dark"] .pf-nav-logout .pf-nav-ic { background: var(--danger-bg); color: var(--danger-ink); }
+:root[data-theme="dark"] .pf-nav-logout:hover { background: var(--danger-bg); }
+/* The app logo is a light-background mark; a white tile behind it on dark reads
+   as a bright hole, so give it the surface instead. */
+:root[data-theme="dark"] .brand-logo,
+:root[data-theme="dark"] .auth-brand-logo,
+:root[data-theme="dark"] .brand-logo-img { background: var(--n-100); }
+
+:root {
   /* Voice screens are deliberately near-black with a single green accent — a
      HUD, not part of the coral app chrome. Green also does the work the copy
      can't: it reads as "live and listening" from across a room. */
@@ -996,6 +1073,7 @@ tbody tr:hover { background: var(--n-50); }
    and the drawer covers the tab bar anyway. */
 @media (min-width: 721px) {
   .drawer { padding-bottom: 104px; }
+}
 
 /* Task-details drawer — template field-row layout. */
 .dr-headtitle { font-weight: 800; font-size: 16px; color: var(--text); }
@@ -1373,6 +1451,23 @@ tbody tr:hover { background: var(--n-50); }
 .pf-device-sub { font-size: 11.5px; }
 
 /* Notification switches */
+/* Theme picker — three cards, each previewing the palette it selects rather than
+   naming it and hoping. */
+.pf-themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.pf-theme { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px;
+  border: 1.5px solid var(--border); border-radius: var(--r-md); background: var(--surface);
+  font: inherit; cursor: pointer; text-align: left; transition: border-color .13s, background .13s; }
+.pf-theme:hover { border-color: var(--primary); }
+.pf-theme.on { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.pf-theme-label { font-size: 13px; font-weight: 700; }
+.pf-theme-hint { font-size: 11px; line-height: 1.35; }
+.pf-theme-swatch { width: 100%; height: 34px; border-radius: 7px; border: 1px solid var(--border); margin-bottom: 3px; }
+.pf-theme-swatch--light { background: linear-gradient(135deg, #ffffff 0 50%, #f2f4f7 50% 100%); }
+.pf-theme-swatch--dark { background: linear-gradient(135deg, #171b21 0 50%, #0f1216 50% 100%); }
+/* Split down the middle: the point of "System" is that it is either one. */
+.pf-theme-swatch--system { background: linear-gradient(135deg, #ffffff 0 50%, #0f1216 50% 100%); }
+@media (max-width: 430px) { .pf-themes { grid-template-columns: 1fr; } .pf-theme-swatch { height: 26px; } }
+
 .pf-toggles { display: flex; flex-direction: column; gap: 2px; }
 .pf-toggle { display: flex; align-items: center; gap: 12px; padding: 11px 4px; cursor: pointer; border-bottom: 1px solid var(--border); }
 .pf-toggle:last-child { border-bottom: 0; }
