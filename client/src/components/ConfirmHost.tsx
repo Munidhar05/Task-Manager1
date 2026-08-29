@@ -18,7 +18,7 @@ export default function ConfirmHost() {
   }, [c])
   if (!c) return null
   return (
-    <div className="modal-center" onClick={() => resolveConfirm(false)}>
+    <div className="modal-center confirm-center" onClick={() => resolveConfirm(false)}>
       <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label={c.title || 'Confirm'}>
         <div className="confirm-body">
           <div className={'confirm-icon' + (c.danger ? ' danger' : '')}>

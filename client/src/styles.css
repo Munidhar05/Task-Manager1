@@ -203,6 +203,9 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .sidebar-user .meta .r { font-size: 11px; color: var(--sidebar-muted); text-transform: capitalize; }
 /* Footer row under the user block: workspace health on the left, legal on the
    right — one tidy, aligned line instead of two centered stragglers. */
+/* Sign out from the drawer — phones only, switched on in the max-width:720px
+   block below. Desktop already has the power button in the profile row. */
+.sidebar-logout-m { display: none; }
 .sidebar-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .sidebar-sync { display: inline-flex; align-items: center; gap: 7px; font-size: var(--t-xs); font-weight: 600; color: var(--sidebar-muted); min-width: 0; }
 .sidebar-sync span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1329,6 +1332,12 @@ tbody tr:hover { background: var(--n-50); }
 .pf-nav-label { font-weight: 600; font-size: 13.5px; }
 .pf-nav-hint { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-nav-chev { color: var(--muted); font-size: 17px; line-height: 1; }
+/* Pushed to the foot of the menu and marked as the one destructive item, so it
+   never reads as a seventh settings page. */
+.pf-nav-logout { margin-top: auto; color: #b91c1c; }
+.pf-nav-logout .pf-nav-label { color: #b91c1c; }
+.pf-nav-logout .pf-nav-ic { background: #fef2f2; color: #b91c1c; }
+.pf-nav-logout:hover { background: #fef2f2; }
 
 .pf-panel { flex: 1; min-width: 0; padding: 18px; overflow-y: auto; max-height: min(70vh, 620px);
   display: flex; flex-direction: column; gap: 13px; }
@@ -1656,6 +1665,13 @@ tbody tr:hover { background: var(--n-50); }
      so hide the sidebar-drawer profile to avoid showing two. */
   .topbar-avatar { display: inline-flex; }
   .sidebar-user { display: none; }
+  /* Sits at the foot of the drawer, above the sync/legal line: the last thing
+     in the menu, which is where a sign-out is looked for. */
+  .sidebar-logout-m { display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%;
+    margin-top: auto; padding: 12px; border: 1px solid #fecaca; border-radius: var(--r-md);
+    background: #fff; color: #b91c1c; font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer;
+    transition: background .15s; }
+  .sidebar-logout-m:active { background: #fef2f2; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
   /* Meetings toolbar: center the count + action buttons instead of right-aligning */
@@ -1869,6 +1885,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 }
 
 /* 7. Themed confirm dialog (replaces window.confirm) */
+/* Above every other layer. ConfirmHost is mounted before <Routes>, so any modal
+   opened inside a page (profile, task drawer, feedback) comes LATER in the DOM
+   and — at the same z-index: 50 — painted on top of the confirmation, leaving a
+   dialog that was rendered but unreachable behind the thing that asked for it.
+   A confirmation is the last thing on screen by definition. */
+.confirm-center { z-index: 90; }
 .confirm-modal { width: 420px; max-width: 92vw; padding: 22px; }
 .confirm-body { display: flex; gap: 14px; align-items: flex-start; }
 .confirm-icon { flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--primary) 12%, #fff); color: var(--primary); }

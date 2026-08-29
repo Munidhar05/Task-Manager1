@@ -4,7 +4,7 @@ import { useAuth } from '../auth'
 import { Avatar, LANG_LABEL, Ic } from '../ui'
 import { WALLPAPERS, getWallpaperId, applyWallpaper } from '../lib/wallpaper'
 import { useEscape } from '../lib/useEscape'
-import { confirmDialog } from '../lib/confirm'
+import { confirmDialog, confirmLogout } from '../lib/confirm'
 
 // The profile hub, one concern per screen. It used to be a single column that
 // ran photo -> name -> wallpaper -> password -> feedback in one scroll, so
@@ -299,8 +299,6 @@ export default function ProfileModal({ onClose, onFeedback }: { onClose: () => v
             <button className="btn btn-sm" disabled={busy === 'sessions'} onClick={revokeOthers}>Sign out everywhere else</button>
           )}
 
-          <div className="pf-divide" />
-          <button className="btn profile-logout" onClick={() => { onClose(); logout() }}>Log out</button>
         </>
       )
 
@@ -371,6 +369,20 @@ export default function ProfileModal({ onClose, onFeedback }: { onClose: () => v
                 <span className="pf-nav-chev">›</span>
               </button>
             ))}
+            {/* At the foot of the MENU rather than inside Security: signing out
+                is not a security setting you go looking for, it is the thing you
+                want one tap from opening the profile. On a phone the menu is the
+                first screen, so it is visible immediately; on desktop the menu is
+                always on screen, so it stays reachable from every section. */}
+            <button className="pf-nav-item pf-nav-logout" onClick={async () => { if (await confirmLogout()) { onClose(); logout() } }}>
+              <span className="pf-nav-ic">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3v9" />
+                  <path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
+                </svg>
+              </span>
+              <span className="pf-nav-text"><span className="pf-nav-label">Log out</span></span>
+            </button>
           </nav>
 
           <section className="pf-panel">
