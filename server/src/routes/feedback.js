@@ -10,31 +10,11 @@
 import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
-import { id, now } from '../util.js'
+import { id, now, deviceLabel } from '../util.js'
 
 const r = Router()
 r.use(authRequired)
 
-// A short, human device label from the User-Agent — "Chrome on Windows" reads
-// better in a review list than 120 characters of UA string. Best-effort only:
-// unknown clients fall back to 'Unknown device' rather than guessing.
-function deviceLabel(ua = '') {
-  const s = String(ua)
-  if (/SmartTask|Capacitor|wv\)/i.test(s) && /Android/i.test(s)) return 'Android app'
-  const os = /Windows/i.test(s) ? 'Windows'
-    : /iPhone|iPad|iPod/i.test(s) ? 'iOS'
-    : /Android/i.test(s) ? 'Android'
-    : /Mac OS X/i.test(s) ? 'macOS'
-    : /Linux/i.test(s) ? 'Linux' : ''
-  // Order matters — Edge and Chrome both claim "Chrome", Chrome claims "Safari".
-  const browser = /Edg\//i.test(s) ? 'Edge'
-    : /OPR\//i.test(s) ? 'Opera'
-    : /Firefox\//i.test(s) ? 'Firefox'
-    : /Chrome\//i.test(s) ? 'Chrome'
-    : /Safari\//i.test(s) ? 'Safari' : ''
-  if (browser && os) return `${browser} on ${os}`
-  return browser || os || 'Unknown device'
-}
 
 // Keep the recorded route short and free of ids/query strings — "/tasks/abc123"
 // is noise; "/tasks" is the answer to "where were they when they said this?".
