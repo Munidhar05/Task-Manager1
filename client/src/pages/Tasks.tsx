@@ -755,7 +755,17 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   )
 
   return (
-    <>
+    // The grid lives HERE, at the page root, not around the table — that is what
+    // lets the details pane run the full height of the screen. As a row below the
+    // toolbar and stat cards it could only ever start halfway down, because those
+    // sit above it. Now they are simply the first rows of column one, and the pane
+    // spans every row of column two.
+    <div className={'tasks-page' + (paneOpen ? ' tasks-split' : '')}>
+      {/* Column one, as ONE grid item. Spanning the toolbar, view bar, stat cards
+          and table across separate rows meant the pane could only span the rows the
+          explicit grid knew about — which was none, so it collapsed to the first.
+          One item per column keeps it to a single row that both sides stretch to. */}
+      <div className="tasks-col">
       <div className="toolbar">
         {/* search + sort + new task stay together on one line (esp. on mobile).
             `.toolbar-actions` is display:contents on desktop so these flow into the
@@ -930,7 +940,10 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               </table>
             </div>
           ) : (
-            <div className={'tasks-splitwrap' + (paneOpen ? ' tasks-split' : '')}>
+            /* Always display:contents — it groups the table and the pane in the
+               JSX, but the grid that positions them is the page root above, so
+               this must never become a box of its own. */
+            <div className="tasks-splitwrap">
             <div className="card table-card-wrap tasks-split-list">
               <table className="table-cards table-tasks">
                 <thead><tr>
@@ -955,17 +968,20 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                 </tbody>
               </table>
             </div>
-            {/* Only once a task is picked. An empty pane reserved half the screen
-                to say nothing, and took the Time column with it — so the table now
-                keeps the full width until there is something to show beside it. */}
-            {paneOpen && (
-              <aside className="tasks-split-pane">
-                <TaskDrawer key={openId} taskId={openId!} variant="pane" onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />
-              </aside>
-            )}
             </div>
           )}
         </>
+      )}
+      </div>
+
+      {/* Rendered at the page root, beside the whole left column rather than
+          inside the row with the table — that is what lets it run the full height.
+          Only once a task is picked: an empty pane reserved half the screen to say
+          nothing, and took the Time column with it. */}
+      {paneOpen && (
+        <aside className="tasks-split-pane">
+          <TaskDrawer key={openId} taskId={openId!} variant="pane" onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />
+        </aside>
       )}
 
       {/* Mobile floating action button — the primary "add" action, in thumb reach.
@@ -988,7 +1004,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           onClose={() => setFiltersOpen(false)}
         />
       )}
-    </>
+    </div>
   )
 }
 
