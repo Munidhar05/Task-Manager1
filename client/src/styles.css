@@ -268,9 +268,29 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .brand-logo { width: 34px; height: 34px; border-radius: 9px; background: #fff; object-fit: cover; flex-shrink: 0; }
 .brand-name { font-weight: 800; font-size: 15px; white-space: nowrap; }
 .brand-sub { font-size: 11px; color: var(--sidebar-muted); }
-.nav { display: flex; flex-direction: column; gap: 6px; flex: 1; margin-top: 8px; }
+/* min-height:0 + its own scroll: expanding "More" adds seven rows, and without
+   this the rail would push the profile block and the sync line off the bottom of
+   a short window instead of scrolling. */
+.nav { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; }
 .nav a { color: var(--n-600); background: transparent; border: 1px solid transparent; padding: 11px 13px; border-radius: var(--r-md); display: flex; align-items: center; gap: 11px; font-weight: 600; font-size: 13.5px; transition: .12s; }
 .nav a:hover { background: var(--n-100); border-color: transparent; color: var(--text); }
+/* "More" — same shape as a nav link so the rail reads as one list, but a button:
+   it expands settings in place rather than navigating anywhere. */
+.nav-more { display: flex; align-items: center; gap: 11px; width: 100%; padding: 11px 13px; border: 1px solid transparent;
+  border-radius: var(--r-md); background: transparent; color: var(--n-600); font: inherit; font-weight: 600;
+  font-size: 13.5px; cursor: pointer; transition: .12s; }
+.nav-more:hover, .nav-more.open { background: var(--n-100); color: var(--text); }
+.nav-more-chev { margin-left: auto; font-size: 15px; line-height: 1; color: var(--muted); }
+/* Indented under More, and quieter than the four real destinations above it —
+   these open a settings panel, they are not places in the app. */
+.nav-sub { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 2px 12px; padding-left: 10px;
+  border-left: 1px solid var(--border); }
+.nav-sub-item { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 9px 10px;
+  border: 0; border-radius: var(--r-sm); background: transparent; color: var(--n-600); font: inherit;
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: .12s; }
+.nav-sub-item:hover { background: var(--n-100); color: var(--text); }
+.nav-sub-logout { color: var(--danger-ink); }
+.nav-sub-logout:hover { background: var(--danger-bg); color: var(--danger-ink); }
 .nav a.active { background: color-mix(in srgb, var(--primary) 12%, #fff); border-color: transparent; color: var(--primary); box-shadow: none; }
 .nav a.active .nav-icon { color: var(--primary); }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }

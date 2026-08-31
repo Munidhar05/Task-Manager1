@@ -14,13 +14,16 @@ import { confirmDialog, confirmLogout } from '../lib/confirm'
 // IS the screen and a section opens over it; on a wide window both sit side by
 // side.
 
-type SectionId = 'personal' | 'language' | 'appearance' | 'security' | 'notifications' | 'feedback'
+export type SectionId = 'personal' | 'language' | 'appearance' | 'security' | 'notifications' | 'feedback'
 
 // Typed off Ic itself, so a name the icon set doesn't have fails the build
 // rather than rendering an empty square nobody notices.
 type IconName = React.ComponentProps<typeof Ic>['name']
 
-const SECTIONS: { id: SectionId; label: string; icon: IconName; hint: string }[] = [
+// Exported so the sidebar's "More" list is the SAME list, in the same order, with
+// the same labels — two hand-kept copies would drift the first time a section is
+// added and only one of them noticed.
+export const SECTIONS: { id: SectionId; label: string; icon: IconName; hint: string }[] = [
   { id: 'personal', label: 'Personal information', icon: 'user', hint: 'Photo, name, phone, email' },
   { id: 'language', label: 'Language', icon: 'chat', hint: 'The language VoTask speaks to you in' },
   { id: 'appearance', label: 'Appearance', icon: 'image', hint: 'App wallpaper' },
@@ -51,14 +54,17 @@ const when = (raw?: string) => {
   return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-export default function ProfileModal({ onClose, onFeedback }: { onClose: () => void; onFeedback?: () => void }) {
+export default function ProfileModal({ onClose, onFeedback, initialSection }: { onClose: () => void; onFeedback?: () => void; initialSection?: SectionId }) {
   const { user, refresh, logout } = useAuth()
   useEscape(onClose)
 
-  // A wide window shows the menu and a panel together, so one has to be open to
-  // begin with. A phone shows the menu alone until something is picked.
+  // Opened from the sidebar's "More" list, the section is already chosen — land on
+  // it rather than making the reader pick the same thing twice. Otherwise: a wide
+  // window shows the menu and a panel together, so one has to be open to begin
+  // with; a phone shows the menu alone until something is picked.
   const [section, setSection] = useState<SectionId | null>(() =>
-    typeof window !== 'undefined' && window.matchMedia('(min-width: 760px)').matches ? 'personal' : null)
+    initialSection ??
+    (typeof window !== 'undefined' && window.matchMedia('(min-width: 760px)').matches ? 'personal' : null))
 
   const fileInput = useRef<HTMLInputElement>(null)
   const [name, setName] = useState(user?.name || '')

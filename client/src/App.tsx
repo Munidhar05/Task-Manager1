@@ -7,7 +7,7 @@ import { runBackHandlers } from './back'
 import { api, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
-import ProfileModal from './components/ProfileModal'
+import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
 import FeedbackModal from './components/FeedbackModal'
 import FeedbackButton from './components/FeedbackButton'
 import VoiceAssistant from './components/VoiceAssistant'
@@ -87,6 +87,12 @@ function syncAgo(ts: number) {
 function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth()
   const [showProfile, setShowProfile] = useState(false)
+  // The sidebar's "More" list. `profileSection` is which settings screen a click
+  // asked for, so the modal can open straight onto it instead of showing its own
+  // menu again — the reader already chose.
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [profileSection, setProfileSection] = useState<SectionId | undefined>(undefined)
+  const openProfileAt = (id: SectionId) => { setProfileSection(id); setShowProfile(true); setOpen(false) }
   const [showFeedback, setShowFeedback] = useState(false)
   const loc = useLocation()
   // No explicit in-app back button: Android handles "back" via the hardware
@@ -142,6 +148,37 @@ function Layout({ children }: { children: React.ReactNode }) {
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
             </NavLink>
           ))}
+
+          {/* Settings live under the nav rather than only behind the avatar: the
+              rail had the room, and "where do I change my password" is a question
+              the menu should answer without a hunt. Collapsed by default so the
+              four places you actually navigate to stay the top of the list.
+              stopPropagation because <nav> closes the mobile drawer on any click —
+              expanding a submenu is not navigating away. */}
+          <button
+            className={'nav-more' + (moreOpen ? ' open' : '')}
+            aria-expanded={moreOpen}
+            onClick={(e) => { e.stopPropagation(); setMoreOpen((o) => !o) }}
+          >
+            <span className="nav-icon"><Ic name="menu" size={17} /></span>More
+            <span className="nav-more-chev" aria-hidden="true">{moreOpen ? '⌄' : '›'}</span>
+          </button>
+          {moreOpen && (
+            <div className="nav-sub">
+              {SECTIONS.map((s) => (
+                <button key={s.id} className="nav-sub-item" onClick={() => openProfileAt(s.id)}>
+                  <span className="nav-icon"><Ic name={s.icon} size={15} /></span>{s.label}
+                </button>
+              ))}
+              <button className="nav-sub-item nav-sub-logout" onClick={async () => { if (await confirmLogout()) logout() }}>
+                <span className="nav-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 3v9" /><path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
+                  </svg>
+                </span>Log out
+              </button>
+            </div>
+          )}
         </nav>
         <div className="sidebar-user">
           <button className="avatar-edit-btn" title="Open profile & settings" onClick={() => setShowProfile(true)}>
@@ -248,7 +285,15 @@ function Layout({ children }: { children: React.ReactNode }) {
           <span className="bn-label">More</span>
         </button>
       </nav>
-      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} onFeedback={() => { setShowProfile(false); setShowFeedback(true) }} />}
+      {/* The section is cleared on close, so opening from the avatar next time
+          lands on the menu rather than wherever the sidebar last sent you. */}
+      {showProfile && (
+        <ProfileModal
+          initialSection={profileSection}
+          onClose={() => { setShowProfile(false); setProfileSection(undefined) }}
+          onFeedback={() => { setShowProfile(false); setProfileSection(undefined); setShowFeedback(true) }}
+        />
+      )}
       {/* Corner feedback tab — hidden while the modal is open so it isn't behind it. */}
       {!showFeedback && <FeedbackButton onClick={() => setShowFeedback(true)} />}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
