@@ -1413,32 +1413,46 @@ body.is-split-view .content { flex: 1; min-height: 0; display: flex; flex-direct
    too, or the frame stops one element short of the page that needs it.
    :last-child, not > div — the verify-email banner is also a direct child, and
    flexing it too would let it claim half the frame.
-   The Tasks page returns a FRAGMENT, so the toolbar, view bar, stat cards and the
-   split are all direct children of this wrapper — there is no page root to flex,
-   and .tasks-split claims the leftover row itself. */
+   The page root (.tasks-page) is that element's only child, and it becomes the
+   grid, so it has to be handed the full height first. */
 body.is-split-view .content > div:last-child { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.tasks-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(380px, .85fr); gap: 14px;
-  /* Fill whatever the flex chain below leaves, and stretch both columns to it —
-     `align-items: start` would collapse each to its content and hand the overflow
-     back to the page. min-height:0 so a tall table can actually shrink to fit. */
-  align-items: stretch; flex: 1; min-height: 0; }
+body.is-split-view .tasks-page { flex: 1; min-height: 0; }
+
+/* Two columns across the WHOLE page, not just the row under the toolbar. The
+   toolbar, view bar and stat cards become the first rows of column one; the pane
+   takes column two and spans every row, so it runs the full height of the screen
+   instead of starting halfway down beneath them.
+   grid-auto-rows: minmax(0, auto) is what lets the table row shrink to fit the
+   frame — a plain `auto` row refuses to go below its content, so a long list
+   would push the grid taller and hand the overflow back to the page. */
+.tasks-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(380px, .85fr);
+  /* ONE row, two items: the left column is a single wrapper and the pane is its
+     neighbour, so both simply stretch to the row's height. Spanning the pane over
+     the toolbar/view-bar/table as separate rows does not work — `grid-row: 1 / -1`
+     resolves against the EXPLICIT grid, and with only implicit rows it collapses
+     to the first one, which is how the pane ended up toolbar-height. */
+  column-gap: 14px; align-items: stretch; }
+/* The left column stacks its own rows and gives the leftover height to the table,
+   which is the part that scrolls. */
+.tasks-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tasks-split .tasks-split-list { flex: 1; }
 /* Scoped under .tasks-split on purpose. The list carries .tasks-split-list at
    every width (it is the same table either way), so an unscoped height cap here
    would put a phone's task list in a short inner scroll box it never had.
    Height comes from the grid row, not a calc(100vh - guess): the old 300px was a
    stand-in for the toolbar, view bar, stat cards and padding above, and it was
    wrong the moment any of them wrapped — which is what let the page scroll. */
-.tasks-split > .tasks-split-list { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.tasks-split > .tasks-split-pane { min-width: 0; min-height: 0; display: flex; overscroll-behavior: contain; }
+.tasks-split .tasks-split-list { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.tasks-split .tasks-split-pane { min-width: 0; min-height: 0; display: flex; overscroll-behavior: contain; }
 /* The pane is a column in the page, not a sheet over it: no fixed position, no
    shadow, no rounded left edge butting against the list. */
-.tasks-split > .tasks-split-pane .drawer-pane { width: 100%; max-width: none; height: 100%; overflow-y: auto;
+.tasks-split .tasks-split-pane .drawer-pane { width: 100%; max-width: none; height: 100%; overflow-y: auto;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--e-1);
   /* .drawer slides in from off-screen, which is right for a sheet and wrong for
      a docked column — it remounts per task, so that would fire on every row. */
   animation: pane-in .15s ease; }
 @keyframes pane-in { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .tasks-split > .tasks-split-pane .drawer-pane { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .tasks-split .tasks-split-pane .drawer-pane { animation: none; } }
 
 .profile-modal { width: 460px; }
 
