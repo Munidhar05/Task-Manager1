@@ -410,6 +410,15 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   const [openId, setOpenId] = useState<string | null>(searchParams.get('task'))
   const [showNew, setShowNew] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
+  // Wide enough to show the list and one task side by side. Below this the
+  // drawer stays a modal, because a pane would leave neither half usable.
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1280px)')
+    const on = () => setWide(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
   // Search is collapsed to just an icon by default; tapping it reveals the input.
   const [searchOpen, setSearchOpen] = useState(false)
   // Mobile-only Filters dialog (the inline desktop dropdowns are CSS-hidden on phones).
@@ -531,6 +540,25 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // handed out instead of work I got) and always renders as a list — a board of
   // someone else's columns isn't actionable from here.
   const effectiveView = assignedByMe ? 'list' : view
+  // The pane only makes sense on the list: the board already fills the width,
+  // and the completed archive is a read-only table nobody drills into.
+  const split = wide && effectiveView === 'list' && quickView !== 'completed'
+  // Whether the page is ACTUALLY two columns right now. `split` only says the
+  // layout is available; until a task is picked there is nothing to put beside
+  // the list, so the table keeps the full width and the page behaves exactly as
+  // it did before the pane existed. Choosing a task is what splits the screen.
+  const paneOpen = split && !!openId
+  // With the pane open the two columns own the scrolling, so the document must
+  // not also scroll, or reading down the task pane drags the whole page, header
+  // and all, out from under it. A class on <body> rather than styles here,
+  // because the chain that has to stop growing (.app -> .main -> .content) sits
+  // above this page. It reverts when the pane closes and on unmount, so the page
+  // always gets its normal scrolling back.
+  useEffect(() => {
+    if (!paneOpen) return
+    document.body.classList.add('is-split-view')
+    return () => document.body.classList.remove('is-split-view')
+  }, [paneOpen])
   const setScopeAssigned = (on: boolean) => {
     const next = new URLSearchParams(searchParams)
     if (on) next.set('assigned_by_me', '1'); else next.delete('assigned_by_me')
@@ -694,10 +722,15 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         </td>
       )}
       <td data-label="Due">{dueLabel(t)}</td>
-      <td data-label="Time">
-        <div style={{ fontSize: 12.5 }}>{fmtDateTime(givenOf(t))}</div>
-        <div className="muted" style={{ fontSize: 11 }}>{givenLabel(t)}</div>
-      </td>
+      {/* Dropped while the detail pane is open: six columns in half the width
+          is unreadable, and this is the one the pane itself repeats. Back again
+          the moment the pane closes and the table has the screen to itself. */}
+      {!paneOpen && (
+        <td data-label="Time">
+          <div style={{ fontSize: 12.5 }}>{fmtDateTime(givenOf(t))}</div>
+          <div className="muted" style={{ fontSize: 11 }}>{givenLabel(t)}</div>
+        </td>
+      )}
     </tr>
   )
 
@@ -722,7 +755,17 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   )
 
   return (
-    <>
+    // The grid lives HERE, at the page root, not around the table — that is what
+    // lets the details pane run the full height of the screen. As a row below the
+    // toolbar and stat cards it could only ever start halfway down, because those
+    // sit above it. Now they are simply the first rows of column one, and the pane
+    // spans every row of column two.
+    <div className={'tasks-page' + (paneOpen ? ' tasks-split' : '')}>
+      {/* Column one, as ONE grid item. Spanning the toolbar, view bar, stat cards
+          and table across separate rows meant the pane could only span the rows the
+          explicit grid knew about — which was none, so it collapsed to the first.
+          One item per column keeps it to a single row that both sides stretch to. */}
+      <div className="tasks-col">
       <div className="toolbar">
         {/* search + sort + new task stay together on one line (esp. on mobile).
             `.toolbar-actions` is display:contents on desktop so these flow into the
@@ -897,7 +940,11 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               </table>
             </div>
           ) : (
-            <div className="card table-card-wrap">
+            /* Always display:contents — it groups the table and the pane in the
+               JSX, but the grid that positions them is the page root above, so
+               this must never become a box of its own. */
+            <div className="tasks-splitwrap">
+            <div className="card table-card-wrap tasks-split-list">
               <table className="table-cards table-tasks">
                 <thead><tr>
                   {sortTh('Task', 'task')}
@@ -905,7 +952,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                   {sortTh('Status', 'status')}
                   {!personal && sortTh('Assignee', 'assignee')}
                   {sortTh('Due', 'due')}
-                  {sortTh('Time', 'time')}
+                  {!paneOpen && sortTh('Time', 'time')}
                 </tr></thead>
                 <tbody>
                   {!isGroupedSort(sort.key)
@@ -913,7 +960,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                     : groupedByDay.map((g) => (
                       <React.Fragment key={g.day}>
                         <tr className="day-group-row">
-                          <td colSpan={personal ? 5 : 6}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
+                          <td colSpan={(personal ? 5 : 6) - (paneOpen ? 1 : 0)}>{dayHeading(g.day)} <span className="day-group-count">{g.items.length}</span></td>
                         </tr>
                         {g.items.map(renderRow)}
                       </React.Fragment>
@@ -921,8 +968,20 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
                 </tbody>
               </table>
             </div>
+            </div>
           )}
         </>
+      )}
+      </div>
+
+      {/* Rendered at the page root, beside the whole left column rather than
+          inside the row with the table — that is what lets it run the full height.
+          Only once a task is picked: an empty pane reserved half the screen to say
+          nothing, and took the Time column with it. */}
+      {paneOpen && (
+        <aside className="tasks-split-pane">
+          <TaskDrawer key={openId} taskId={openId!} variant="pane" onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />
+        </aside>
       )}
 
       {/* Mobile floating action button — the primary "add" action, in thumb reach.
@@ -933,7 +992,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {/* Drawer edits patch the single row in place when the mutation returned the
           updated task; anything else (delete, uploads) falls back to a reload. */}
-      {openId && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
+      {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
       {filtersOpen && (
@@ -945,7 +1004,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           onClose={() => setFiltersOpen(false)}
         />
       )}
-    </>
+    </div>
   )
 }
 

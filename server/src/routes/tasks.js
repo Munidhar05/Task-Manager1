@@ -190,6 +190,47 @@ r.get('/:id', (req, res) => {
   res.json(hydrate(t))
 })
 
+// WHO CHANGED WHAT. Every PATCH already writes an audit row naming its author;
+// this is the only thing that reads them back per task, so an edit stops being
+// invisible the moment someone other than a manager can make one.
+//
+// Field edits only. A status move is already spelled out by the Timeline, and
+// progress is the assignee's ordinary work — the slider alone would file a row
+// per save and bury the changes that actually matter.
+const EDIT_FIELD_LABELS = {
+  title: 'title', description: 'description', priority: 'priority',
+  category: 'category', due_date: 'due date', assignee_id: 'assignee',
+  project_id: 'project', department_id: 'department',
+}
+r.get('/:id/history', (req, res) => {
+  const t = db.prepare('SELECT id FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const rows = db.prepare(
+    `SELECT a.action, a.detail, a.created_at, a.actor_id, u.name AS actor_name, u.avatar_color
+     FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id
+     WHERE a.entity_type = 'task' AND a.entity_id = ? AND a.action IN ('task.update', 'task.reassign')
+     ORDER BY a.created_at DESC`
+  ).all(t.id)
+  const out = []
+  for (const r0 of rows) {
+    let body = {}
+    try { body = JSON.parse(r0.detail || '{}') } catch { body = {} }
+    const fields = Object.keys(body).filter((k) => k in EDIT_FIELD_LABELS).map((k) => EDIT_FIELD_LABELS[k])
+    // due_date_raw always rides along with a due date edit; naming it twice reads wrong.
+    const seen = [...new Set(fields)]
+    if (!seen.length) continue // progress-only save, or nothing we name
+    out.push({
+      actor_id: r0.actor_id,
+      actor_name: r0.actor_name || 'Someone',
+      avatar_color: r0.avatar_color,
+      fields: seen,
+      reassigned: r0.action === 'task.reassign',
+      at: r0.created_at,
+    })
+  }
+  res.json(out)
+})
+
 // TRANSCRIBE a single dictated audio clip -> text. Powers the "Speak" button on
 // the New Task modal for EVERYONE (employees included) — unlike the meetings
 // transcriber, which is manager/admin only. Uses the same Sarvam/Whisper pipeline,

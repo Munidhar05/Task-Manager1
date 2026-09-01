@@ -53,6 +53,83 @@
   --shadow: var(--e-1);      /* legacy alias */
   --shadow-lg: var(--e-3);   /* legacy alias */
 
+}
+
+/* ============================================================================
+   DARK THEME. Only tokens are redefined here — the whole system already routes
+   through them, so one block re-skins the app. `data-theme` is set on <html> by
+   an inline script in index.html before first paint, so there is no white flash.
+
+   The neutral ramp INVERTS rather than darkens: components use the low numbers
+   for surfaces and the high ones for text, so n-50 becomes the darkest and n-700
+   the lightest. Coral stays coral — it is the brand, and it carries on a dark
+   ground.
+   ============================================================================ */
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --border: #2b323b;
+  --text: #e7eaee;
+  --primary: #ff7245;       /* lifted a little: coral on near-black needs it to hold contrast */
+  --primary-dark: #f2622e;
+  --accent: #f7b955;
+  --sidebar: #131820;
+  --sidebar-muted: #7c8590;
+
+  --n-50:  #1b2027;
+  --n-100: #1f252d;
+  --n-200: #262d36;
+  --n-300: #343c47;
+  --n-400: #6d7682;
+  --n-500: #98a1ac;
+  --n-600: #c0c7d0;
+  --n-700: #e2e6ec;
+  --muted: var(--n-500);
+
+  /* Semantics: the ink lightens and the fill darkens, so tinted chips keep their
+     meaning without glowing on a dark card. */
+  --success: #34d399;  --success-bg: #10241c;  --success-border: #1c4636;  --success-ink: #5fe0ac;
+  --danger:  #f87171;  --danger-bg:  #2a1416;  --danger-border:  #5a2529;  --danger-ink:  #ff9b9b;
+  --warning: #fbbf24;  --warning-bg: #2a1f0d;  --warning-border: #573f16;  --warning-ink: #fcd170;
+  --info:    #60a5fa;  --info-bg:    #101d2f;  --info-border:    #23405f;  --info-ink:    #8dc0ff;
+
+  /* Shadows are near-useless on dark, so they carry less blur and more black. */
+  --e-1: 0 1px 2px rgba(0,0,0,.4), 0 1px 3px rgba(0,0,0,.3);
+  --e-2: 0 6px 16px rgba(0,0,0,.45), 0 2px 5px rgba(0,0,0,.3);
+  --e-3: 0 18px 44px rgba(0,0,0,.6), 0 5px 14px rgba(0,0,0,.4);
+
+  color-scheme: dark;   /* native scrollbars, form controls and caret follow */
+}
+
+/* The handful of places that hard-code white rather than a token. Each one is a
+   surface, so it maps to --surface; left as raw #fff in the light theme so this
+   stays a purely additive change. */
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] .modal,
+:root[data-theme="dark"] .task-mini,
+:root[data-theme="dark"] .back-btn,
+:root[data-theme="dark"] .vc,
+:root[data-theme="dark"] .profile-logout,
+:root[data-theme="dark"] .sidebar-logout-m { background: var(--surface); }
+/* These two tint against white to make a soft wash; on dark that lightens the
+   card instead of tinting it, so mix against the surface. */
+:root[data-theme="dark"] .nav a.active { background: color-mix(in srgb, var(--primary) 20%, var(--surface)); }
+:root[data-theme="dark"] .profile-role { background: color-mix(in srgb, var(--primary) 22%, var(--surface)); }
+:root[data-theme="dark"] .profile-logout,
+:root[data-theme="dark"] .sidebar-logout-m { color: var(--danger-ink); border-color: var(--danger-border); }
+:root[data-theme="dark"] .pf-nav-logout,
+:root[data-theme="dark"] .pf-nav-logout .pf-nav-label { color: var(--danger-ink); }
+:root[data-theme="dark"] .pf-nav-logout .pf-nav-ic { background: var(--danger-bg); color: var(--danger-ink); }
+:root[data-theme="dark"] .pf-nav-logout:hover { background: var(--danger-bg); }
+/* The app logo is a light-background mark; a white tile behind it on dark reads
+   as a bright hole, so give it the surface instead. */
+:root[data-theme="dark"] .brand-logo,
+:root[data-theme="dark"] .auth-brand-logo,
+:root[data-theme="dark"] .brand-logo-img { background: var(--n-100); }
+
+:root {
   /* Voice screens are deliberately near-black with a single green accent — a
      HUD, not part of the coral app chrome. Green also does the work the copy
      can't: it reads as "live and listening" from across a room. */
@@ -191,9 +268,29 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .brand-logo { width: 34px; height: 34px; border-radius: 9px; background: #fff; object-fit: cover; flex-shrink: 0; }
 .brand-name { font-weight: 800; font-size: 15px; white-space: nowrap; }
 .brand-sub { font-size: 11px; color: var(--sidebar-muted); }
-.nav { display: flex; flex-direction: column; gap: 6px; flex: 1; margin-top: 8px; }
+/* min-height:0 + its own scroll: expanding "More" adds seven rows, and without
+   this the rail would push the profile block and the sync line off the bottom of
+   a short window instead of scrolling. */
+.nav { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; }
 .nav a { color: var(--n-600); background: transparent; border: 1px solid transparent; padding: 11px 13px; border-radius: var(--r-md); display: flex; align-items: center; gap: 11px; font-weight: 600; font-size: 13.5px; transition: .12s; }
 .nav a:hover { background: var(--n-100); border-color: transparent; color: var(--text); }
+/* "More" — same shape as a nav link so the rail reads as one list, but a button:
+   it expands settings in place rather than navigating anywhere. */
+.nav-more { display: flex; align-items: center; gap: 11px; width: 100%; padding: 11px 13px; border: 1px solid transparent;
+  border-radius: var(--r-md); background: transparent; color: var(--n-600); font: inherit; font-weight: 600;
+  font-size: 13.5px; cursor: pointer; transition: .12s; }
+.nav-more:hover, .nav-more.open { background: var(--n-100); color: var(--text); }
+.nav-more-chev { margin-left: auto; font-size: 15px; line-height: 1; color: var(--muted); }
+/* Indented under More, and quieter than the four real destinations above it —
+   these open a settings panel, they are not places in the app. */
+.nav-sub { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 2px 12px; padding-left: 10px;
+  border-left: 1px solid var(--border); }
+.nav-sub-item { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 9px 10px;
+  border: 0; border-radius: var(--r-sm); background: transparent; color: var(--n-600); font: inherit;
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: .12s; }
+.nav-sub-item:hover { background: var(--n-100); color: var(--text); }
+.nav-sub-logout { color: var(--danger-ink); }
+.nav-sub-logout:hover { background: var(--danger-bg); color: var(--danger-ink); }
 .nav a.active { background: color-mix(in srgb, var(--primary) 12%, #fff); border-color: transparent; color: var(--primary); box-shadow: none; }
 .nav a.active .nav-icon { color: var(--primary); }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -203,6 +300,9 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .sidebar-user .meta .r { font-size: 11px; color: var(--sidebar-muted); text-transform: capitalize; }
 /* Footer row under the user block: workspace health on the left, legal on the
    right — one tidy, aligned line instead of two centered stragglers. */
+/* Sign out from the drawer — phones only, switched on in the max-width:720px
+   block below. Desktop already has the power button in the profile row. */
+.sidebar-logout-m { display: none; }
 .sidebar-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .sidebar-sync { display: inline-flex; align-items: center; gap: 7px; font-size: var(--t-xs); font-weight: 600; color: var(--sidebar-muted); min-width: 0; }
 .sidebar-sync span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -985,6 +1085,19 @@ tbody tr:hover { background: var(--n-50); }
 /* ---- modal / drawer ---- */
 .overlay { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 50; display: flex; justify-content: flex-end; }
 .drawer { background: var(--surface); width: 540px; max-width: 92vw; height: 100%; overflow-y: auto; box-shadow: var(--shadow-lg); animation: slideIn .2s ease; }
+/* Reaching the end of an overlay's own scroller must not hand the rest of the
+   gesture to the page underneath — the scroll lock covers the wheel, this covers
+   the momentum fling that would otherwise carry straight through it. */
+.drawer, .modal, .pf-body, .pf-nav, .pf-panel { overscroll-behavior: contain; }
+/* Keep the foot of the drawer clear of the floating "Ask BTM" pill. It is fixed
+   to the bottom-right at z-index 1200 — above the drawer — so with a long thread
+   the comment box scrolled underneath it and the Post button became unreachable.
+   Reserved space lets the composer scroll clear instead. Only where the pill is
+   actually shown: on phones it is display:none (the mic lives in the tab bar),
+   and the drawer covers the tab bar anyway. */
+@media (min-width: 721px) {
+  .drawer { padding-bottom: 104px; }
+}
 
 /* Task-details drawer — template field-row layout. */
 .dr-headtitle { font-weight: 800; font-size: 16px; color: var(--text); }
@@ -1276,7 +1389,178 @@ tbody tr:hover { background: var(--n-50); }
 .sidebar-user-meta:hover .n { text-decoration: underline; }
 
 /* ---- Profile modal ---- */
+/* ---- Tasks: list beside one open task -----------------------------------
+   Only above 1280px (guarded in JS, not here, because the drawer has to switch
+   between a modal and a pane — CSS alone can't move it). The list keeps its own
+   scroll so the pane stays put while you work down the rows. */
+/* Outside the split the wrapper must not exist as far as layout is concerned:
+   the table card was a direct child before, and quietly gaining a block parent
+   is how a wrapper breaks the page it was only meant to group. */
+.tasks-splitwrap { display: contents; }
+
+/* The split view turns the page into a fixed frame: the shell stops growing, and
+   the only things that scroll are the task list and the details pane. Every step
+   of the chain needs min-height:0 — a flex item's default min-height is its
+   content, so without it the table simply pushes the frame taller and the
+   document scrolls again, which is the bug this exists to fix. Applied via a body
+   class so it lasts exactly as long as the split is on screen, and reverts on
+   every other page and breakpoint. */
+body.is-split-view { overflow: hidden; }
+body.is-split-view .app { height: 100vh; min-height: 0; overflow: hidden; }
+body.is-split-view .main { min-height: 0; overflow: hidden; }
+body.is-split-view .content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* App.tsx wraps the routed page in a bare <div>; it has to carry the height down
+   too, or the frame stops one element short of the page that needs it.
+   :last-child, not > div — the verify-email banner is also a direct child, and
+   flexing it too would let it claim half the frame.
+   The page root (.tasks-page) is that element's only child, and it becomes the
+   grid, so it has to be handed the full height first. */
+body.is-split-view .content > div:last-child { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+body.is-split-view .tasks-page { flex: 1; min-height: 0; }
+
+/* Two columns across the WHOLE page, not just the row under the toolbar. The
+   toolbar, view bar and stat cards become the first rows of column one; the pane
+   takes column two and spans every row, so it runs the full height of the screen
+   instead of starting halfway down beneath them.
+   grid-auto-rows: minmax(0, auto) is what lets the table row shrink to fit the
+   frame — a plain `auto` row refuses to go below its content, so a long list
+   would push the grid taller and hand the overflow back to the page. */
+.tasks-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(380px, .85fr);
+  /* ONE row, two items: the left column is a single wrapper and the pane is its
+     neighbour, so both simply stretch to the row's height. Spanning the pane over
+     the toolbar/view-bar/table as separate rows does not work — `grid-row: 1 / -1`
+     resolves against the EXPLICIT grid, and with only implicit rows it collapses
+     to the first one, which is how the pane ended up toolbar-height. */
+  column-gap: 14px; align-items: stretch; }
+/* The left column stacks its own rows and gives the leftover height to the table,
+   which is the part that scrolls. */
+.tasks-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tasks-split .tasks-split-list { flex: 1; }
+/* Scoped under .tasks-split on purpose. The list carries .tasks-split-list at
+   every width (it is the same table either way), so an unscoped height cap here
+   would put a phone's task list in a short inner scroll box it never had.
+   Height comes from the grid row, not a calc(100vh - guess): the old 300px was a
+   stand-in for the toolbar, view bar, stat cards and padding above, and it was
+   wrong the moment any of them wrapped — which is what let the page scroll. */
+.tasks-split .tasks-split-list { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.tasks-split .tasks-split-pane { min-width: 0; min-height: 0; display: flex; overscroll-behavior: contain; }
+/* The pane is a column in the page, not a sheet over it: no fixed position, no
+   shadow, no rounded left edge butting against the list. */
+.tasks-split .tasks-split-pane .drawer-pane { width: 100%; max-width: none; height: 100%; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--e-1);
+  /* .drawer slides in from off-screen, which is right for a sheet and wrong for
+     a docked column — it remounts per task, so that would fire on every row. */
+  animation: pane-in .15s ease; }
+@keyframes pane-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .tasks-split .tasks-split-pane .drawer-pane { animation: none; } }
+
 .profile-modal { width: 460px; }
+
+/* ---- Settings: a menu on the left, one panel on the right ----------------
+   Phone: the menu is the screen; picking a section swaps to it and a back
+   arrow returns. Wide: both are visible at once and the back arrow is gone. */
+.pf-shell { width: 780px; max-width: 96vw; display: flex; flex-direction: column; }
+.pf-head { position: relative; }
+.pf-head h3 { margin: 0; }
+.pf-back { display: none; font-size: 22px; line-height: 1; padding: 2px 10px; }
+.pf-body { display: flex; min-height: 0; }
+.pf-nav { width: 290px; flex: none; border-right: 1px solid var(--border); padding: 12px; overflow-y: auto;
+  max-height: min(70vh, 620px); display: flex; flex-direction: column; gap: 2px; }
+.pf-nav-id { display: flex; align-items: center; gap: 11px; padding: 6px 8px 14px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.pf-nav-name { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-nav-mail { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-nav-item { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; border: 1px solid transparent;
+  background: none; font: inherit; padding: 10px 11px; border-radius: 10px; cursor: pointer; color: var(--text);
+  transition: background .13s, border-color .13s; }
+.pf-nav-item:hover { background: var(--n-50); }
+.pf-nav-item.active { background: color-mix(in srgb, var(--primary) 10%, transparent); border-color: color-mix(in srgb, var(--primary) 32%, transparent); }
+.pf-nav-item.active .pf-nav-label, .pf-nav-item.active .pf-nav-ic { color: var(--primary); }
+.pf-nav-ic { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; flex: none;
+  background: var(--n-50); color: var(--n-600); }
+.pf-nav-item.active .pf-nav-ic { background: color-mix(in srgb, var(--primary) 16%, transparent); }
+.pf-nav-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.pf-nav-label { font-weight: 600; font-size: 13.5px; }
+.pf-nav-hint { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-nav-chev { color: var(--muted); font-size: 17px; line-height: 1; }
+/* Pushed to the foot of the menu and marked as the one destructive item, so it
+   never reads as a seventh settings page. */
+.pf-nav-logout { margin-top: auto; color: #b91c1c; }
+.pf-nav-logout .pf-nav-label { color: #b91c1c; }
+.pf-nav-logout .pf-nav-ic { background: #fef2f2; color: #b91c1c; }
+.pf-nav-logout:hover { background: #fef2f2; }
+
+.pf-panel { flex: 1; min-width: 0; padding: 18px; overflow-y: auto; max-height: min(70vh, 620px);
+  display: flex; flex-direction: column; gap: 13px; }
+.pf-panel-title { font-size: 15px; font-weight: 800; margin-bottom: 2px; }
+.pf-sub { font-size: 13px; font-weight: 700; }
+.pf-hint { font-size: 12px; line-height: 1.45; }
+.pf-divide { height: 1px; background: var(--border); margin: 4px 0; }
+
+.pf-id { display: flex; align-items: center; gap: 15px; }
+.pf-id-meta { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.pf-id-name { font-weight: 700; font-size: 16px; }
+.pf-id-hint { font-size: 11.5px; }
+.pf-email-state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 7px; }
+.pf-verified { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: #15803d; }
+.pf-unverified { font-size: 12px; font-weight: 700; color: #b45309; }
+
+/* Signed-in devices */
+.pf-devices { display: flex; flex-direction: column; gap: 8px; }
+.pf-device { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.pf-device-ic { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--n-50); color: var(--n-600); flex: none; }
+.pf-device-meta { min-width: 0; flex: 1; }
+.pf-device-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.pf-device-you { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; padding: 2px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 13%, transparent); color: var(--primary); }
+.pf-device-sub { font-size: 11.5px; }
+
+/* Notification switches */
+/* Theme picker — three cards, each previewing the palette it selects rather than
+   naming it and hoping. */
+.pf-themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.pf-theme { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px;
+  border: 1.5px solid var(--border); border-radius: var(--r-md); background: var(--surface);
+  font: inherit; cursor: pointer; text-align: left; transition: border-color .13s, background .13s; }
+.pf-theme:hover { border-color: var(--primary); }
+.pf-theme.on { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.pf-theme-label { font-size: 13px; font-weight: 700; }
+.pf-theme-hint { font-size: 11px; line-height: 1.35; }
+.pf-theme-swatch { width: 100%; height: 34px; border-radius: 7px; border: 1px solid var(--border); margin-bottom: 3px; }
+.pf-theme-swatch--light { background: linear-gradient(135deg, #ffffff 0 50%, #f2f4f7 50% 100%); }
+.pf-theme-swatch--dark { background: linear-gradient(135deg, #171b21 0 50%, #0f1216 50% 100%); }
+/* Split down the middle: the point of "System" is that it is either one. */
+.pf-theme-swatch--system { background: linear-gradient(135deg, #ffffff 0 50%, #0f1216 50% 100%); }
+@media (max-width: 430px) { .pf-themes { grid-template-columns: 1fr; } .pf-theme-swatch { height: 26px; } }
+
+.pf-toggles { display: flex; flex-direction: column; gap: 2px; }
+.pf-toggle { display: flex; align-items: center; gap: 12px; padding: 11px 4px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.pf-toggle:last-child { border-bottom: 0; }
+.pf-toggle-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.pf-toggle-label { font-size: 13.5px; font-weight: 600; }
+.pf-toggle-hint { font-size: 11.5px; line-height: 1.4; }
+/* The real checkbox stays in the DOM for keyboard and screen readers; the pill
+   beside it is what gets painted. */
+.pf-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.pf-switch { position: relative; width: 44px; height: 25px; border-radius: 999px; background: var(--n-300); flex: none; transition: background .16s; }
+.pf-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 19px; height: 19px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .16s; }
+.pf-toggle input:checked ~ .pf-switch { background: var(--primary); }
+.pf-toggle input:checked ~ .pf-switch::after { transform: translateX(19px); }
+.pf-toggle input:focus-visible ~ .pf-switch { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+@media (max-width: 759px) {
+  .pf-shell { width: 100%; max-width: 100vw; }
+  .pf-nav { width: 100%; border-right: 0; max-height: none; }
+  .pf-panel { max-height: none; }
+  /* One at a time: the menu, or the section it opened. */
+  .pf-shell.pf-open .pf-nav { display: none; }
+  .pf-shell:not(.pf-open) .pf-panel { display: none; }
+  .pf-shell.pf-open .pf-back { display: inline-flex; }
+  /* The header already names the open section — repeating it wastes a line on
+     the screen that has the least room for one. */
+  .pf-shell.pf-open .pf-panel-title { display: none; }
+  .pf-body { max-height: 78vh; overflow-y: auto; }
+}
 .profile-id { display: flex; align-items: center; gap: 14px; }
 .profile-role { align-self: flex-start; margin-top: 5px; background: color-mix(in srgb, var(--primary) 14%, #fff); color: var(--primary); text-transform: capitalize; }
 .profile-section { display: grid; gap: 9px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg) 35%, #fff); }
@@ -1548,6 +1832,13 @@ tbody tr:hover { background: var(--n-50); }
      so hide the sidebar-drawer profile to avoid showing two. */
   .topbar-avatar { display: inline-flex; }
   .sidebar-user { display: none; }
+  /* Sits at the foot of the drawer, above the sync/legal line: the last thing
+     in the menu, which is where a sign-out is looked for. */
+  .sidebar-logout-m { display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%;
+    margin-top: auto; padding: 12px; border: 1px solid #fecaca; border-radius: var(--r-md);
+    background: #fff; color: #b91c1c; font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer;
+    transition: background .15s; }
+  .sidebar-logout-m:active { background: #fef2f2; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
   /* Meetings toolbar: center the count + action buttons instead of right-aligning */
@@ -1761,6 +2052,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 }
 
 /* 7. Themed confirm dialog (replaces window.confirm) */
+/* Above every other layer. ConfirmHost is mounted before <Routes>, so any modal
+   opened inside a page (profile, task drawer, feedback) comes LATER in the DOM
+   and — at the same z-index: 50 — painted on top of the confirmation, leaving a
+   dialog that was rendered but unreachable behind the thing that asked for it.
+   A confirmation is the last thing on screen by definition. */
+.confirm-center { z-index: 90; }
 .confirm-modal { width: 420px; max-width: 92vw; padding: 22px; }
 .confirm-body { display: flex; gap: 14px; align-items: flex-start; }
 .confirm-icon { flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--primary) 12%, #fff); color: var(--primary); }
@@ -1881,6 +2178,22 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .lb-stat-lbl { font-size: 11px; text-align: center; }
 .lb-section-lbl { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
 .lb-trajectory { padding: 8px 12px; background: var(--n-50); border: 1px solid var(--border); border-radius: 10px; }
+/* Points-per-day bars: the readout sits above the hovered bar, so the wrapper is
+   the positioning context. */
+.lb-spark-wrap { position: relative; }
+.lb-bar { transition: filter .12s ease; }
+/* The hovered bar lifts, so the chart is visibly responding rather than the
+   tooltip appearing out of nowhere. */
+.lb-bar.is-hot { filter: brightness(1.25); }
+.lb-bar-hit { cursor: default; outline: none; }
+.lb-bar-hit:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
+.lb-tip { position: absolute; z-index: 3; pointer-events: none; white-space: nowrap;
+  display: flex; flex-direction: column; gap: 1px; padding: 6px 9px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--e-2); }
+/* Value leads, date follows — the reader knows roughly which day they are on and
+   came for the number. */
+.lb-tip-val { font-size: 12.5px; font-weight: 800; color: var(--text); line-height: 1.2; }
+.lb-tip-day { font-size: 10.5px; font-weight: 600; color: var(--muted); line-height: 1.2; }
 .lb-comps { display: grid; gap: 12px; }
 .lb-comp-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 5px; }
 .lb-comp-key { font-weight: 600; font-size: 13px; }
@@ -1928,6 +2241,25 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .fb-review-name { font-weight: 700; font-size: 13px; }
 .fb-review-time { font-size: 11px; margin-left: auto; }
 .fb-review-comment { font-size: 13px; color: var(--text); margin-top: 3px; line-height: 1.45; word-break: break-word; }
+
+/* The follow-up question under the stars, and its pickable chips. Distinct from
+   .fb-tag below: those are read-only context, these are controls. */
+.fb-ask { display: flex; flex-direction: column; gap: 8px; }
+.fb-ask-q { font-size: 13px; font-weight: 700; color: var(--text); }
+.fb-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.fb-chip { font: inherit; font-size: 12.5px; font-weight: 600; color: var(--n-700); background: var(--n-50);
+  border: 1px solid var(--n-300); border-radius: 999px; padding: 6px 12px; cursor: pointer;
+  transition: background .13s, border-color .13s, color .13s; }
+.fb-chip:hover { border-color: var(--primary); }
+.fb-chip.on { background: color-mix(in srgb, var(--primary) 12%, transparent); border-color: var(--primary); color: var(--primary); }
+.fb-chip.on::before { content: '¹3'; margin-right: 5px; font-weight: 800; }
+
+/* Picked chips echoed back on a review card — read-only, tinted so they read as
+   the person's answer rather than the screen/device context beside them. */
+.fb-review-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.fb-review-tag { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 2px 8px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent); }
 
 /* Context line under a review: which screen, which device, how many sends. */
 .fb-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }

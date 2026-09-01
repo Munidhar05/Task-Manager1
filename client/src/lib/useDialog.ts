@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { lockBodyScroll, unlockBodyScroll } from './scrollLock'
 
 // Accessibility hook for modal dialogs. Attach the returned ref to the dialog
 // container and it will:
@@ -8,12 +9,25 @@ import { useEffect, useRef } from 'react'
 //   • move focus into the dialog on open, and
 //   • restore focus to the previously-focused element on close.
 // Pair with role="dialog" (or "alertdialog") + aria-modal="true" on the container.
-export function useDialog<T extends HTMLElement>(onClose: () => void) {
+// `enabled` turns the whole behaviour off while keeping the hook call in place
+// (hooks can't be called conditionally). A panel docked beside the page is not a
+// dialog: trapping Tab inside it and stealing focus on open would strand the
+// keyboard away from the list it sits next to.
+export function useDialog<T extends HTMLElement>(onClose: () => void, enabled = true) {
   const ref = useRef<T | null>(null)
   const closeRef = useRef(onClose)
   useEffect(() => { closeRef.current = onClose }, [onClose])
 
+  // Same `enabled` gate as the focus trap: a docked pane is part of the page and
+  // must leave the page scrolling normally.
   useEffect(() => {
+    if (!enabled) return
+    lockBodyScroll()
+    return () => unlockBodyScroll()
+  }, [enabled])
+
+  useEffect(() => {
+    if (!enabled) return
     const prevActive = document.activeElement as HTMLElement | null
 
     const selector = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
@@ -43,7 +57,7 @@ export function useDialog<T extends HTMLElement>(onClose: () => void) {
       // Restore focus to whatever opened the dialog.
       if (prevActive && typeof prevActive.focus === 'function') prevActive.focus()
     }
-  }, [])
+  }, [enabled])
 
   return ref
 }

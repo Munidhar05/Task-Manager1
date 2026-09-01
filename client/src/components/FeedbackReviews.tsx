@@ -131,6 +131,9 @@ export default function FeedbackReviews({ reloadKey = 0 }: { reloadKey?: number 
                     <span className="muted fb-review-time">{timeAgo(rv.updated_at)}</span>
                   </div>
                   {rv.comment && <div className="fb-review-comment">{rv.comment}</div>}
+                  {rv.tags?.length > 0 && (
+                    <div className="fb-review-tags">{rv.tags.map((t: string) => <span key={t} className="fb-review-tag">{t}</span>)}</div>
+                  )}
                   <ContextTags page={rv.page} device={rv.device} sends={rv.submissions} />
                 </div>
               </div>
@@ -157,6 +160,9 @@ export default function FeedbackReviews({ reloadKey = 0 }: { reloadKey?: number 
                     <span className="fb-ev-when">{stamp(e.created_at)}</span>
                   </div>
                   {e.comment && <div className="fb-review-comment">{e.comment}</div>}
+                  {e.tags?.length > 0 && (
+                    <div className="fb-review-tags">{e.tags.map((t: string) => <span key={t} className="fb-review-tag">{t}</span>)}</div>
+                  )}
                   <ContextTags page={e.page} device={e.device} version={e.app_version} />
                 </div>
               </div>

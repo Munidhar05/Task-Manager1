@@ -65,6 +65,17 @@ r.patch('/me', (req, res) => {
     sets.push('name=?'); args.push(name)
   }
   if ('preferred_language' in b) { sets.push('preferred_language=?'); args.push(b.preferred_language || 'en') }
+  // Kept as typed apart from length — numbers arrive with +, spaces and dashes
+  // and there is no one right shape for them across countries.
+  if ('phone' in b) { sets.push('phone=?'); args.push(String(b.phone || '').trim().slice(0, 32)) }
+  // Notification switches. Stored as an object of known categories only, so a
+  // stray key can't grow the shape; an explicit false is the only "off".
+  if ('notif_prefs' in b) {
+    const want = b.notif_prefs && typeof b.notif_prefs === 'object' ? b.notif_prefs : {}
+    const prefs = {}
+    for (const k of ['tasks', 'approvals', 'comments', 'chat', 'deadlines']) prefs[k] = want[k] !== false
+    sets.push('notif_prefs=?'); args.push(JSON.stringify(prefs))
+  }
   if (b.new_password) {
     if (String(b.new_password).length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters.' })
     const me = db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.user.id)

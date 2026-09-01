@@ -13,9 +13,23 @@ const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reope
 // onChange receives the updated task when the mutation returned one, so list pages
 // can patch that row in place instead of re-fetching everything; called with no
 // argument (→ caller should re-fetch) after deletes/uploads.
-export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void }) {
+// `variant` decides how the drawer is mounted, not what it contains. 'modal' is
+// the overlay it has always been; 'pane' docks the same content beside the list
+// on a wide screen, where covering the page to read one task wastes the room.
+export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal' }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void; variant?: 'modal' | 'pane' }) {
   const { user } = useAuth()
-  const drawerRef = useDialog<HTMLDivElement>(onClose)
+  const pane = variant === 'pane'
+  const drawerRef = useDialog<HTMLDivElement>(onClose, !pane)
+  // A plain function, deliberately not a component: a component declared inside
+  // render is a new type every render, so React would unmount and remount the
+  // whole drawer on each keystroke and every field would lose what was typed.
+  const shell = (label: string, children: React.ReactNode) => pane
+    ? <div className="drawer drawer-pane" ref={drawerRef} aria-label={label}>{children}</div>
+    : (
+      <div className="overlay" onClick={onClose}>
+        <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={label} onClick={(e) => e.stopPropagation()}>{children}</div>
+      </div>
+    )
   const [task, setTask] = useState<Task | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [comment, setComment] = useState('')
@@ -32,9 +46,28 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const updatePart = (i: number, patch: Partial<{ title: string; assignee_id: string }>) =>
     setParts((ps) => ps.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
 
+  // Progress slider: while the user is dragging, `dragProgress` owns the value so a
+  // re-render (or a save still in flight) can't yank the thumb back to the stale
+  // server number. null = nobody is dragging, the saved value is the truth.
+  const [dragProgress, setDragProgress] = useState<number | null>(null)
+  const draggingRef = useRef(false)                    // pointer is down on the slider
+  const pendingProgress = useRef<number | null>(null)  // value still to be saved
+  const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Who changed what, newest first — read back from the audit trail the server
+  // has always written. Fetched alongside the task and refreshed after every
+  // mutation, so an edit shows its author the moment it is made.
+  type Edit = { actor_id: string; actor_name: string; avatar_color?: string; fields: string[]; reassigned: boolean; at: string }
+  const [edits, setEdits] = useState<Edit[]>([])
+  const loadEdits = () => api.get(`/tasks/${taskId}/history`).then(setEdits).catch(() => setEdits([]))
+
   const [loadErr, setLoadErr] = useState(false)
-  const load = () => { setLoadErr(false); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
-  useEffect(() => { setEditing(false); load(); api.get('/users').then(setUsers).catch(() => {}) }, [taskId])
+  const load = () => { setLoadErr(false); loadEdits(); return api.get(`/tasks/${taskId}`).then(setTask).catch(() => setLoadErr(true)) }
+  useEffect(() => {
+    setEditing(false); load(); api.get('/users').then(setUsers).catch(() => {})
+    setDragProgress(null); pendingProgress.current = null; draggingRef.current = false
+  }, [taskId])
+  useEffect(() => () => { if (progressTimer.current) clearTimeout(progressTimer.current) }, [])
   // Keep the member picker in sync whenever the task's current owner changes.
   useEffect(() => { setPendingAssignee(task?.assignee?.id || '') }, [task?.assignee?.id])
   // Reset the pending status whenever the saved status changes (incl. after Accept).
@@ -42,7 +75,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
 
   const mutate = async (fn: () => Promise<any>) => {
     setBusy(true)
-    try { const t = await fn(); if (t?.id) setTask(t); else await load(); onChange?.(t?.id ? t : undefined) }
+    try { const t = await fn(); if (t?.id) setTask(t); else await load(); await loadEdits(); onChange?.(t?.id ? t : undefined) }
     finally { setBusy(false) }
   }
   const setStatus = (status: string) => mutate(() => api.post(`/tasks/${taskId}/status`, { status }))
@@ -66,6 +99,27 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     mutate(() => api.del(`/tasks/attachments/${a.id}`))
   }
   const setProgress = (progress: number) => mutate(() => api.patch(`/tasks/${taskId}`, { progress }))
+  // Save once, when the user lets go — not once per pixel of travel. Dragging only
+  // moves the local value, so the thumb stays exactly where the finger left it.
+  const commitProgress = async () => {
+    if (progressTimer.current) { clearTimeout(progressTimer.current); progressTimer.current = null }
+    draggingRef.current = false
+    const value = pendingProgress.current
+    pendingProgress.current = null
+    // Hand the slider back to the saved value only if no newer drag has started.
+    const release = () => { if (pendingProgress.current === null && !draggingRef.current) setDragProgress(null) }
+    if (value === null) return
+    if (value === task?.progress) { release(); return }
+    try { await setProgress(value) } catch { toast.error("Couldn't save the progress — try again.") } finally { release() }
+  }
+  const onProgressInput = (value: number) => {
+    setDragProgress(value)
+    pendingProgress.current = value
+    // Keyboard and assistive changes never send a pointer release — save shortly
+    // after the last one instead. While a pointer is down, the release saves.
+    if (progressTimer.current) clearTimeout(progressTimer.current)
+    if (!draggingRef.current) progressTimer.current = setTimeout(commitProgress, 400)
+  }
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
 
@@ -133,9 +187,8 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
     finally { setBusy(false) }
   }
 
-  if (loadErr) return (
-    <div className="overlay" onClick={onClose}>
-      <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Task" onClick={(e) => e.stopPropagation()}>
+  if (loadErr) return shell('Task', (
+      <>
         <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>Task</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="empty-state">
           <div className="empty-state-icon"><Ic name="warning" size={40} /></div>
@@ -143,12 +196,11 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
           <div className="empty-state-hint">Check your connection and try again.</div>
           <div className="empty-state-action"><button className="btn btn-primary btn-sm" onClick={load}>Retry</button></div>
         </div>
-      </div>
-    </div>
-  )
-  if (!task) return (
-    <div className="overlay" onClick={onClose}><div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Loading task" onClick={(e) => e.stopPropagation()}><div className="card-pad" style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div></div></div>
-  )
+      </>
+  ))
+  if (!task) return shell('Loading task', (
+    <div className="card-pad" style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <span key={i} className="skeleton skel-row" />)}</div>
+  ))
   const isManager = user?.role !== 'employee'
   // The person who handed this task out (assigned it, or split the part off) can
   // decide its submission too — mirrors the per-task check on POST /:id/approve.
@@ -164,18 +216,26 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
   const canDelete = isManager || isOwnWork || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
   // The task owner (or a manager) can split a top-level task into shared parts.
   const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
+  // Whoever set the work owns what it asks for: managers, and the person who
+  // handed it out. Being given a task is NOT a licence to rewrite it — the
+  // assignee moves status and progress and nothing else, so they can't quietly
+  // reword, reprioritise or hand on the brief someone set them. This gates the
+  // whole brief, not just the title: assignee, priority, category and due date
+  // hang off it too. `assigned_by_id` rather than isAssigner, so a task you
+  // raised for yourself stays yours to edit (isAssigner excludes exactly that
+  // case — you may not approve your own submission, but you may edit it).
+  const canEdit = isManager || (!!user && task.assigned_by_id === user.id)
   const subs = task.subtasks || []
   const subDone = subs.filter((s: any) => s.status === 'Done').length
   const subPct = subs.length ? Math.round((subDone / subs.length) * 100) : 0
   const lookupUser = (uid?: string | null) => users.find((u) => u.id === uid)
 
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={task.title} onClick={(e) => e.stopPropagation()}>
+  return shell(task.title, (
+      <>
         <div className="card-head spread">
           <div className="dr-headtitle">Task details</div>
           <div className="row">
-            {isManager && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
+            {canEdit && !editing && <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={startEdit} title="Edit task details"><Ic name="edit" size={14} /> Edit</button>}
             {canDelete && <button className="btn btn-sm btn-danger row" style={{ gap: 6 }} disabled={busy} onClick={del} title="Delete task"><Ic name="trash" size={14} /> Delete</button>}
             <button className="btn btn-ghost" onClick={onClose}>✕</button>
           </div>
@@ -225,7 +285,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field dr-field--tall">
               <span className="dr-field-label">Assignee</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <div className="row" style={{ gap: 8 }}>
                     <select data-va="task.drawer.assignee" value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
                       <option value="">Select member…</option>
@@ -249,7 +309,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field">
               <span className="dr-field-label">Priority</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <select value={task.priority} onChange={(e) => setPriority(e.target.value)} style={{ width: 'auto' }}>
                     {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}
                   </select>
@@ -259,7 +319,7 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             <div className="dr-field">
               <span className="dr-field-label">Category</span>
               <div className="dr-field-val">
-                {isManager ? (
+                {canEdit ? (
                   <select value={task.category || ''} onChange={(e) => setCategory(e.target.value)} style={{ width: 'auto' }}>
                     <option value="">Uncategorized</option>
                     {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -293,10 +353,36 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
           </div>
 
+          {edits.length > 0 && (
+            <div style={{ margin: '16px 0' }}>
+              <label>Edited by</label>
+              <div style={{ fontSize: 13, display: 'grid', gap: 8 }}>
+                {edits.map((e, i) => (
+                  <div key={i} className="spread" style={{ alignItems: 'flex-start', gap: 10 }}>
+                    <span className="row" style={{ gap: 7, minWidth: 0 }}>
+                      <Avatar name={e.actor_name} color={e.avatar_color} size={22} />
+                      <span style={{ minWidth: 0 }}>
+                        <b>{e.actor_name}</b>{' '}
+                        <span className="muted">
+                          {e.reassigned ? 'reassigned it and changed ' : 'changed '}{e.fields.join(', ')}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(e.at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ margin: '14px 0' }}>
-            <label htmlFor="task-progress">Progress — {task.progress}%</label>
-            <input id="task-progress" type="range" min={0} max={100} step={10} value={task.progress}
-              aria-valuetext={`${task.progress} percent`} onChange={(e) => setProgress(Number(e.target.value))} />
+            <label htmlFor="task-progress">Progress — {dragProgress ?? task.progress}%</label>
+            <input id="task-progress" type="range" min={0} max={100} step={10} value={dragProgress ?? task.progress}
+              aria-valuetext={`${dragProgress ?? task.progress} percent`}
+              onChange={(e) => onProgressInput(Number(e.target.value))}
+              onPointerDown={() => { draggingRef.current = true }}
+              onPointerUp={commitProgress} onPointerCancel={commitProgress} onLostPointerCapture={commitProgress}
+              onKeyUp={commitProgress} onBlur={commitProgress} />
           </div>
 
           <div style={{ margin: '16px 0' }}>
@@ -513,7 +599,6 @@ export default function TaskDrawer({ taskId, onClose, onChange }: { taskId: stri
             </div>
           </div>
         )}
-      </div>
-    </div>
-  )
+      </>
+  ))
 }

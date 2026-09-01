@@ -12,6 +12,24 @@
     <link rel="apple-touch-icon" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VoTask — AI Execution Platform</title>
+    <meta name="theme-color" content="#f2f4f7" />
+    <!-- Theme before first paint. This has to be inline and synchronous: by the
+         time the module bundle runs, the light palette has already been painted,
+         and a white flash on the way into a dark app is worse than no dark mode.
+         Deliberately duplicates two lines of lib/theme.ts rather than importing
+         it — an import here would be another round trip, which is the very thing
+         it exists to avoid. -->
+    <script>
+      (function () {
+        try {
+          var c = localStorage.getItem('appTheme') || 'system'
+          var dark = c === 'dark' || (c === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+          var m = document.querySelector('meta[name="theme-color"]')
+          if (m) m.setAttribute('content', dark ? '#0f1216' : '#f2f4f7')
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

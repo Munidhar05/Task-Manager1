@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { OAuth2Client } from 'google-auth-library'
 import { db } from '../db.js'
-import { signToken, verifyPassword, hashPassword, authRequired, platformAdminEmails } from '../auth.js'
+import { signToken, verifyPassword, hashPassword, authRequired, platformAdminEmails, createSession } from '../auth.js'
 import { audit, id, now, genToken, appUrl, inDays, isCommonPassword } from '../util.js'
 import { sendMail } from '../mailer.js'
 
@@ -97,7 +97,7 @@ r.post('/signup', (req, res) => {
 
   audit(user.org_id, user.id, personal ? 'account.signup' : 'org.signup', 'organization', user.org_id, company)
   sendVerificationEmail(user).catch((e) => console.warn('[auth] verification email failed:', e.message))
-  res.status(201).json({ token: signToken(user), user: userWithWorkspace(user) })
+  res.status(201).json({ token: signToken(user, createSession(user, req)), user: userWithWorkspace(user) })
 })
 
 r.post('/login', (req, res) => {
@@ -114,7 +114,7 @@ r.post('/login', (req, res) => {
     user.platform_admin = isPlatform
   }
   audit(user.org_id, user.id, 'auth.login', 'user', user.id)
-  res.json({ token: signToken(user), user: userWithWorkspace(user) })
+  res.json({ token: signToken(user, createSession(user, req)), user: userWithWorkspace(user) })
 })
 
 // GOOGLE SIGN-IN (login-only). The client obtains a Google ID token — from the
@@ -169,7 +169,7 @@ r.post('/google', async (req, res) => {
   }
 
   audit(user.org_id, user.id, 'auth.login_google', 'user', user.id)
-  res.json({ token: signToken(user), user: userWithWorkspace(user) })
+  res.json({ token: signToken(user, createSession(user, req)), user: userWithWorkspace(user) })
 })
 
 r.get('/me', authRequired, (req, res) => {
@@ -272,10 +272,42 @@ r.post('/reset-password', (req, res) => {
   res.json({ ok: true })
 })
 
+// WHERE AM I SIGNED IN — one row per live login, newest activity first, with the
+// device you are asking from marked so nobody signs themselves out by accident.
+r.get('/sessions', authRequired, (req, res) => {
+  const rows = db.prepare(
+    `SELECT id, device, ip, created_at, last_seen_at FROM sessions
+     WHERE user_id=? AND revoked_at IS NULL ORDER BY last_seen_at DESC`
+  ).all(req.user.id)
+  res.json(rows.map((r0) => ({ ...r0, current: r0.id === req.sessionId })))
+})
+
+// Sign one device out. Revoking is a flag, not a delete: the row is the record
+// that the device was signed in at all.
+r.delete('/sessions/:id', authRequired, (req, res) => {
+  const row = db.prepare('SELECT id FROM sessions WHERE id=? AND user_id=? AND revoked_at IS NULL').get(req.params.id, req.user.id)
+  if (!row) return res.status(404).json({ error: 'Not found' })
+  db.prepare('UPDATE sessions SET revoked_at=? WHERE id=?').run(now(), row.id)
+  audit(req.user.org_id, req.user.id, 'auth.session_revoke', 'user', req.user.id, row.id === req.sessionId ? 'this device' : 'another device')
+  res.json({ ok: true, was_current: row.id === req.sessionId })
+})
+
+// Sign out everywhere EXCEPT here — the "I lost a phone" button. Deliberately
+// spares the caller: locking yourself out while securing the account is not the
+// outcome anyone wants.
+r.post('/sessions/revoke-others', authRequired, (req, res) => {
+  const info = req.sessionId
+    ? db.prepare('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL AND id<>?').run(now(), req.user.id, req.sessionId)
+    : db.prepare('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(now(), req.user.id)
+  audit(req.user.org_id, req.user.id, 'auth.session_revoke_others', 'user', req.user.id, String(info.changes))
+  res.json({ ok: true, revoked: info.changes })
+})
+
 function publicUser(u) {
   return { id: u.id, name: u.name, email: u.email, role: u.role, org_id: u.org_id, phone: u.phone,
     department_id: u.department_id, preferred_language: u.preferred_language, avatar_color: u.avatar_color,
-    avatar_file: u.avatar_file || null, email_verified: u.email_verified ? 1 : 0 }
+    avatar_file: u.avatar_file || null, email_verified: u.email_verified ? 1 : 0,
+    notif_prefs: (() => { try { return u.notif_prefs ? JSON.parse(u.notif_prefs) : null } catch { return null } })() }
 }
 
 // Re-confirm the CURRENT user's password. Used to gate sensitive voice actions
