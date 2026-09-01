@@ -22,13 +22,14 @@ android {
         // as "3.2". versionName is just the label users see, so it doesn't have
         // to track versionCode — 7 AND 8 were consumed by uploads the Play
         // Console rejects as reused (more was uploaded than git recorded), so
-        // "3.3" (the voice-agent release: streaming STT/TTS, agentic brain,
-        // undo-first, learning loop) ships as versionCode 10, skipping 9 to
-        // stay clear. applicationId stays io.smarttask.app: changing it
-        // would register a brand-new app on Play, orphaning the existing
-        // listing, reviews and installs.
-        versionCode 10
-        versionName "3.3"
+        // "3.3" (the voice-agent release) shipped as versionCode 10, skipping
+        // 9 to stay clear. 11 is "3.4": the main-branch UI wave (new dashboard,
+        // themes, task pane, sidebar More) that the website already had while
+        // the app was still built from an unmerged branch. applicationId stays
+        // io.smarttask.app: changing it would register a brand-new app on
+        // Play, orphaning the existing listing, reviews and installs.
+        versionCode 11
+        versionName "3.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
