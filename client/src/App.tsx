@@ -29,6 +29,7 @@ import Leaderboard from './pages/Leaderboard'
 import Admin from './pages/Admin'
 import Platform from './pages/Platform'
 import PrivacyPolicy from './pages/PrivacyPolicy'
+import Landing from './pages/Landing'
 
 // Clean line-style sidebar icons (inherit currentColor, so they turn white when active).
 const Icon = ({ children }: { children: React.ReactNode }) => (
@@ -360,6 +361,35 @@ function Home() {
   return <Dashboard />
 }
 
+const RouteSpinner = () => (
+  <div style={{ display: 'grid', placeItems: 'center', height: '100vh' }}><span className="spinner" /></div>
+)
+
+// "/" is two different pages depending on who is asking. Signed in, it's the
+// dashboard. Signed OUT it is the public welcome page — not a bounce to the login
+// form, because a first-time visitor arriving at the bare domain has no idea what
+// VoTask is yet, and a password box doesn't tell them. Deep links into the app
+// (/tasks, /chats, …) still go to /login via Protected: those visitors already
+// know where they were headed.
+//
+// Both gates wait for `loading` rather than reading `user` alone, or a returning
+// user with a stored token would see the marketing page flash before /auth/me
+// resolves them into the app.
+function HomeRoute() {
+  const { user, loading } = useAuth()
+  if (loading) return <RouteSpinner />
+  if (!user) return <Landing />
+  return <Protected><Home /></Protected>
+}
+
+// The same page under its own stable URL, so the login/signup screens (and any
+// link someone shares) have something to point back at.
+function WelcomeRoute() {
+  const { user, loading } = useAuth()
+  if (loading) return <RouteSpinner />
+  return user ? <Navigate to="/" replace /> : <Landing />
+}
+
 // Make the Android hardware back button step back through the app (close an open
 // panel/modal, then go back a screen) instead of quitting the app outright.
 function useAndroidBackButton() {
@@ -396,7 +426,8 @@ export default function App() {
       <Route path="/reset-password" element={user ? <Navigate to="/" replace /> : <ResetPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
-      <Route path="/" element={<Protected><Home /></Protected>} />
+      <Route path="/welcome" element={<WelcomeRoute />} />
+      <Route path="/" element={<HomeRoute />} />
       <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
       <Route path="/chats" element={<Protected><Chats /></Protected>} />
