@@ -109,6 +109,8 @@ export default function Signup() {
             Already have an account? <Link to="/login" style={{ color: 'var(--primary)', fontWeight: 600 }}>Log in</Link>
             <br />
             By creating an account you agree to our <Link to="/privacy" style={{ color: 'var(--primary)', fontWeight: 600 }}>Privacy Policy</Link>.
+            <br />
+            <Link to="/welcome" style={{ color: 'var(--primary)', fontWeight: 600 }}>What is VoTask?</Link>
           </div>
         </form>
       </div>
