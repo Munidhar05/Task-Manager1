@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import PasswordStrength from '../components/PasswordStrength'
 import { passwordStrength, isCommonPassword } from '../lib/passwordStrength'
@@ -12,6 +12,10 @@ import { passwordStrength, isCommonPassword } from '../lib/passwordStrength'
 // for a password rather than surprising people afterwards.
 export default function JoinWorkspace() {
   const { code = '' } = useParams()
+  const navigate = useNavigate()
+  // Reached at /join with no code: somebody was TOLD the code rather than sent
+  // the link ("our code is 96CKCX"), and until now had nowhere to type it.
+  const [codeInput, setCodeInput] = useState('')
   const [org, setOrg] = useState<{ org_name: string; role: string; allowed_domains: string[] } | null>(null)
   const [loadErr, setLoadErr] = useState('')
   const [form, setForm] = useState({ name: '', email: '', password: '' })
@@ -21,10 +25,21 @@ export default function JoinWorkspace() {
   const [sent, setSent] = useState(false)
 
   useEffect(() => {
+    if (!code) return                       // waiting for a code to be typed
     api.get(`/join/lookup/${encodeURIComponent(code)}`)
       .then(setOrg)
       .catch((e) => setLoadErr(e.message))
   }, [code])
+
+  // Codes are read aloud and written down, so accept what people actually type:
+  // any case, and spaces or dashes wherever they fell.
+  const goToCode = (e: React.FormEvent) => {
+    e.preventDefault()
+    const c = codeInput.replace(/[\s-]/g, '').toUpperCase()
+    if (!c) { setErr('Enter the code your manager gave you.'); return }
+    setErr('')
+    navigate(`/join/${encodeURIComponent(c)}`, { replace: true })
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -40,6 +55,42 @@ export default function JoinWorkspace() {
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
 
+  if (!code) {
+    return (
+      <div className="login-wrap">
+        <form className="login-card" onSubmit={goToCode}>
+          <div className="brand" style={{ padding: 0, marginBottom: 8, gap: 12 }}>
+            <img src="/logo.png" alt="" className="brand-logo-img" />
+            <div>
+              <div className="brand-name" style={{ color: 'var(--text)' }}>Join with a code</div>
+              <div className="muted" style={{ fontSize: 12 }}>Ask your manager for your workspace code</div>
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="join-code">Workspace code</label>
+            <input
+              id="join-code"
+              className="join-code-input"
+              value={codeInput}
+              onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+              placeholder="ABC123"
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={12}
+              autoFocus
+            />
+          </div>
+          {err && <div className="login-err" role="alert">{err}</div>}
+          <button className="btn btn-primary login-btn">Continue</button>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 14, textAlign: 'center' }}>
+            Already have an account? <Link to="/login" style={{ color: 'var(--primary)', fontWeight: 600 }}>Log in</Link>
+          </div>
+        </form>
+      </div>
+    )
+  }
+
   if (loadErr) {
     return (
       <div className="login-wrap">
@@ -47,7 +98,8 @@ export default function JoinWorkspace() {
           <img src="/logo.png" alt="VoTask" className="brand-logo-img" style={{ margin: '0 auto 14px' }} />
           <h1>This link isn't active</h1>
           <p className="muted" style={{ marginTop: 8, fontSize: 14 }}>{loadErr}</p>
-          <Link to="/login" className="btn btn-primary login-btn" style={{ marginTop: 18 }}>Go to sign in</Link>
+          <Link to="/join" className="btn btn-primary login-btn" style={{ marginTop: 18 }}>Try another code</Link>
+          <Link to="/login" className="btn login-btn" style={{ marginTop: 8 }}>Go to sign in</Link>
         </div>
       </div>
     )

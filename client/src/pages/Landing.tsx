@@ -43,6 +43,7 @@ const IcUsers = () => <I><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><
 const IcBolt = () => <I><path d="M13 2 4.5 13H11l-1 9 8.5-11H12z" /></I>
 const IcPhone = () => <I><rect x="6" y="2" width="12" height="20" rx="3" /><path d="M11 18.5h2" /></I>
 const IcArrow = () => <I size={16}><path d="M5 12h14M13 6l6 6-6 6" /></I>
+const IcKey = () => <I size={18}><circle cx="7.5" cy="15.5" r="3.5" /><path d="m10 13 8.5-8.5M15.5 7.5l2 2M18 5l2 2" /></I>
 
 /* ------------------------------------------------------- shared fragments -- */
 // A person chip, the way a task shows its owner inside the app.
@@ -214,6 +215,12 @@ export default function Landing() {
               </p>
               <div className="lp-actions">
                 <Link to="/signup" className="lp-btn lp-btn-primary lp-btn-lg">Create your workspace</Link>
+                {/* Three CTAs, three weights: start one, sign in to one, or join
+                    one you were given a code for. The join button is filled with
+                    the orange TINT rather than the solid — same size and presence
+                    as the primary, without two buttons competing to be the one
+                    obvious thing to press. */}
+                <Link to="/join" className="lp-btn lp-btn-soft lp-btn-lg"><IcKey />Join with a code</Link>
                 <Link to="/login" className="lp-btn lp-btn-outline lp-btn-lg">I already have an account</Link>
               </div>
               <ul className="lp-points">

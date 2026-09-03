@@ -734,6 +734,10 @@ tbody tr:hover { background: var(--n-50); }
 .lp-btn-outline { color: var(--lp-ink); background: var(--lp-paper); border-color: var(--lp-line); }
 .lp-btn-outline:hover { border-color: var(--lp-orange); color: var(--lp-orange-ink); box-shadow: var(--lp-sh-panel); }
 .lp-btn-quiet { color: var(--lp-ink-2); background: var(--lp-paper); border-color: var(--lp-line); }
+/* Tinted fill: reads as a real button at CTA size, but does not fight the solid
+   primary for "the one obvious thing to press". */
+.lp-btn-soft { color: var(--lp-orange-ink); background: var(--lp-orange-t); border-color: color-mix(in srgb, var(--lp-orange) 32%, transparent); }
+.lp-btn-soft:hover { background: color-mix(in srgb, var(--lp-orange) 16%, transparent); border-color: var(--lp-orange); transform: translateY(-1px); }
 .lp-btn-lg { padding: 14px 26px; font-size: 15px; border-radius: 12px; }
 .lp-btn-sm { padding: 7px 15px; font-size: 13px; border-radius: 9px; }
 
@@ -1025,6 +1029,15 @@ tbody tr:hover { background: var(--n-50); }
   .inv-row input { flex: 1 1 100%; }
 }
 
+/* The workspace-code field. Monospace and widely tracked because the string is
+   read aloud and typed by hand — every character has to be individually legible,
+   and uppercase matches how the code is displayed to the manager. */
+.join-code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 22px; font-weight: 700; letter-spacing: .22em; text-align: center;
+  text-transform: uppercase; padding: 12px 14px;
+}
+
 /* Invite-created confirmation. Brand tint, not the amber "something went wrong"
    panel it replaced — nothing failed, the link is simply the deliverable. */
 .inv-ready { font-size: 13.5px; line-height: 1.5; padding: 12px 14px; border-radius: var(--r-sm);
@@ -1042,6 +1055,7 @@ tbody tr:hover { background: var(--n-50); }
 .dom-opt b { display: block; font-size: 14px; font-weight: 700; }
 .dom-hint { display: block; font-size: 12.5px; line-height: 1.5; color: var(--muted); margin-top: 3px; }
 .dom-detail { padding: 12px 15px; border: 1px dashed var(--n-300); border-radius: var(--r-md); background: var(--n-50); }
+
 
 /* Sidebar "Invite people" — a button that has to sit convincingly among the
    NavLinks, so it inherits their metrics and only differs in the accent it
