@@ -54,6 +54,15 @@ app.get('/api/health', (req, res) => {
       ? `openrouter (voice: ${process.env.VOICE_MODEL_FAST || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash'} → ${process.env.VOICE_MODEL_SMART || 'google/gemini-2.5-pro'}, meetings: ${process.env.OPENROUTER_MEETING_MODEL || 'google/gemini-2.5-pro'})`
       : (process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'rule-based (offline)')),
     transcription: process.env.TRANSCRIPTION_PROVIDER || 'none',
+    // Which build is actually serving. Render injects these into every deploy,
+    // so this answers "did my merge reach production?" from a single curl —
+    // the question that otherwise takes reading the JS bundle for a string that
+    // ought to be in it. Nulls locally, where nothing sets them.
+    build: {
+      commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
+      branch: process.env.RENDER_GIT_BRANCH || null,
+      deployed_at: process.env.RENDER_DEPLOY_TIME || null,
+    },
     rag: {
       enabled: ragOn,
       model: ragOn ? embedModel() : null,
