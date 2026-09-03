@@ -204,16 +204,20 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 .split-part-title { flex: 1 1 auto; min-width: 0; }
 .split-part-who { flex: 0 0 160px; max-width: 160px; min-width: 0; }
 
-/* Voice "Speak" button: warm accent at rest, pulsing green while recording.
-   Green, not red: red on a warm-orange rest state reads as the same button to
-   users mid-tap ("am I recording or not?"), and it also says "error/stop" when
-   the state is actually a healthy live mic. Green is unambiguously "on air". */
+/* Voice "Speak" button: warm accent at rest, pulsing red while recording.
+   Red is the product's agreed meaning for "recording / in progress", so the mic
+   follows it. The old worry about red — that it sits too near the orange rest
+   state to tell apart mid-tap — is handled by making the live red genuinely
+   crimson (hue ~0 deg, not the orange's ~20) and by the three other things that
+   change at the same time: the label flips to "Stop recording", the mic glyph
+   becomes a dot, and that dot pulses. Colour is the loudest cue here, not the
+   only one. */
 .btn-mic { gap: 6px; color: var(--primary); background: #fff7f0; border-color: #f0c9a8; font-weight: 700; }
 .btn-mic:hover:not(:disabled) { background: #fdeede; border-color: var(--primary); }
 .btn-mic svg { display: block; }
-.btn-mic-live { color: #15803d; background: #f0fdf4; border-color: #bbf7d0; }
-.btn-mic-live:hover:not(:disabled) { background: #dcfce7; border-color: #86efac; }
-.mic-dot { width: 8px; height: 8px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 0 rgba(22,163,74,.5); animation: micpulse 1.2s infinite; }
+.btn-mic-live { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.btn-mic-live:hover:not(:disabled) { background: #fee2e2; border-color: #fca5a5; }
+.mic-dot { width: 8px; height: 8px; border-radius: 50%; background: #dc2626; box-shadow: 0 0 0 0 rgba(220,38,38,.5); animation: micpulse 1.2s infinite; }
 
 /* Hero "Speak" button — the app's signature voice action: centered + highlighted. */
 .speak-row { display: flex; justify-content: center; margin: 2px 0 2px; }
@@ -228,20 +232,22 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 }
 .btn-mic-hero:active:not(:disabled) { transform: translateY(0); }
 .btn-mic-hero svg { display: block; }
-/* Recording: switch to green, drop the attention pulse (the dot pulses instead).
-   The whole pill flips hue so the live state is obvious at a glance — the orange
-   rest gradient and the old red live gradient were too close to tell apart. */
+/* Recording: switch to red, drop the attention pulse (the dot pulses instead).
+   The whole pill flips hue so the live state is obvious at a glance. The end stop
+   is deliberately DARK (#b91c1c) rather than a light red — a bright red-orange
+   gradient really would read as the rest state at a glance, and the depth is what
+   separates them. */
 .btn-mic-hero.btn-mic-live, .btn-mic-hero.btn-mic-live:hover:not(:disabled) {
-  color: #fff; background: linear-gradient(135deg, #34d399, #16a34a); animation: none;
-  box-shadow: 0 4px 14px rgba(22,163,74,.45);
+  color: #fff; background: linear-gradient(135deg, #ef4444, #b91c1c); animation: none;
+  box-shadow: 0 4px 14px rgba(185,28,28,.45);
 }
-/* On the green pill the dot must pulse white, not green — its own animation, or
-   micpulse's box-shadow keyframes would paint a green ring nobody can see. */
+/* On the red pill the dot must pulse white, not red — its own animation, or
+   micpulse's box-shadow keyframes would paint a red ring nobody can see. */
 .btn-mic-hero.btn-mic-live .mic-dot { background: #fff; animation: micpulse-light 1.2s infinite; }
 @keyframes micpulse {
-  0% { box-shadow: 0 0 0 0 rgba(22,163,74,.5); }
-  70% { box-shadow: 0 0 0 6px rgba(22,163,74,0); }
-  100% { box-shadow: 0 0 0 0 rgba(22,163,74,0); }
+  0% { box-shadow: 0 0 0 0 rgba(220,38,38,.5); }
+  70% { box-shadow: 0 0 0 6px rgba(220,38,38,0); }
+  100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); }
 }
 @keyframes micpulse-light {
   0% { box-shadow: 0 0 0 0 rgba(255,255,255,.6); }

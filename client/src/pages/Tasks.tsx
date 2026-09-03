@@ -1215,7 +1215,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           <div>
             <label>
               Title
-              {listening && <span style={{ color: '#15803d', fontWeight: 700, fontSize: 11 }}> ● recording…</span>}
+              {listening && <span style={{ color: '#b91c1c', fontWeight: 700, fontSize: 11 }}> ● recording…</span>}
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
             {canRecord && (
