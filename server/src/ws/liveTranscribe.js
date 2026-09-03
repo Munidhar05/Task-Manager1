@@ -81,6 +81,7 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
     let clientGone = false
     let attempts = 0
     let reconnectTimer = null
+    let sessions = 1, sessionStart = 0, lastCloseAt = 0
 
     // Frames waiting for an upstream. PCM16 @16 kHz is ~32 KB/s, ~43 KB/s once
     // base64'd, so this cap holds roughly a minute and a half of speech — far
@@ -127,8 +128,14 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
         // `ready` only on the FIRST open. The voice assistant starts its turn
         // clock on that message, and re-sending it mid-turn would restart the
         // clock every time Sarvam recycled a socket.
-        if (first) toClient({ ready: true })
-        else toClient({ resumed: true, dropped: droppedFrames })
+        if (first) {
+          sessionStart = Date.now()
+          toClient({ ready: true })
+        } else {
+          const gap = Date.now() - lastCloseAt
+          console.log(`[live] upstream #${++sessions} open after ${gap}ms (${pending.length} frames buffered, ${droppedFrames} dropped)`)
+          toClient({ resumed: true, dropped: droppedFrames })
+        }
         flush()
       })
 
@@ -153,6 +160,8 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
           try { client.close() } catch {}
           return
         }
+        lastCloseAt = Date.now()
+        console.log(`[live] upstream closed after ${Math.round((lastCloseAt - sessionStart) / 1000)}s of session — reconnecting`)
         const delay = Math.min(5000, 250 * 2 ** attempts++)
         toClient({ reconnecting: true })
         reconnectTimer = setTimeout(openUpstream, delay)
