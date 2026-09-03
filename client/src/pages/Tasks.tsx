@@ -1115,7 +1115,16 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     && typeof (window as any).MediaRecorder !== 'undefined'
   const mrRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const chunksRef = useRef<BlobPart[]>([])
+  const listeningRef = useRef(false)          // read inside MediaRecorder callbacks
+  // Elapsed recording time. Tied to `listening`, not to the segment loop, so it
+  // counts the whole take rather than restarting every 20s when a segment rolls.
+  const [recSecs, setRecSecs] = useState(0)
+  const recTimerRef = useRef<number | null>(null)
+  const segTimerRef = useRef<number | null>(null)
+  const segSeqRef = useRef(0)                 // spoken order of each segment
+  const segTextRef = useRef<string[]>([])     // transcript per segment, by seq
+  const segJobsRef = useRef<Promise<unknown>[]>([])
+  const segErrRef = useRef('')
   const [listening, setListening] = useState(false) // actively recording
   const [parsing, setParsing] = useState(false)     // transcribing + AI extraction
   const [heard, setHeard] = useState('')
@@ -1130,7 +1139,10 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
     streamRef.current = null
   }
-  useEffect(() => releaseMic, []) // release on unmount (close)
+  useEffect(() => () => {
+    releaseMic()
+    if (recTimerRef.current) clearInterval(recTimerRef.current)
+  }, []) // release the mic and the ticker on unmount (close)
 
   // Merge the AI-extracted fields into the form. Assignee applies only when not in
   // personal mode. The due date is NEVER left blank: spoken date wins, else it
@@ -1156,32 +1168,105 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     })
   }
 
-  // Upload the recorded clip → transcript → structured fields.
-  const transcribeAndApply = async (blob: Blob) => {
+  // Send ONE segment for transcription. Returns its text; the caller stitches.
+  const transcribeSegment = async (blob: Blob) => {
+    const fd = new FormData()
+    fd.append('audio', blob, 'task.webm')
+    const headers: Record<string, string> = {}
+    const token = getToken()
+    if (token) headers.authorization = `Bearer ${token}`
+    const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
+    return String(data?.text || '').trim()
+  }
+
+  // Speak for as long as you like.
+  //
+  // Sarvam's instant endpoint refuses anything past 30 seconds, and this recorder
+  // used to hand it one unbounded blob — so a long task description failed AFTER
+  // you had finished speaking, with the audio already gone. The answer is not to
+  // cut the person off: recording runs until they stop it, and the CLIP is what
+  // gets divided.
+  //
+  // Segments are cut by stopping and restarting MediaRecorder rather than using
+  // start(timeslice). A timeslice emits fragments where only the first carries the
+  // webm header, so segments 2..n are not decodable alone and every one of them
+  // would fail upstream. Stop/start yields complete, independently valid files.
+  // The MediaStream is untouched across cycles, so the mic is never re-acquired
+  // and no audio is lost to a device spin-up.
+  const SEGMENT_MS = 20000   // comfortably inside Sarvam's 30s ceiling
+  const startSegment = (stream: MediaStream) => {
+    let mr: MediaRecorder
+    try { mr = new MediaRecorder(stream, { mimeType: 'audio/webm' }) } catch { mr = new MediaRecorder(stream) }
+    mrRef.current = mr
+    const parts: BlobPart[] = []
+    const seq = segSeqRef.current++
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data) }
+    mr.onstop = () => {
+      const blob = new Blob(parts, { type: mr.mimeType || 'audio/webm' })
+      // Segments upload in parallel but must be stitched in the order they were
+      // SPOKEN, so each keeps its sequence number instead of racing to append.
+      if (blob.size) {
+        segTextRef.current[seq] = ''
+        segJobsRef.current.push(
+          transcribeSegment(blob)
+            .then((t) => { segTextRef.current[seq] = t; setHeard(segTextRef.current.filter(Boolean).join(' ')) })
+            .catch((err) => { segErrRef.current = err?.message || 'Transcription failed' })
+        )
+      }
+      if (listeningRef.current) startSegment(stream)   // still talking — next segment
+      else finishRecording()
+    }
+    try { mr.start() } catch {
+      setListening(false); listeningRef.current = false
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
+      releaseMic(); return
+    }
+    segTimerRef.current = window.setTimeout(() => {
+      if (mrRef.current === mr && mr.state !== 'inactive') { try { mr.stop() } catch {} }
+    }, SEGMENT_MS)
+  }
+
+  // Runs once the final segment has closed: wait for every upload, stitch the
+  // transcript in spoken order, then run the LLM parse ONCE over the whole thing.
+  // The fields it fills — assignee, priority, due date — only make sense against
+  // the complete sentence, not a 20-second slice of it.
+  const finishRecording = async () => {
+    if (segTimerRef.current) { clearTimeout(segTimerRef.current); segTimerRef.current = null }
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+    streamRef.current = null
+    if (!segJobsRef.current.length) return
     setParsing(true)
     try {
-      const fd = new FormData()
-      fd.append('audio', blob, 'task.webm')
-      const headers: Record<string, string> = {}
-      const token = getToken()
-      if (token) headers.authorization = `Bearer ${token}`
-      const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
-      const data = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
-      const text = String(data?.text || '').trim()
+      await Promise.allSettled(segJobsRef.current)
+      const text = segTextRef.current.filter(Boolean).join(' ').trim()
       setHeard(text)
-      if (!text) { toast.info("Didn't catch that — please tap Speak and try again."); return }
+      if (!text) { toast.error(segErrRef.current || "Didn't catch that — please tap Speak and try again."); return }
+      // A failed segment mid-way means words are missing. Say so, rather than
+      // quietly building a task out of half a sentence.
+      if (segErrRef.current) toast.info('Part of the audio could not be transcribed — check the text before creating.')
       await applyVoice(text)
     } catch (err: any) {
       toast.error(err?.message || 'Could not transcribe the audio. Check your connection and try again.')
-    } finally { setParsing(false) }
+    } finally {
+      setParsing(false)
+      segJobsRef.current = []; segTextRef.current = []; segErrRef.current = ''; segSeqRef.current = 0
+    }
   }
 
+  // m:ss — minutes are not zero-padded because a task is rarely dictated for ten.
+  const recClock = `${Math.floor(recSecs / 60)}:${String(recSecs % 60).padStart(2, '0')}`
+
   const toggleMic = async () => {
-    // Tapping while recording = Stop → onstop transcribes the captured clip.
+    // Tapping while recording = Stop → the open segment closes and its onstop
+    // calls finishRecording() once every upload has landed.
     if (listening) {
       setListening(false)
-      try { mrRef.current?.stop() } catch {}
+      listeningRef.current = false
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
+      if (segTimerRef.current) { clearTimeout(segTimerRef.current); segTimerRef.current = null }
+      try { mrRef.current?.stop() } catch { finishRecording() }
       return
     }
     if (!canRecord) { toast.error('Voice input needs microphone access on this device.'); return }
@@ -1189,21 +1274,14 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
     catch { toast.error('Microphone access is blocked. Allow mic permission for this app and try again.'); return }
     streamRef.current = stream
-    chunksRef.current = []
-    let mr: MediaRecorder
-    try { mr = new MediaRecorder(stream, { mimeType: 'audio/webm' }) } catch { mr = new MediaRecorder(stream) }
-    mrRef.current = mr
-    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
-    mr.onstop = () => {
-      try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
-      streamRef.current = null
-      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' })
-      chunksRef.current = []
-      if (blob.size) transcribeAndApply(blob)
-    }
+    segSeqRef.current = 0; segTextRef.current = []; segJobsRef.current = []; segErrRef.current = ''
     setHeard('')
-    try { mr.start() } catch { setListening(false); releaseMic(); return }
     setListening(true)
+    listeningRef.current = true
+    setRecSecs(0)
+    if (recTimerRef.current) clearInterval(recTimerRef.current)
+    recTimerRef.current = window.setInterval(() => setRecSecs((n) => n + 1), 1000)
+    startSegment(stream)
   }
 
   return (
@@ -1215,7 +1293,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           <div>
             <label>
               Title
-              {listening && <span style={{ color: '#b91c1c', fontWeight: 700, fontSize: 11 }}> ● recording…</span>}
+              {listening && <span style={{ color: '#b91c1c', fontWeight: 700, fontSize: 11 }}> ● recording {recClock}</span>}
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
             {canRecord && (
@@ -1230,7 +1308,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
                   {parsing
                     ? <><span className="spinner" /> Thinking…</>
                     : listening
-                      ? <><span className="mic-dot" /> Stop recording</>
+                      ? <><span className="mic-dot" /> Stop recording · {recClock}</>
                       : <><MicIcon size={18} /> Speak your task</>}
                 </button>
               </div>

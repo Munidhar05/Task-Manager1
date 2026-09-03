@@ -46,7 +46,21 @@ export default function Signup() {
     setBusy(true)
     try {
       await signup({ company: company.trim(), name: name.trim(), email: email.trim(), password, personal })
-      navigate('/', { replace: true })
+      // A company workspace of one is not a workspace. This is the single moment
+      // someone is most willing to bring their team in, so ask here rather than
+      // hoping they later find Administration. A solo workspace has nobody to
+      // invite, so it goes straight through.
+      // Company workspaces detour through the invite step.
+      //
+      // This leaves via a full location replace, not router navigate(). App.tsx
+      // renders /signup as `user ? <Navigate to="/"/> : <Signup/>`, and the
+      // instant signup() sets the user that <Navigate> mounts and fires its
+      // effect — landing on "/" a beat AFTER we already moved to /invite-team,
+      // which is exactly what the navigation trace showed. Reloading at the new
+      // URL sidesteps the race entirely instead of trying to out-order it; the
+      // token is already in localStorage, so the app comes back up signed in.
+      if (personal) navigate('/', { replace: true })
+      else window.location.replace('/invite-team?company=' + encodeURIComponent(company.trim()))
     } catch (e: any) {
       setErr(e.message); setShake(true); setTimeout(() => setShake(false), 500)
     } finally { setBusy(false) }

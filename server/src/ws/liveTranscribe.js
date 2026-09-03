@@ -21,7 +21,10 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { verifyToken } from '../auth.js'
 
-const SARVAM_WS = 'wss://api.sarvam.ai/speech-to-text/ws'
+// Overridable so the reconnect path can be exercised against a local socket that
+// drops on command — the real one only misbehaves after a long meeting, which is
+// not something a test can wait for.
+const SARVAM_WS = process.env.SARVAM_WS_URL || 'wss://api.sarvam.ai/speech-to-text/ws'
 
 function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
   // `noServer` + manual upgrade routing so multiple WS endpoints can share one
@@ -59,34 +62,118 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
     const upstreamUrl = `${SARVAM_WS}?language-code=${encodeURIComponent(language)}`
       + `&model=${encodeURIComponent(model)}&mode=transcribe`
       + `&sample_rate=16000&input_audio_codec=pcm_s16le`
-    const sarvam = new WebSocket(upstreamUrl, { headers: { 'Api-Subscription-Key': key } })
-
+    // --- Upstream lifecycle -------------------------------------------------
+    //
+    // Sarvam's streaming socket does not stay open for the length of a real
+    // meeting — it ends on its own, and the relay used to answer that by killing
+    // the browser's socket too. The recording then died silently: the mic kept
+    // running and the UI still said "recording", but every frame was dropped on
+    // a closed socket. That is the whole reason a long meeting could not be
+    // captured.
+    //
+    // So the upstream is now disposable. When it closes we open another one and
+    // carry on, buffering the audio that arrives in between so the words spoken
+    // during the gap are still sent. The browser's socket is never closed for an
+    // upstream problem — only when the client itself goes away.
+    let sarvam = null
     let sarvamReady = false
-    const pending = [] // audio frames that arrived before Sarvam's socket opened
+    let everOpened = false      // distinguishes "bad key" from "session ended"
+    let clientGone = false
+    let attempts = 0
+    let reconnectTimer = null
+
+    // Frames waiting for an upstream. PCM16 @16 kHz is ~32 KB/s, ~43 KB/s once
+    // base64'd, so this cap holds roughly a minute and a half of speech — far
+    // more than a reconnect needs, and bounded so a wedged upstream cannot grow
+    // it without limit for three hours.
+    const MAX_PENDING_BYTES = 4 * 1024 * 1024
+    const pending = []
+    let pendingBytes = 0
+    let droppedFrames = 0
+
+    const toClient = (obj) => { if (client.readyState === WebSocket.OPEN) { try { client.send(JSON.stringify(obj)) } catch {} } }
+
+    const flush = () => {
+      while (pending.length && sarvam && sarvam.readyState === WebSocket.OPEN) {
+        const f = pending.shift()
+        pendingBytes -= f.length
+        sarvam.send(f)
+      }
+      if (!pending.length) pendingBytes = 0
+    }
 
     const sendToSarvam = (b64) => {
       const frame = JSON.stringify({ audio: { data: b64, sample_rate: '16000', encoding: 'audio/wav' } })
-      if (sarvamReady && sarvam.readyState === WebSocket.OPEN) sarvam.send(frame)
-      else pending.push(frame)
+      if (sarvamReady && sarvam && sarvam.readyState === WebSocket.OPEN) { sarvam.send(frame); return }
+      pending.push(frame)
+      pendingBytes += frame.length
+      // Drop the OLDEST first: if we must lose audio, losing the start of the gap
+      // beats losing what is being said right now.
+      while (pendingBytes > MAX_PENDING_BYTES && pending.length) {
+        pendingBytes -= pending.shift().length
+        droppedFrames++
+      }
     }
-    const toClient = (obj) => { if (client.readyState === WebSocket.OPEN) { try { client.send(JSON.stringify(obj)) } catch {} } }
 
-    sarvam.on('open', () => {
-      sarvamReady = true
-      // Tell the client the upstream is live — the assistant uses this to start
-      // its turn clock only once audio can actually flow, so a slow Sarvam
-      // handshake doesn't eat into the user's speech window.
-      toClient({ ready: true })
-      while (pending.length && sarvam.readyState === WebSocket.OPEN) sarvam.send(pending.shift())
-    })
-    sarvam.on('message', (raw) => {
-      let msg
-      try { msg = JSON.parse(raw.toString()) } catch { return }
-      if (msg.type === 'data' && msg.data?.transcript) toClient({ transcript: msg.data.transcript })
-      else if (msg.type === 'error') toClient({ error: msg.data?.message || 'Sarvam error' })
-    })
-    sarvam.on('error', (err) => { toClient({ error: 'Sarvam connection error: ' + err.message }); try { client.close() } catch {} })
-    sarvam.on('close', () => { try { client.close() } catch {} })
+    const openUpstream = () => {
+      if (clientGone) return
+      sarvam = new WebSocket(upstreamUrl, { headers: { 'Api-Subscription-Key': key } })
+
+      sarvam.on('open', () => {
+        sarvamReady = true
+        attempts = 0
+        const first = !everOpened
+        everOpened = true
+        // `ready` only on the FIRST open. The voice assistant starts its turn
+        // clock on that message, and re-sending it mid-turn would restart the
+        // clock every time Sarvam recycled a socket.
+        if (first) toClient({ ready: true })
+        else toClient({ resumed: true, dropped: droppedFrames })
+        flush()
+      })
+
+      sarvam.on('message', (raw) => {
+        let msg
+        try { msg = JSON.parse(raw.toString()) } catch { return }
+        if (msg.type === 'data' && msg.data?.transcript) toClient({ transcript: msg.data.transcript })
+        else if (msg.type === 'error') toClient({ error: msg.data?.message || 'Sarvam error' })
+      })
+
+      // Errors are not handled here: ws always follows an 'error' with a 'close',
+      // and having one path decide what happens next avoids reconnecting twice.
+      sarvam.on('error', () => {})
+
+      sarvam.on('close', () => {
+        sarvamReady = false
+        if (clientGone) return
+        if (!everOpened) {
+          // Never connected once — a bad key or a wrong URL. Retrying that
+          // forever would just hide the misconfiguration.
+          toClient({ error: 'Could not reach Sarvam. Check SARVAM_API_KEY.' })
+          try { client.close() } catch {}
+          return
+        }
+        const delay = Math.min(5000, 250 * 2 ** attempts++)
+        toClient({ reconnecting: true })
+        reconnectTimer = setTimeout(openUpstream, delay)
+      })
+    }
+
+    openUpstream()
+
+    // Both sockets get pings. An idle stretch — a pause in the room — must not
+    // be mistaken for a dead peer and closed by an intermediary.
+    const keepAlive = setInterval(() => {
+      if (sarvam && sarvam.readyState === WebSocket.OPEN) { try { sarvam.ping() } catch {} }
+      if (client.readyState === WebSocket.OPEN) { try { client.ping() } catch {} }
+    }, 20000)
+
+    const teardown = () => {
+      clientGone = true
+      clearInterval(keepAlive)
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      try { sarvam && sarvam.close() } catch {}
+    }
 
     // --- Client -> Sarvam relay ---
     client.on('message', (raw) => {
@@ -94,8 +181,8 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
       const data = raw.toString()
       if (data) sendToSarvam(data)
     })
-    client.on('close', () => { try { sarvam.close() } catch {} })
-    client.on('error', () => { try { sarvam.close() } catch {} })
+    client.on('close', teardown)
+    client.on('error', teardown)
   })
 
   return wss
