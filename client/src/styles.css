@@ -1025,6 +1025,30 @@ tbody tr:hover { background: var(--n-50); }
   .inv-row input { flex: 1 1 100%; }
 }
 
+/* Who-can-join policy: two radio cards. The whole card is the hit target, and
+   the selected one takes the brand tint so the current answer is readable at a
+   glance rather than from a 13px dot. */
+.dom-opt { display: flex; align-items: flex-start; gap: 11px; padding: 13px 15px; margin: 0;
+  border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer; transition: border-color .15s, background .15s; }
+.dom-opt:hover { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+.dom-opt.on { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 7%, transparent); }
+.dom-opt input { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; accent-color: var(--primary); }
+.dom-opt b { display: block; font-size: 14px; font-weight: 700; }
+.dom-hint { display: block; font-size: 12.5px; line-height: 1.5; color: var(--muted); margin-top: 3px; }
+.dom-detail { padding: 12px 15px; border: 1px dashed var(--n-300); border-radius: var(--r-md); background: var(--n-50); }
+
+/* Sidebar "Invite people" — a button that has to sit convincingly among the
+   NavLinks, so it inherits their metrics and only differs in the accent it
+   carries on hover (it opens a dialog rather than navigating). */
+.nav-invite {
+  display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+  padding: 9px 12px; margin-top: 2px; border: none; border-radius: var(--r-md);
+  background: transparent; color: var(--sidebar-muted);
+  font: inherit; font-size: 14px; font-weight: 600; transition: background .15s, color .15s;
+}
+.nav-invite:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }
+.nav-invite .nav-icon { display: inline-flex; flex-shrink: 0; }
+
 /* Allowed-domains manager (Admin) */
 .domain-chips { display: flex; flex-wrap: wrap; gap: 8px; min-height: 22px; align-items: center; }
 .domain-chip { display: inline-flex; align-items: center; gap: 6px; background: color-mix(in srgb, var(--primary) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); color: var(--primary); border-radius: 999px; padding: 5px 6px 5px 12px; font-size: 13px; font-weight: 600; }

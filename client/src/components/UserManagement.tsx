@@ -133,7 +133,7 @@ export default function UserManagement() {
 
 // Invite a teammate by email. Shows the resulting accept-link so the manager can
 // copy/share it directly — essential when SMTP isn't configured (preview mode).
-function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
+export function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState<any>({ email: '', role: 'employee', department_id: '' })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')

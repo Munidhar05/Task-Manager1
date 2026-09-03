@@ -13,6 +13,7 @@ import FeedbackButton from './components/FeedbackButton'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
+import QuickInvite from './components/QuickInvite'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import AcceptInvite from './pages/AcceptInvite'
@@ -97,6 +98,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   const [profileSection, setProfileSection] = useState<SectionId | undefined>(undefined)
   const openProfileAt = (id: SectionId) => { setProfileSection(id); setShowProfile(true); setOpen(false) }
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showInvite, setShowInvite] = useState(false)
   const loc = useLocation()
   // No explicit in-app back button: Android handles "back" via the hardware
   // button / swipe gesture (see useAndroidBackButton), and browsers have their own.
@@ -151,6 +153,25 @@ function Layout({ children }: { children: React.ReactNode }) {
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
             </NavLink>
           ))}
+
+          {/* Invite lives here, not in NAV: NAV also feeds the mobile bottom bar
+              via slice(), so a new row there would silently push an existing tab
+              out of the thumb zone. Managers only — POST /invites refuses
+              employees, and a button that always fails is worse than no button. */}
+          {user.role !== 'employee' && !user.workspace_personal && (
+            <button
+              type="button"
+              className="nav-invite"
+              onClick={(e) => { e.stopPropagation(); setOpen(false); setShowInvite(true) }}
+              title="Invite someone to this workspace"
+            >
+              <span className="nav-icon">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M19 8v6M22 11h-6" />
+                </svg>
+              </span>Invite people
+            </button>
+          )}
 
           {/* Settings live under the nav rather than only behind the avatar: the
               rail had the room, and "where do I change my password" is a question
@@ -300,6 +321,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       {/* Corner feedback tab — hidden while the modal is open so it isn't behind it. */}
       {!showFeedback && <FeedbackButton onClick={() => setShowFeedback(true)} />}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
+      {showInvite && <QuickInvite onClose={() => setShowInvite(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />
     </div>
