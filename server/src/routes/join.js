@@ -15,12 +15,14 @@
 //     there); here the person typed it, so nothing is proven.
 //   - The org's allowed-domains rule still applies. A new door must not bypass a
 //     lock the org already chose to fit.
+//
+// Nothing here sends mail. An approved person is simply able to sign in with the
+// password they already chose, so the manager tells them however they like.
 import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired, requireRole, hashPassword } from '../auth.js'
 import { publicUser } from './auth.js'
 import { id, now, appUrl, audit, emailDomainAllowed, orgAllowedDomains, isCommonPassword, notifyManagers } from '../util.js'
-import { sendMail } from '../mailer.js'
 
 const r = Router()
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -176,13 +178,6 @@ r.post('/requests/:id/approve', requireRole('manager', 'admin'), async (req, res
   })
   const user = approve()
   audit(req.user.org_id, req.user.id, 'join.approve', 'user', user.id, jr.email)
-  try {
-    await sendMail({
-      to: jr.email,
-      subject: `You're in — ${org.name}`,
-      text: `${req.user.name} approved your request to join ${org.name}.\n\nSign in at ${appUrl()}/login with the password you chose.`,
-    })
-  } catch (err) { console.warn('[join] approval email failed:', err.message) }
   res.status(201).json({ user: publicUser(user) })
 })
 

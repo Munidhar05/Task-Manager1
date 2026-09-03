@@ -63,7 +63,8 @@ export default function JoinWorkspace() {
           <h1>Request sent</h1>
           <p className="muted" style={{ marginTop: 10, fontSize: 14, lineHeight: 1.6 }}>
             A manager at <b>{org.org_name}</b> needs to approve you before your account is created.
-            You'll get an email when they do — then sign in with the password you just chose.
+            Once they do, sign in with the email and password you just chose — no confirmation
+            email is sent, so check back or ask them directly.
           </p>
           <Link to="/login" className="btn login-btn" style={{ marginTop: 18 }}>Back to sign in</Link>
         </div>

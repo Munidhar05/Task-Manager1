@@ -1025,6 +1025,12 @@ tbody tr:hover { background: var(--n-50); }
   .inv-row input { flex: 1 1 100%; }
 }
 
+/* Invite-created confirmation. Brand tint, not the amber "something went wrong"
+   panel it replaced — nothing failed, the link is simply the deliverable. */
+.inv-ready { font-size: 13.5px; line-height: 1.5; padding: 12px 14px; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent); color: var(--text); }
+
 /* Who-can-join policy: two radio cards. The whole card is the hit target, and
    the selected one takes the brand tint so the current answer is readable at a
    glance rather than from a 13px dot. */
