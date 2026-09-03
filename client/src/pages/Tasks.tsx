@@ -1116,6 +1116,10 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
   const mrRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const listeningRef = useRef(false)          // read inside MediaRecorder callbacks
+  // Elapsed recording time. Tied to `listening`, not to the segment loop, so it
+  // counts the whole take rather than restarting every 20s when a segment rolls.
+  const [recSecs, setRecSecs] = useState(0)
+  const recTimerRef = useRef<number | null>(null)
   const segTimerRef = useRef<number | null>(null)
   const segSeqRef = useRef(0)                 // spoken order of each segment
   const segTextRef = useRef<string[]>([])     // transcript per segment, by seq
@@ -1135,7 +1139,10 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
     streamRef.current = null
   }
-  useEffect(() => releaseMic, []) // release on unmount (close)
+  useEffect(() => () => {
+    releaseMic()
+    if (recTimerRef.current) clearInterval(recTimerRef.current)
+  }, []) // release the mic and the ticker on unmount (close)
 
   // Merge the AI-extracted fields into the form. Assignee applies only when not in
   // personal mode. The due date is NEVER left blank: spoken date wins, else it
@@ -1211,7 +1218,11 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
       if (listeningRef.current) startSegment(stream)   // still talking — next segment
       else finishRecording()
     }
-    try { mr.start() } catch { setListening(false); listeningRef.current = false; releaseMic(); return }
+    try { mr.start() } catch {
+      setListening(false); listeningRef.current = false
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
+      releaseMic(); return
+    }
     segTimerRef.current = window.setTimeout(() => {
       if (mrRef.current === mr && mr.state !== 'inactive') { try { mr.stop() } catch {} }
     }, SEGMENT_MS)
@@ -1244,12 +1255,16 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     }
   }
 
+  // m:ss — minutes are not zero-padded because a task is rarely dictated for ten.
+  const recClock = `${Math.floor(recSecs / 60)}:${String(recSecs % 60).padStart(2, '0')}`
+
   const toggleMic = async () => {
     // Tapping while recording = Stop → the open segment closes and its onstop
     // calls finishRecording() once every upload has landed.
     if (listening) {
       setListening(false)
       listeningRef.current = false
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
       if (segTimerRef.current) { clearTimeout(segTimerRef.current); segTimerRef.current = null }
       try { mrRef.current?.stop() } catch { finishRecording() }
       return
@@ -1263,6 +1278,9 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     setHeard('')
     setListening(true)
     listeningRef.current = true
+    setRecSecs(0)
+    if (recTimerRef.current) clearInterval(recTimerRef.current)
+    recTimerRef.current = window.setInterval(() => setRecSecs((n) => n + 1), 1000)
     startSegment(stream)
   }
 
@@ -1275,7 +1293,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           <div>
             <label>
               Title
-              {listening && <span style={{ color: '#b91c1c', fontWeight: 700, fontSize: 11 }}> ● recording…</span>}
+              {listening && <span style={{ color: '#b91c1c', fontWeight: 700, fontSize: 11 }}> ● recording {recClock}</span>}
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
             {canRecord && (
@@ -1290,7 +1308,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
                   {parsing
                     ? <><span className="spinner" /> Thinking…</>
                     : listening
-                      ? <><span className="mic-dot" /> Stop recording</>
+                      ? <><span className="mic-dot" /> Stop recording · {recClock}</>
                       : <><MicIcon size={18} /> Speak your task</>}
                 </button>
               </div>
