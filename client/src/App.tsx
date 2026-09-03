@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
 import { confirmLogout } from './lib/confirm'
 import { runBackHandlers } from './back'
-import { api, userAvatarUrl } from './api'
+import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
@@ -30,6 +30,8 @@ import Admin from './pages/Admin'
 import Platform from './pages/Platform'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import Landing from './pages/Landing'
+import JoinWorkspace from './pages/JoinWorkspace'
+import InviteTeam from './pages/InviteTeam'
 
 // Clean line-style sidebar icons (inherit currentColor, so they turn white when active).
 const Icon = ({ children }: { children: React.ReactNode }) => (
@@ -382,6 +384,21 @@ function HomeRoute() {
   return <Protected><Home /></Protected>
 }
 
+// The step shown straight after creating a company workspace.
+//
+// Gated on the TOKEN rather than the resolved user, because two separate races
+// otherwise bounce it to /login and from there to "/": a cold load starts with
+// user=null while /auth/me is still in flight, and arriving from signup can
+// render once with the new location before the new user has propagated. The
+// token is written synchronously by signup() and login(), so it is true the
+// instant either succeeds and needs no React state to have settled.
+function InviteTeamRoute() {
+  const { loading } = useAuth()
+  if (loading) return <RouteSpinner />
+  if (!getToken()) return <Navigate to="/login" replace />
+  return <InviteTeam />
+}
+
 // The same page under its own stable URL, so the login/signup screens (and any
 // link someone shares) have something to point back at.
 function WelcomeRoute() {
@@ -427,6 +444,10 @@ export default function App() {
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/welcome" element={<WelcomeRoute />} />
+      <Route path="/join/:code" element={<JoinWorkspace />} />
+      {/* Signed IN, but outside Layout: the step right after signup should be a
+          focused screen, not the app chrome with an empty dashboard behind it. */}
+      <Route path="/invite-team" element={<InviteTeamRoute />} />
       <Route path="/" element={<HomeRoute />} />
       <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />

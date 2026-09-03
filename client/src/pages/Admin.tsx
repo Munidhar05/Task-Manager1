@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 import { Stat, Badge } from '../ui'
 import UserManagement from '../components/UserManagement'
+import JoinLink from '../components/JoinLink'
 import FeedbackReviews from '../components/FeedbackReviews'
 import { toast } from '../lib/toast'
 import { useSurface } from '../voice/uiRegistry'
@@ -95,7 +96,7 @@ export default function Admin() {
         {usageAllowed && <button className={'btn btn-sm' + (tab === 'usage' ? ' btn-primary' : '')} data-va="admin.tab.usage" onClick={() => setTab('usage')}>AI Usage</button>}
       </div>
       {tab === 'overview' && <Overview />}
-      {tab === 'users' && <><AllowedDomains /><UserManagement /></>}
+      {tab === 'users' && <><AllowedDomains /><JoinLink /><UserManagement /></>}
       {tab === 'audit' && <Audit />}
       {tab === 'feedback' && <Feedback />}
       {tab === 'usage' && usageAllowed && <UsagePanel data={usage} />}
