@@ -466,6 +466,7 @@ export default function App() {
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/welcome" element={<WelcomeRoute />} />
+      <Route path="/join" element={<JoinWorkspace />} />
       <Route path="/join/:code" element={<JoinWorkspace />} />
       {/* Signed IN, but outside Layout: the step right after signup should be a
           focused screen, not the app chrome with an empty dashboard behind it. */}

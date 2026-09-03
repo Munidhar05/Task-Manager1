@@ -160,6 +160,7 @@ export default function Login() {
           <div className="auth-links">
             <Link to="/forgot-password">Forgot password?</Link>
             <span>New to VoTask? <Link to="/signup">Create your workspace</Link></span>
+            <span>Given a workspace code? <Link to="/join">Join with it</Link></span>
             <Link to="/welcome" className="auth-what">What is VoTask?</Link>
           </div>
         </form>

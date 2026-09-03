@@ -1025,6 +1025,15 @@ tbody tr:hover { background: var(--n-50); }
   .inv-row input { flex: 1 1 100%; }
 }
 
+/* The workspace-code field. Monospace and widely tracked because the string is
+   read aloud and typed by hand — every character has to be individually legible,
+   and uppercase matches how the code is displayed to the manager. */
+.join-code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 22px; font-weight: 700; letter-spacing: .22em; text-align: center;
+  text-transform: uppercase; padding: 12px 14px;
+}
+
 /* Invite-created confirmation. Brand tint, not the amber "something went wrong"
    panel it replaced — nothing failed, the link is simply the deliverable. */
 .inv-ready { font-size: 13.5px; line-height: 1.5; padding: 12px 14px; border-radius: var(--r-sm);
@@ -1042,6 +1051,11 @@ tbody tr:hover { background: var(--n-50); }
 .dom-opt b { display: block; font-size: 14px; font-weight: 700; }
 .dom-hint { display: block; font-size: 12.5px; line-height: 1.5; color: var(--muted); margin-top: 3px; }
 .dom-detail { padding: 12px 15px; border: 1px dashed var(--n-300); border-radius: var(--r-md); background: var(--n-50); }
+
+/* Landing: the third way in, kept quiet so it never competes with the two CTAs. */
+.lp-codeline { margin-top: 18px; font-size: 14.5px; color: var(--lp-ink-2); }
+.lp-codeline a { color: var(--lp-orange-ink); font-weight: 700; text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--lp-orange) 40%, transparent); }
+.lp-codeline a:hover { border-bottom-color: var(--lp-orange); }
 
 /* Sidebar "Invite people" — a button that has to sit convincingly among the
    NavLinks, so it inherits their metrics and only differs in the accent it

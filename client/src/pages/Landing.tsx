@@ -216,6 +216,9 @@ export default function Landing() {
                 <Link to="/signup" className="lp-btn lp-btn-primary lp-btn-lg">Create your workspace</Link>
                 <Link to="/login" className="lp-btn lp-btn-outline lp-btn-lg">I already have an account</Link>
               </div>
+              <p className="lp-codeline">
+                Been given a workspace code? <Link to="/join">Join with it</Link>
+              </p>
               <ul className="lp-points">
                 {HERO_POINTS.map((p) => (
                   <li key={p.text}><span className="lp-point-ic">{p.icon}</span>{p.text}</li>
