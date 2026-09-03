@@ -214,6 +214,25 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_devtok_user ON device_tokens(user_id);
 
+  -- Requests to join an org via its shareable link / org code. Deliberately NOT
+  -- rows in the users table: a pending person must be invisible to every existing
+  -- query (dashboards, assignee pickers, chat, leaderboard, RAG retrieval), and a
+  -- users.status column would have meant auditing every one of them to add a
+  -- filter. Nothing here becomes a user until a manager approves, at which point
+  -- the row is replayed into users with the password they already chose.
+  CREATE TABLE IF NOT EXISTS join_requests (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | denied
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT,
+    FOREIGN KEY (org_id) REFERENCES organizations(id)
+  );
+
   CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -413,6 +432,10 @@ export function initSchema() {
     FOREIGN KEY (org_id) REFERENCES organizations(id)
   );
   CREATE INDEX IF NOT EXISTS idx_invites_org ON invites(org_id, status);
+  CREATE INDEX IF NOT EXISTS idx_join_requests_org ON join_requests(org_id, status);
+  -- One live request per person per org; a denied or approved one may be retried.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_join_requests_pending
+    ON join_requests(org_id, email) WHERE status = 'pending';
 
   -- Single-use, expiring tokens for "forgot password".
   CREATE TABLE IF NOT EXISTS password_resets (
@@ -516,6 +539,17 @@ export function initSchema() {
   // month default. Set/cleared by managers via PUT /api/scores/range.
   ensureColumn('organizations', 'leaderboard_from', 'TEXT')
   ensureColumn('organizations', 'leaderboard_to', 'TEXT')
+
+  // Shareable join link / org code. Off by default: switching it on is a
+  // deliberate act, because it opens a second door into an org that until now
+  // could only be entered by per-person invite.
+  ensureColumn('organizations', 'join_code', 'TEXT')
+  ensureColumn('organizations', 'join_enabled', 'INTEGER DEFAULT 0')
+  ensureColumn('organizations', 'join_role', "TEXT DEFAULT 'employee'")
+  ensureColumn('organizations', 'join_expires_at', 'TEXT')
+  // Created AFTER the ensureColumn calls above, or a database predating those
+  // columns fails to boot on this line.
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_org_join_code ON organizations(join_code) WHERE join_code IS NOT NULL;")
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
   // Feedback prompt tags — the chips picked under "What do you like most?" (4-5★)
   // or "What could we improve?" (1-3★). A JSON array of labels, NULL when none

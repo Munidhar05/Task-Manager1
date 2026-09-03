@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
 import { confirmLogout } from './lib/confirm'
 import { runBackHandlers } from './back'
-import { api, userAvatarUrl } from './api'
+import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
@@ -13,6 +13,7 @@ import FeedbackButton from './components/FeedbackButton'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
+import QuickInvite from './components/QuickInvite'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import AcceptInvite from './pages/AcceptInvite'
@@ -30,6 +31,8 @@ import Admin from './pages/Admin'
 import Platform from './pages/Platform'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import Landing from './pages/Landing'
+import JoinWorkspace from './pages/JoinWorkspace'
+import InviteTeam from './pages/InviteTeam'
 
 // Clean line-style sidebar icons (inherit currentColor, so they turn white when active).
 const Icon = ({ children }: { children: React.ReactNode }) => (
@@ -95,6 +98,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   const [profileSection, setProfileSection] = useState<SectionId | undefined>(undefined)
   const openProfileAt = (id: SectionId) => { setProfileSection(id); setShowProfile(true); setOpen(false) }
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showInvite, setShowInvite] = useState(false)
   const loc = useLocation()
   // No explicit in-app back button: Android handles "back" via the hardware
   // button / swipe gesture (see useAndroidBackButton), and browsers have their own.
@@ -149,6 +153,25 @@ function Layout({ children }: { children: React.ReactNode }) {
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
             </NavLink>
           ))}
+
+          {/* Invite lives here, not in NAV: NAV also feeds the mobile bottom bar
+              via slice(), so a new row there would silently push an existing tab
+              out of the thumb zone. Managers only — POST /invites refuses
+              employees, and a button that always fails is worse than no button. */}
+          {user.role !== 'employee' && !user.workspace_personal && (
+            <button
+              type="button"
+              className="nav-invite"
+              onClick={(e) => { e.stopPropagation(); setOpen(false); setShowInvite(true) }}
+              title="Invite someone to this workspace"
+            >
+              <span className="nav-icon">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M19 8v6M22 11h-6" />
+                </svg>
+              </span>Invite people
+            </button>
+          )}
 
           {/* Settings live under the nav rather than only behind the avatar: the
               rail had the room, and "where do I change my password" is a question
@@ -298,6 +321,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       {/* Corner feedback tab — hidden while the modal is open so it isn't behind it. */}
       {!showFeedback && <FeedbackButton onClick={() => setShowFeedback(true)} />}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
+      {showInvite && <QuickInvite onClose={() => setShowInvite(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />
     </div>
@@ -382,6 +406,21 @@ function HomeRoute() {
   return <Protected><Home /></Protected>
 }
 
+// The step shown straight after creating a company workspace.
+//
+// Gated on the TOKEN rather than the resolved user, because two separate races
+// otherwise bounce it to /login and from there to "/": a cold load starts with
+// user=null while /auth/me is still in flight, and arriving from signup can
+// render once with the new location before the new user has propagated. The
+// token is written synchronously by signup() and login(), so it is true the
+// instant either succeeds and needs no React state to have settled.
+function InviteTeamRoute() {
+  const { loading } = useAuth()
+  if (loading) return <RouteSpinner />
+  if (!getToken()) return <Navigate to="/login" replace />
+  return <InviteTeam />
+}
+
 // The same page under its own stable URL, so the login/signup screens (and any
 // link someone shares) have something to point back at.
 function WelcomeRoute() {
@@ -427,6 +466,10 @@ export default function App() {
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/welcome" element={<WelcomeRoute />} />
+      <Route path="/join/:code" element={<JoinWorkspace />} />
+      {/* Signed IN, but outside Layout: the step right after signup should be a
+          focused screen, not the app chrome with an empty dashboard behind it. */}
+      <Route path="/invite-team" element={<InviteTeamRoute />} />
       <Route path="/" element={<HomeRoute />} />
       <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />

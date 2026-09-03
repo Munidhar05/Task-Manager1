@@ -3,11 +3,15 @@ import { db } from '../db.js'
 import { authRequired, requireRole, signToken, hashPassword } from '../auth.js'
 import { publicUser } from './auth.js'
 import { id, now, genToken, appUrl, inDays, audit, emailDomainAllowed, orgAllowedDomains, isCommonPassword } from '../util.js'
-import { sendMail } from '../mailer.js'
 
 const r = Router()
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const INVITE_TTL_DAYS = 7
+
+// Invites are LINK-ONLY. No mail is attempted: SMTP is not configured, and a
+// send that silently no-ops taught the UI to apologise for a failure that was
+// really just missing config. The link is the deliverable — the manager copies it
+// and sends it however they already talk to the person.
 
 // A pending, non-expired invite for this token — or null.
 function validInvite(token) {
@@ -15,16 +19,6 @@ function validInvite(token) {
   const inv = db.prepare('SELECT * FROM invites WHERE token = ?').get(token)
   if (!inv || inv.status !== 'pending' || inv.expires_at < now()) return null
   return inv
-}
-
-function inviteEmailHtml(inviterName, orgName, role, link) {
-  return `<div style="font-family:system-ui,sans-serif;max-width:480px;margin:auto">
-    <h2 style="color:#c2410c">You're invited to ${orgName}</h2>
-    <p>${inviterName} invited you to join <b>${orgName}</b> on SmartTask as a <b>${role}</b>.</p>
-    <p><a href="${link}" style="display:inline-block;background:#c2410c;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:600">Accept invitation</a></p>
-    <p style="color:#666;font-size:13px">Or paste this link into your browser:<br>${link}</p>
-    <p style="color:#999;font-size:12px">This invitation expires in ${INVITE_TTL_DAYS} days.</p>
-  </div>`
 }
 
 // ---------------------------------------------------------------------------
@@ -65,22 +59,9 @@ r.post('/', authRequired, requireRole('manager', 'admin'), async (req, res) => {
     invId, req.user.org_id, email, role, departmentId, token, req.user.id, 'pending', now(), null, inDays(INVITE_TTL_DAYS))
   audit(req.user.org_id, req.user.id, 'invite.create', 'invite', invId, email)
 
-  const org = db.prepare('SELECT name FROM organizations WHERE id = ?').get(req.user.org_id)
   const link = `${appUrl()}/accept-invite?token=${token}`
-  let emailed = false
-  try {
-    const sent = await sendMail({
-      to: email,
-      subject: `You're invited to ${org?.name || 'SmartTask'}`,
-      text: `${req.user.name} invited you to join ${org?.name || 'SmartTask'} as a ${role}.\n\nAccept and set your password:\n${link}\n\nThis link expires in ${INVITE_TTL_DAYS} days.`,
-      html: inviteEmailHtml(req.user.name, org?.name || 'SmartTask', role, link),
-    })
-    emailed = sent.sent
-  } catch (err) { console.warn('[invites] email failed:', err.message) }
 
-  // Always return the link so the manager can copy/share it manually — essential
-  // when SMTP isn't configured (preview mode) or the email is delayed.
-  res.status(201).json({ id: invId, email, role, department_id: departmentId, status: 'pending', link, emailed })
+  res.status(201).json({ id: invId, email, role, department_id: departmentId, status: 'pending', link })
 })
 
 // LIST pending invites for the org.

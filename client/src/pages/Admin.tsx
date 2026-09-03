@@ -1,52 +1,116 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useAuth } from '../auth'
 import { Stat, Badge } from '../ui'
 import UserManagement from '../components/UserManagement'
+import JoinLink from '../components/JoinLink'
 import FeedbackReviews from '../components/FeedbackReviews'
 import { toast } from '../lib/toast'
 import { useSurface } from '../voice/uiRegistry'
 import { flashPress, pause, findVaEl } from '../voice/uiController'
 
 // Manage which email domains may join this organization. Empty = any domain.
+// Who is allowed into this workspace.
+//
+// This was a bare list of domains with "leave empty to allow any" as the only
+// hint — so the real question (is this workspace open or closed?) was implied by
+// whether a box happened to be empty. Worse, signup silently seeds the list with
+// the founder's own email domain, so a workspace arrives locked to a domain
+// nobody chose and the first invite fails with a message about a rule the
+// manager never set.
+//
+// It is now the either/or it always was, stated outright, with the domain list
+// as detail of the closed option rather than the whole interface.
 function AllowedDomains() {
+  const { user } = useAuth()
   const [domains, setDomains] = useState<string[]>([])
+  const [mode, setMode] = useState<'any' | 'restricted'>('any')
   const [input, setInput] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
+
   useEffect(() => {
-    api.get('/users/meta/org').then((d) => { setDomains(d.allowed_domains || []); setLoaded(true) }).catch(() => setLoaded(true))
+    api.get('/users/meta/org').then((d) => {
+      const list = d.allowed_domains || []
+      setDomains(list)
+      setMode(list.length ? 'restricted' : 'any')
+      setLoaded(true)
+    }).catch(() => setLoaded(true))
   }, [])
+
   const add = () => {
     const d = input.trim().toLowerCase().replace(/^@/, '')
     if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) { toast.error('Enter a valid domain, e.g. acme.com'); return }
     if (!domains.includes(d)) setDomains([...domains, d])
     setInput('')
   }
+
+  // Switching to "restricted" with nothing listed would save an empty list and
+  // silently mean the opposite, so seed it with the signed-in manager's own
+  // domain — the one they almost certainly mean.
+  const pick = (m: 'any' | 'restricted') => {
+    setMode(m)
+    if (m === 'restricted' && domains.length === 0) {
+      const own = (user?.email || '').split('@')[1]
+      if (own) setDomains([own.toLowerCase()])
+    }
+  }
+
   const save = async () => {
+    if (mode === 'restricted' && domains.length === 0) {
+      toast.error('Add at least one domain, or choose "Anyone".')
+      return
+    }
     setSaving(true)
     try {
-      const r = await api.patch('/users/meta/org', { allowed_domains: domains })
-      setDomains(r.allowed_domains || []); toast.success('Allowed domains saved.')
+      // "any" sends an empty list — that IS how the server stores no restriction.
+      const r = await api.patch('/users/meta/org', { allowed_domains: mode === 'any' ? [] : domains })
+      const list = r.allowed_domains || []
+      setDomains(list)
+      setMode(list.length ? 'restricted' : 'any')
+      toast.success(list.length ? `Only ${list.join(', ')} can join.` : 'Anyone can be invited now.')
     } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
   }
+
+  if (!loaded) return null
+
   return (
     <div className="card section">
-      <div className="card-head"><h3>Allowed email domains</h3></div>
-      <div className="card-pad" style={{ display: 'grid', gap: 12 }}>
-        <div className="muted" style={{ fontSize: 12.5 }}>
-          Only these domains can be invited or added to your organization (members still verify their email).
-          Leave empty to allow any domain.
-        </div>
-        <div className="domain-chips">
-          {loaded && domains.length === 0 && <span className="muted" style={{ fontSize: 13 }}>No restriction — any domain is allowed.</span>}
-          {domains.map((d) => (
-            <span key={d} className="domain-chip">{d}<button onClick={() => setDomains(domains.filter((x) => x !== d))} aria-label={`Remove ${d}`}>✕</button></span>
-          ))}
-        </div>
-        <div className="row" style={{ gap: 8 }}>
-          <input placeholder="acme.com" value={input} onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} style={{ maxWidth: 240 }} />
-          <button className="btn btn-sm" onClick={add}>+ Add domain</button>
+      <div className="card-head"><h3>Who can join this workspace</h3></div>
+      <div className="card-pad" style={{ display: 'grid', gap: 14 }}>
+        <label className={'dom-opt' + (mode === 'any' ? ' on' : '')}>
+          <input type="radio" name="domain-policy" checked={mode === 'any'} onChange={() => pick('any')} />
+          <span>
+            <b>Anyone you invite</b>
+            <span className="dom-hint">Any email address can be invited or use the join link. Best when your team uses personal addresses.</span>
+          </span>
+        </label>
+
+        <label className={'dom-opt' + (mode === 'restricted' ? ' on' : '')}>
+          <input type="radio" name="domain-policy" checked={mode === 'restricted'} onChange={() => pick('restricted')} />
+          <span>
+            <b>Only our own email domains</b>
+            <span className="dom-hint">Everyone else is refused, even with a valid invite or join code.</span>
+          </span>
+        </label>
+
+        {mode === 'restricted' && (
+          <div className="dom-detail">
+            <div className="domain-chips">
+              {domains.map((d) => (
+                <span key={d} className="domain-chip">{d}<button onClick={() => setDomains(domains.filter((x) => x !== d))} aria-label={`Remove ${d}`}>✕</button></span>
+              ))}
+              {domains.length === 0 && <span className="muted" style={{ fontSize: 13 }}>Add at least one domain below.</span>}
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 10 }}>
+              <input placeholder="acme.com" value={input} onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} style={{ maxWidth: 240 }} />
+              <button className="btn btn-sm" onClick={add}>+ Add domain</button>
+            </div>
+          </div>
+        )}
+
+        <div className="row">
           <button className="btn btn-primary btn-sm" onClick={save} disabled={saving} style={{ marginLeft: 'auto' }}>
             {saving ? <span className="spinner" /> : 'Save'}
           </button>
@@ -95,7 +159,7 @@ export default function Admin() {
         {usageAllowed && <button className={'btn btn-sm' + (tab === 'usage' ? ' btn-primary' : '')} data-va="admin.tab.usage" onClick={() => setTab('usage')}>AI Usage</button>}
       </div>
       {tab === 'overview' && <Overview />}
-      {tab === 'users' && <><AllowedDomains /><UserManagement /></>}
+      {tab === 'users' && <><AllowedDomains /><JoinLink /><UserManagement /></>}
       {tab === 'audit' && <Audit />}
       {tab === 'feedback' && <Feedback />}
       {tab === 'usage' && usageAllowed && <UsagePanel data={usage} />}
