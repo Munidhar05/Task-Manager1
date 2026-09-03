@@ -359,6 +359,9 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const [recording, setRecording] = useState(false)
   const [paused, setPaused] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
+  // Connection state for the live recorder, shown as a status line rather than
+  // an error — a reconnect during a long meeting is expected, not a failure.
+  const [liveNote, setLiveNote] = useState('')
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
   // Purely to explain the gap. Without it the transcript silently stops growing
@@ -373,6 +376,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const pcmRef = useRef<PcmStream | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const recordingRef = useRef(false)  // true only while actively capturing (false when paused)
+  const liveTriesRef = useRef(0)      // consecutive live-socket reconnect attempts (backoff)
+  const retryRef = useRef(0)
   const pausedRef = useRef(false)
   const speakerRef = useRef(speaker)
   useEffect(() => { speakerRef.current = speaker }, [speaker])
@@ -539,31 +544,65 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // streams transcripts back. Captions appear ~1-2s after each spoken phrase.
   const startSarvamStream = async () => {
     setErr('')
-    const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=${encodeURIComponent(lang)}`))
-    wsRef.current = ws
     recordingRef.current = true
     setRecording(true)
 
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data)
-        if (msg.transcript) { appendLine(msg.transcript); setInterim('') }
-        else if (msg.error) setErr(msg.error)
-      } catch {}
-    }
-    ws.onerror = () => setErr('Live transcription connection failed.')
-    ws.onclose = () => { setTranscribing(false) }
+    // The socket is disposable, the microphone is not.
+    //
+    // A three-hour meeting will lose its connection — Sarvam recycles the
+    // upstream session, wifi drops, a laptop sleeps. Previously any of those
+    // ended the recording silently: onclose only flipped a flag, while the mic
+    // kept running and every frame was thrown away against a closed socket.
+    //
+    // So the socket reconnects on its own and the PCM stream is started ONCE and
+    // reused. Frames read `wsRef.current` at send time rather than closing over
+    // one socket instance, so they follow the reconnection without the mic ever
+    // being touched (re-acquiring it would prompt for permission again and drop
+    // audio while the device spun up).
+    const connect = () => {
+      if (!recordingRef.current) return
+      const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=${encodeURIComponent(lang)}`))
+      wsRef.current = ws
 
-    ws.onopen = async () => {
-      setTranscribing(true)
-      pcmRef.current = await startPcmStream(
-        // Withhold the frames rather than the transcript: Sarvam never receives
-        // the audio of a command, so there is nothing to filter downstream and
-        // nothing billed for it either.
-        (b64) => { if (ws.readyState === WebSocket.OPEN && !agentHasMic()) ws.send(b64) },
-        (msg) => { setErr(msg); stop() },
-      )
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.transcript) { appendLine(msg.transcript); setInterim('') }
+          // The relay reports its own upstream recycling. That is routine on a
+          // long meeting, so it is a status line, never an error — audio carries
+          // on being buffered server-side throughout.
+          else if (msg.reconnecting) { setLiveNote('Reconnecting to the transcriber…'); setTranscribing(false) }
+          else if (msg.resumed || msg.ready) { setLiveNote(''); setTranscribing(true) }
+          else if (msg.error) setErr(msg.error)
+        } catch {}
+      }
+      ws.onerror = () => { /* onclose always follows; it owns the retry */ }
+      ws.onclose = () => {
+        setTranscribing(false)
+        if (!recordingRef.current) return          // user pressed stop — expected
+        retryRef.current = Math.min(5000, 500 * 2 ** liveTriesRef.current++)
+        setLiveNote('Connection lost — reconnecting…')
+        window.setTimeout(connect, retryRef.current)
+      }
+
+      ws.onopen = async () => {
+        liveTriesRef.current = 0
+        setTranscribing(true)
+        setLiveNote('')
+        if (pcmRef.current) return                 // mic already running, just re-attached
+        pcmRef.current = await startPcmStream(
+          // Withhold the frames rather than the transcript: Sarvam never receives
+          // the audio of a command, so there is nothing to filter downstream and
+          // nothing billed for it either.
+          (b64) => {
+            const sock = wsRef.current
+            if (sock && sock.readyState === WebSocket.OPEN && !agentHasMic()) sock.send(b64)
+          },
+          (msg) => { setErr(msg); stop() },
+        )
+      }
     }
+    connect()
   }
 
   // ---- BROWSER mode: Web Speech API, one language ----
@@ -621,7 +660,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     recordingRef.current = false   // halts capture loops / auto-restart
     pausedRef.current = true
     setPaused(true)
-    setTranscribing(false); setInterim('')
+    setTranscribing(false); setInterim(''); setLiveNote('')
     teardownEngines()
   }
   // Resume after an interruption: spin a fresh engine (old mic/ws may be dead).
@@ -634,11 +673,16 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   }
 
   const stop = () => {
+    // recordingRef goes false FIRST: the live socket's onclose reads it to decide
+    // whether a close was the user stopping or a drop worth reconnecting, and a
+    // stale true there would have it dial back in after the meeting ended.
     recordingRef.current = false
     pausedRef.current = false
+    liveTriesRef.current = 0
     setRecording(false)
     setPaused(false)
     setInterim('')
+    setLiveNote('')
     teardownEngines()
     keepScreenAwake(false)
   }
@@ -759,7 +803,12 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
               {recording
                 ? paused
                   ? <span style={{ color: 'var(--warning)', fontWeight: 700 }}>PAUSED {mmss}</span>
-                  : <span style={{ color: '#dc2626', fontWeight: 700 }}>● REC {mmss}{transcribing ? ' · transcribing…' : ''}</span>
+                  : <span style={{ color: '#dc2626', fontWeight: 700 }}>
+                      ● REC {mmss}
+                      {liveNote
+                        ? <span style={{ color: 'var(--warning-ink)', fontWeight: 600 }}> · {liveNote}</span>
+                        : (transcribing ? ' · transcribing…' : '')}
+                    </span>
                 : 'Ready'}
             </div>
           </div>
