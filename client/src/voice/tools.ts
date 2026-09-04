@@ -7,10 +7,13 @@
 //
 // The important rule, and the reason this file exists at all: a tool is a *workflow*,
 // not an API call. `create_task` does not POST /tasks — it opens the screen a person
-// would open, fills the fields a person would fill, and presses the button a person
-// would press. The user watches their own UI do the work, which is the entire product
-// claim. The write still happens through the same endpoint the form always used, so
-// permissions, notifications, category detection and audit logging are unchanged.
+// would open and fills the fields a person would fill. The user watches their own UI
+// do the work, which is the entire product claim. The write still happens through the
+// same endpoint the form always used, so permissions, notifications, category
+// detection and audit logging are unchanged.
+//
+// It stops short of the button on purpose: speech is the one input here that can be
+// confidently wrong, and a misheard name or date should cost a glance, not an undo.
 import { registerTools, type ToolDef, type ToolResult, type ToolContext } from './actionEngine'
 import { invoke, awaitSurface, getSurface } from './uiRegistry'
 import { pause } from './uiController'
@@ -107,16 +110,23 @@ export const TOOLS: ToolDef[] = [
       // the one fact the user most needs to hear to know it picked the right person.
       if (assigneeId && !assigneeName) assigneeName = (await form.read())?.assignee_name || null
 
-      // 4. Press Create, then point at the row that appeared.
-      const created = await form.submit()
-      if (!created?.id) return fail("The task didn't save — please check the form.")
-      await invoke('tasks', 'highlightTask', { id: created.id }).catch(() => {})
+      // 4. Stop. The form is filled; the person presses Create.
+      //
+      // Speech recognition is the one input in this app that can be confidently
+      // wrong — a misheard name assigns work to the wrong colleague, and a
+      // misheard date sets a deadline nobody agreed to. Submitting on the user's
+      // behalf turns every such mistake into something they have to notice and
+      // then undo, after it has already notified someone.
+      //
+      // So the agent does everything up to the button and hands over. Filling is
+      // still done by driving the real form, so what is approved is exactly what
+      // saves. Create is left focused, so Enter finishes it in one keystroke.
+      await form.handOver()
 
       return ok(
         assigneeName
-          ? `Done — I've assigned "${title}" to ${assigneeName}.`
-          : `Done — I've created "${title}".`,
-        { type: 'task', id: created.id },
+          ? `I've filled it in for ${assigneeName} — have a look, then press Create task.`
+          : `I've filled it in — have a look, then press Create task.`,
       )
     },
   },
