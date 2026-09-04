@@ -291,7 +291,11 @@ export function useVoiceAssistant() {
           loudFor = rms >= BARGE_THRESHOLD ? loudFor + dt : 0
           if (loudFor >= BARGE_MS && !bargedIn) {
             bargedIn = true
-            stopSpeaking()                          // cut the reply off mid-word
+            // Logged because the failure mode is the assistant hearing ITSELF: if
+            // this fires with no one talking, echo cancellation is not holding and
+            // BARGE_THRESHOLD needs raising.
+            console.warn(`[voice] barge-in: cut the reply off (rms ${rms.toFixed(3)} for ${Math.round(loudFor)}ms)`)
+            stopSpeaking()
           }
         },
       )

@@ -30,7 +30,8 @@ export interface LiveListenOptions {
   silenceMs?: number                  // local quiet needed to end the turn once a transcript exists
   hardSilenceMs?: number              // quiet that ends the turn even with no transcript
   minSpeechMs?: number                // require this much sound before silence can end it
-  speechThreshold?: number            // RMS counted as "speaking"
+  speechThreshold?: number            // RMS loud enough to START a turn
+  holdThreshold?: number              // ...and the lower bar that KEEPS it going
   noSpeechMs?: number                 // nobody spoke at all -> give up
   maxMs?: number                      // hard cap on a turn
   tailWaitMs?: number                 // after stop(): how long to wait for the final transcript
@@ -51,8 +52,8 @@ export function startLiveListen(opts: LiveListenOptions = {}): Promise<LiveListe
     // 1.5s is past a thinking pause but still feels prompt. The 3-minute cap is
     // now only a runaway guard — a mic that never stops must not stream forever —
     // rather than something a real utterance can reach.
-    silenceMs = 1500, hardSilenceMs = 3200, minSpeechMs = 350,
-    speechThreshold = 0.045, noSpeechMs = 8000, maxMs = 180000,
+    silenceMs = 2500, hardSilenceMs = 4500, minSpeechMs = 350,
+    speechThreshold = 0.045, holdThreshold = 0.018, noSpeechMs = 8000, maxMs = 180000,
     tailWaitMs = 1400, connectTimeoutMs = 3000,
   } = opts
 
@@ -109,7 +110,18 @@ export function startLiveListen(opts: LiveListenOptions = {}): Promise<LiveListe
             (rms) => {
               onLevel?.(Math.min(1, rms * 3))
               const now = Date.now()
+              // Hysteresis: it takes a clear 0.045 to decide someone STARTED
+              // talking, but only 0.018 to accept they are STILL talking.
+              //
+              // One threshold did both jobs, and that is what kept cutting people
+              // off. Ordinary speech dips under 0.045 constantly — between words,
+              // on soft consonants, mid-breath — so the "still talking" clock
+              // restarted inside a sentence and the turn ended while the speaker
+              // was plainly still going. A single low threshold is not the fix
+              // either: room noise would then hold the mic open forever. The gap
+              // between the two is the point.
               if (rms >= speechThreshold) { speechAccum += 85; lastLoudAt = now } // ~85ms per 4096-sample frame @48k
+              else if (speechAccum >= minSpeechMs && rms >= holdThreshold) lastLoudAt = now
             },
           )
         } catch {
@@ -130,16 +142,19 @@ export function startLiveListen(opts: LiveListenOptions = {}): Promise<LiveListe
             return
           }
           const quietFor = now - lastLoudAt
+          const why = (reason: string, bad = true) => (bad ? console.warn : console.debug)(
+            `[voice] turn ended: ${reason} | quiet ${quietFor}ms, speech ${speechAccum}ms, ` +
+            `segments ${segments.length}, elapsed ${now - startedAt}ms, sinceFrame ${now - lastFrameAt}ms`)
           // Turn complete: Sarvam gave us words and the speaker has stayed quiet.
-          if (segments.length && speechAccum >= minSpeechMs && quietFor >= silenceMs) return finalize(text())
+          if (segments.length && speechAccum >= minSpeechMs && quietFor >= silenceMs) { why(`silence ${silenceMs}ms with transcript`, false); return finalize(text()) }
           // Spoke, went quiet, but no transcript ever arrived — don't hang the loop.
-          if (speechAccum >= minSpeechMs && quietFor >= hardSilenceMs) return finalize(text())
+          if (speechAccum >= minSpeechMs && quietFor >= hardSilenceMs) { why(`hard silence ${hardSilenceMs}ms, NO transcript from Sarvam`); return finalize(text()) }
           // Nobody said anything at all.
-          if (speechAccum < minSpeechMs && now - startedAt >= noSpeechMs) return finalize(text())
+          if (speechAccum < minSpeechMs && now - startedAt >= noSpeechMs) { why(`no speech detected in ${noSpeechMs}ms — mic too quiet?`); return finalize(text()) }
           // Absolute cap: stop the mic, give the tail one last chance to arrive.
-          if (now - startedAt >= maxMs) { try { pcm?.stop() } catch {}; pcm = null; finalizeDeadline = now + tailWaitMs }
+          if (now - startedAt >= maxMs) { why(`hit the ${maxMs}ms cap`); try { pcm?.stop() } catch {}; pcm = null; finalizeDeadline = now + tailWaitMs }
           // The audio graph died silently (tab backgrounded on some devices).
-          if (now - lastFrameAt > 4000) return finalize(text())
+          if (now - lastFrameAt > 4000) { why('no audio frames for 4s — audio graph died'); return finalize(text()) }
         }, 100)
 
         resolveStart({
