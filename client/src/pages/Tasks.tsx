@@ -1103,6 +1103,18 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
       await flashPress(findField('submit'))
       return await save()
     },
+    // Fill, then stop. The agent uses this instead of submit() so the person
+    // reads what was heard before it becomes a real task assigned to a real
+    // colleague. Everything else about the workflow is unchanged — the fields
+    // are filled by driving the actual form, so what you approve is exactly what
+    // saves. Focusing Create (rather than only flashing it) means Enter finishes
+    // the job, so the fast path stays one keystroke.
+    handOver: async () => {
+      await pause(260)
+      await settle()
+      await flashPress(findField('submit'))
+      return { ...form, assignee_name: assignable.find((u) => u.id === form.assignee_id)?.name || null }
+    },
     cancel: () => onClose(),
   })
 
