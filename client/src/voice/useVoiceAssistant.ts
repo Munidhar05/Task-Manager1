@@ -25,6 +25,7 @@ import { api, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
 import { startRecording, canRecord } from './recorder'
 import { startLiveListen } from './liveStt'
+import { startPcmStream } from '../lib/pcmStream'
 import { speak, stopSpeaking, isTtsEnabled, setTtsEnabled } from './tts'
 import { runPlan, answerAndResume, type Outcome, type ToolContext } from './actionEngine'
 import { planFromServer, undoPlan } from './serverPlan'
@@ -33,6 +34,12 @@ import { setAgentTurn } from './agentTurn'
 // Side-effect import: registers every tool in the table. Without it the engine
 // knows no tools and every plan fails as "not able to do that yet".
 import './tools'
+
+// Barge-in sensitivity. The threshold sits above liveStt's 0.045 speech gate
+// because echo cancellation leaves a little of the assistant's own voice behind,
+// and 350ms of it rules out a cough, a door, or a single leaked syllable.
+const BARGE_THRESHOLD = 0.075
+const BARGE_MS = 350
 
 export type VoiceState = 'idle' | 'listening' | 'processing' | 'confirming' | 'speaking' | 'error'
 
@@ -256,9 +263,44 @@ export function useVoiceAssistant() {
   }
 
   // ---- speak + reflect state ----------------------------------------------
+  //
+  // Speaking listens too. Until now the mic was closed for the whole reply, so
+  // talking over the assistant did nothing — you had to wait it out or tap the
+  // orb. A conversation where only one side may interrupt is not a conversation.
+  //
+  // The monitor watches levels only; it never sends audio anywhere, so nothing is
+  // transcribed or billed. Two guards stop the assistant hearing ITSELF: the mic
+  // is opened with echoCancellation (pcmStream already does), and a barge-in
+  // needs sustained speech — BARGE_MS above a threshold well over the residue
+  // that survives cancellation — so a stray knock or the tail of its own
+  // sentence cannot trigger it.
   const say = async (text: string) => {
     setState('speaking')
-    await speak(text)
+    let monitor: { stop: () => void } | null = null
+    let bargedIn = false
+    try {
+      let loudFor = 0
+      let lastAt = performance.now()
+      monitor = await startPcmStream(
+        () => {},                                   // frames discarded — levels only
+        () => {},                                   // mic unavailable: just no barge-in
+        (rms) => {
+          const now = performance.now()
+          const dt = now - lastAt
+          lastAt = now
+          loudFor = rms >= BARGE_THRESHOLD ? loudFor + dt : 0
+          if (loudFor >= BARGE_MS && !bargedIn) {
+            bargedIn = true
+            stopSpeaking()                          // cut the reply off mid-word
+          }
+        },
+      )
+    } catch { /* no mic while speaking — falls back to the old uninterruptible reply */ }
+    try {
+      await speak(text)
+    } finally {
+      try { monitor?.stop() } catch {}
+    }
   }
 
   // The loop went quiet: a minimized (background) session just closes; a full

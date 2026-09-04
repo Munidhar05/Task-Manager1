@@ -43,8 +43,16 @@ export interface LiveListenOptions {
 export function startLiveListen(opts: LiveListenOptions = {}): Promise<LiveListen> {
   const {
     onPartial, onLevel,
-    silenceMs = 800, hardSilenceMs = 2600, minSpeechMs = 350,
-    speechThreshold = 0.045, noSpeechMs = 6000, maxMs = 15000,
+    // 800ms of quiet used to end the turn, which is shorter than an ordinary
+    // pause mid-sentence — "assign this to… Ravi" was enough to get cut off, and
+    // the 15s cap ended anything longer than a sentence outright. Both were tuned
+    // for terse commands; people talk to this thing in paragraphs.
+    //
+    // 1.5s is past a thinking pause but still feels prompt. The 3-minute cap is
+    // now only a runaway guard — a mic that never stops must not stream forever —
+    // rather than something a real utterance can reach.
+    silenceMs = 1500, hardSilenceMs = 3200, minSpeechMs = 350,
+    speechThreshold = 0.045, noSpeechMs = 8000, maxMs = 180000,
     tailWaitMs = 1400, connectTimeoutMs = 3000,
   } = opts
 
