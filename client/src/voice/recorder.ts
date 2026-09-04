@@ -19,7 +19,8 @@ export interface RecordOptions {
   silenceMs?: number                  // quiet time after speech that ends the turn
   maxMs?: number                      // hard cap on a single turn
   minSpeechMs?: number                // require this much sound before silence can end it
-  speechThreshold?: number            // RMS level (0..1) counted as "speaking"
+  speechThreshold?: number            // RMS loud enough to START a turn
+  holdThreshold?: number              // ...and the lower bar that KEEPS it going
   noSpeechMs?: number                 // if nobody speaks at all, give up this quickly
 }
 
@@ -29,7 +30,9 @@ export const canRecord = () =>
   typeof (window as any).MediaRecorder !== 'undefined'
 
 export async function startRecording(opts: RecordOptions = {}): Promise<Recording> {
-  const { onLevel, silenceMs = 1400, maxMs = 15000, minSpeechMs = 350, speechThreshold = 0.045, noSpeechMs = 6000 } = opts
+  // Matches liveStt: a turn ends on a real pause, not a mid-sentence one, and the
+  // cap is a runaway guard rather than a limit on how much you may say.
+  const { onLevel, silenceMs = 2500, maxMs = 180000, minSpeechMs = 350, speechThreshold = 0.045, holdThreshold = 0.018, noSpeechMs = 8000 } = opts
 
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
@@ -83,6 +86,9 @@ export async function startRecording(opts: RecordOptions = {}): Promise<Recordin
       onLevel?.(Math.min(1, rms * 3))
       const now = Date.now()
       if (rms >= speechThreshold) { speechAccum += 16; lastLoudAt = now }
+      // Same hysteresis as liveStt: a clear level to start, a lower one to
+      // stay open, so an ordinary pause inside a sentence does not end the turn.
+      else if (speechAccum >= minSpeechMs && rms >= holdThreshold) lastLoudAt = now
       // End the turn only after the speaker actually spoke, then fell silent.
       if (speechAccum >= minSpeechMs && now - lastLoudAt >= silenceMs) { finish(); return }
       // Nobody spoke at all within the grace window — give up so idle listening
