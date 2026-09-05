@@ -25,6 +25,8 @@ import usageRoutes from './routes/usage.js'
 import scoreRoutes from './routes/scores.js'
 import feedbackRoutes from './routes/feedback.js'
 import ttsRoutes from './routes/tts.js'
+import apiKeyRoutes from './routes/apiKeys.js'
+import mcpRoutes from './routes/mcp.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe, attachAssistantLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -87,6 +89,10 @@ app.use('/api/usage', usageRoutes)
 app.use('/api/scores', scoreRoutes)
 app.use('/api/feedback', feedbackRoutes)
 app.use('/api/tts', ttsRoutes)
+app.use('/api/keys', apiKeyRoutes)
+// Outside /api on purpose: MCP carries its own credential in the path and speaks
+// JSON-RPC, not REST, so none of the /api middleware applies to it.
+app.use('/mcp', mcpRoutes)
 
 // --- Serve the built web client (client/dist) from this SAME service ----------
 // So one URL hosts BOTH the website (for people without the Android app) AND the
