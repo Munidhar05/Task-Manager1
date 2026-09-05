@@ -516,6 +516,35 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_fbev_org ON feedback_events(org_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_fbev_user ON feedback_events(user_id);
+
+  -- Long-lived API keys: how something that is not a browser reaches this API.
+  -- A JWT comes from a password login and expires; an agent, a script or a CI job
+  -- has no password to type and no session to refresh, so it carries one of these.
+  --
+  -- A key IS a user: it inherits the role and org of whoever minted it and can do
+  -- no more than they can. That is the whole permission model — there are no key
+  -- scopes, because a half-understood scope system reads as a safety guarantee it
+  -- does not provide. Give a key to a tool you would give your own login to.
+  --
+  -- Only the SHA-256 of the token is stored. The plaintext is shown once, at
+  -- creation, and is unrecoverable afterwards; the prefix column exists so a key
+  -- can be recognized in a list without being able to reconstruct it.
+  CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,                   -- the key acts as this user
+    name TEXT NOT NULL,                      -- "Claude Code on my laptop"
+    prefix TEXT NOT NULL,                    -- first few chars, for identification
+    token_hash TEXT NOT NULL UNIQUE,         -- sha256(token), hex
+    last_used_at TEXT,
+    expires_at TEXT,                         -- null = no expiry
+    revoked_at TEXT,                         -- set instead of deleting, so the
+                                             -- audit trail keeps the whole story
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(token_hash);
+  CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id, revoked_at);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
@@ -574,6 +603,12 @@ export function initSchema() {
   // auto-detected from the task text. NULL = Uncategorized. See categories.js.
   ensureColumn('tasks', 'category', 'TEXT')
   ensureColumn('suggested_tasks', 'category', 'TEXT')
+  // What an API key is allowed to be: 'full' is a REST credential sent in an
+  // Authorization header; 'mcp' is a Claude connector key, which by necessity
+  // travels inside a URL and is therefore refused everywhere except /mcp. If a
+  // connector URL leaks out of a log, the finder gets the eight curated MCP
+  // tools rather than the whole API.
+  ensureColumn('api_keys', 'scope', "TEXT DEFAULT 'full'")
   // Reassignment trail. Changing assignee_id overwrites the previous owner in
   // place, so without these a reassigned task is indistinguishable from one that
   // was assigned directly, and the person it was taken from leaves no trace.

@@ -32,7 +32,7 @@ export const canRecord = () =>
 export async function startRecording(opts: RecordOptions = {}): Promise<Recording> {
   // Matches liveStt: a turn ends on a real pause, not a mid-sentence one, and the
   // cap is a runaway guard rather than a limit on how much you may say.
-  const { onLevel, silenceMs = 2500, maxMs = 180000, minSpeechMs = 350, speechThreshold = 0.045, holdThreshold = 0.018, noSpeechMs = 8000 } = opts
+  const { onLevel, silenceMs = 2000, maxMs = 1800000, minSpeechMs = 350, speechThreshold = 0.045, holdThreshold = 0.018, noSpeechMs = 8000 } = opts
 
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 

@@ -52,8 +52,14 @@ export function startLiveListen(opts: LiveListenOptions = {}): Promise<LiveListe
     // 1.5s is past a thinking pause but still feels prompt. The 3-minute cap is
     // now only a runaway guard — a mic that never stops must not stream forever —
     // rather than something a real utterance can reach.
-    silenceMs = 2500, hardSilenceMs = 4500, minSpeechMs = 350,
-    speechThreshold = 0.045, holdThreshold = 0.018, noSpeechMs = 8000, maxMs = 180000,
+    // 2s of real silence ends a turn — the number the product asks for. Every
+    // other limit here exists to catch a BROKEN session, never a long one:
+    //   noSpeechMs   nobody ever spoke
+    //   maxMs        30 minutes, a runaway-mic guard. A turn is expected to end
+    //                on silence; if this fires, something is wrong, so it must
+    //                sit far beyond any real utterance rather than trimming one.
+    silenceMs = 2000, hardSilenceMs = 4500, minSpeechMs = 350,
+    speechThreshold = 0.045, holdThreshold = 0.018, noSpeechMs = 8000, maxMs = 1800000,
     tailWaitMs = 1400, connectTimeoutMs = 3000,
   } = opts
 
