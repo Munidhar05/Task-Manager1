@@ -28,6 +28,8 @@ const r = Router()
 
 const PROTOCOL_VERSION = '2025-06-18'
 const SERVER_INFO = { name: 'votask', title: 'VoTask', version: '1.0.0' }
+// Mirrors the CHECK constraint on tasks.priority in db.js.
+const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
 
 // ---- JSON-RPC plumbing -----------------------------------------------------
 
@@ -132,6 +134,48 @@ const TOOLS = [
     run: async (call, args) => {
       await call(`/api/tasks/${encodeURIComponent(args.task_id)}/status`, 'POST', { status: args.status })
       return toolText(`Set ${args.task_id} to ${args.status}.`)
+    },
+  },
+  {
+    name: 'update_task',
+    title: 'Edit a task',
+    description: "Change an existing task's priority, owner, deadline, title, description or progress. Use this to re-prioritise (e.g. Critical to High) — creating a task is the only other place priority can be set. Status is NOT here: use set_task_status, so there is one way to move a task through its workflow.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'From list_tasks.' },
+        priority: { type: 'string', description: 'Critical | High | Medium | Low' },
+        assignee_id: { type: 'string', description: 'From list_people. Empty string unassigns. The new owner is notified, and so is the previous one.' },
+        due_date: { type: 'string', description: 'YYYY-MM-DD' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        progress: { type: 'number', description: '0-100' },
+      },
+      required: ['task_id'],
+    },
+    run: async (call, args) => {
+      // Priority is CHECK-constrained in SQLite, so a typo would surface as a 500
+      // rather than something the model can act on. Catch it here and say what is
+      // allowed — the model can then retry without a round trip through an error.
+      if (args.priority && !PRIORITIES.includes(args.priority)) {
+        return toolText(`"${args.priority}" is not a priority. Use one of: ${PRIORITIES.join(', ')}.`, true)
+      }
+      const body = {}
+      for (const f of ['priority', 'due_date', 'title', 'description']) if (args[f] != null && args[f] !== '') body[f] = args[f]
+      // Deliberately separate: '' is a real instruction here (unassign), where for
+      // the fields above it just means the caller left it blank.
+      if (args.assignee_id != null) body.assignee_id = args.assignee_id || null
+      if (args.progress != null) body.progress = Math.max(0, Math.min(100, Math.round(Number(args.progress))))
+      if (!Object.keys(body).length) return toolText('Nothing to change — name at least one field.', true)
+
+      const t = await call(`/api/tasks/${encodeURIComponent(args.task_id)}`, 'PATCH', body)
+      return toolJson({
+        updated: Object.keys(body),
+        task: {
+          id: t.id, title: t.title, status: t.status, priority: t.priority,
+          due_date: t.due_date, assignee: t.assignee?.name || t.assignee_name || null, progress: t.progress,
+        },
+      })
     },
   },
   {
