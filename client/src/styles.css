@@ -1914,6 +1914,12 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 /* Pushed to the foot of the menu and marked as the one destructive item, so it
    never reads as a seventh settings page. */
 .pf-nav-logout { margin-top: auto; color: #b91c1c; }
+/* Signed-in accounts, listed above Log out. The rule and the label separate
+   them from the settings sections above: these are not settings, they are a
+   different person's copy of the app. */
+.pf-nav-accounts { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; }
+.pf-nav-accounts-label { font-size: 10.5px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); padding: 4px 10px 2px; }
+
 .pf-nav-logout .pf-nav-label { color: #b91c1c; }
 .pf-nav-logout .pf-nav-ic { background: #fef2f2; color: #b91c1c; }
 .pf-nav-logout:hover { background: #fef2f2; }
