@@ -636,6 +636,9 @@ export function initSchema() {
   // connector URL leaks out of a log, the finder gets the eight curated MCP
   // tools rather than the whole API.
   ensureColumn('api_keys', 'scope', "TEXT DEFAULT 'full'")
+  // A comment that can be changed after the fact needs to say so, or the record
+  // of who agreed to what silently stops being a record.
+  ensureColumn('task_comments', 'edited_at', 'TEXT')
   // Reassignment trail. Changing assignee_id overwrites the previous owner in
   // place, so without these a reassigned task is indistinguishable from one that
   // was assigned directly, and the person it was taken from leaves no trace.

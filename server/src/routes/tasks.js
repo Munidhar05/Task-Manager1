@@ -698,6 +698,41 @@ r.delete('/:id/comments/latest-own', (req, res) => {
   res.json({ ok: true })
 })
 
+// EDIT a comment. Own comments only, and never anyone else's: a task's comment
+// thread is the record of who said what, and letting one person rewrite another's
+// words would quietly turn it into something else. `edited_at` is set so the
+// change is visible rather than silent.
+r.patch('/:id/comments/:cid', (req, res) => {
+  const body = String(req.body?.body || '').trim()
+  if (!body) return res.status(400).json({ error: 'body required' })
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const c = db.prepare('SELECT * FROM task_comments WHERE id=? AND task_id=?').get(req.params.cid, t.id)
+  if (!c) return res.status(404).json({ error: 'Not found' })
+  if (c.user_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own comments.' })
+  db.prepare('UPDATE task_comments SET body=?, edited_at=? WHERE id=?').run(body, now(), c.id)
+  audit(req.user.org_id, req.user.id, 'task.comment.edit', 'task', t.id)
+  res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+})
+
+// DELETE a comment by id. Own always; a manager or admin may remove anyone's,
+// which is the moderation lever — someone pasting the wrong customer's details
+// into a thread should not have to be around for it to come down.
+r.delete('/:id/comments/:cid', (req, res) => {
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const c = db.prepare('SELECT * FROM task_comments WHERE id=? AND task_id=?').get(req.params.cid, t.id)
+  if (!c) return res.status(404).json({ error: 'Not found' })
+  const isManager = req.user.role === 'manager' || req.user.role === 'admin'
+  if (c.user_id !== req.user.id && !isManager) {
+    return res.status(403).json({ error: 'You can only delete your own comments.' })
+  }
+  db.prepare('DELETE FROM task_comments WHERE id=?').run(c.id)
+  // The leaderboard counts comments live, so its point goes with it.
+  audit(req.user.org_id, req.user.id, 'task.comment.delete', 'task', t.id, c.user_id === req.user.id ? 'own' : `by ${c.user_id}`)
+  res.json({ ok: true })
+})
+
 // ATTACHMENTS — upload a reference image / PDF / video onto a task. One file per
 // request (the client loops for multiple). Anyone in the task's org may attach.
 const runAttachUpload = (req, res, next) => attachUpload.single('file')(req, res, (err) => {
