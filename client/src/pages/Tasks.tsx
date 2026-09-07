@@ -802,8 +802,11 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               <span className="filterbtn-dot">{Number(!!filters.priority) + Number(!!filters.status) + Number(!!filters.assignee)}</span>
             )}
           </button>
-          <button className="btn btn-sm row" style={{ gap: 6 }} title="Recently deleted tasks" onClick={() => setShowTrash(true)}>
-            <Ic name="trash" size={14} /> Deleted
+          {/* Sits at the far right of the toolbar, under the notification bell,
+              rather than among the filters: it is not a way of narrowing the list,
+              it is a different list. See .toolbar-trash. */}
+          <button className="btn btn-sm row toolbar-trash" style={{ gap: 6 }} title="Tasks deleted in the last 30 days" onClick={() => setShowTrash(true)}>
+            <Ic name="trash" size={14} /> Deleted Tasks
           </button>
           <button data-va="tasks.newTask" className="btn btn-primary btn-sm toolbar-newtask" onClick={() => setShowNew(true)}>+ New task</button>
         </div>

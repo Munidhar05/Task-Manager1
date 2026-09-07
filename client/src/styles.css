@@ -2114,6 +2114,10 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
    standard primary treatment (fill, weight, position) — not ambient motion. */
 .toolbar-newtask { order: 2; }
 .toolbar-view { order: 3; }
+/* Deleted Tasks is pushed to the far right so it lands under the notification
+   bell. It opens a different list rather than filtering this one, so grouping
+   it with the filters made it read as one of them. */
+.toolbar-trash { order: 4; margin-left: auto; }
 @media (max-width: 720px) {
   /* Search + sort + filter on one non-wrapping line that FILLS the row. Centring
      a natural-width cluster left ~110px dead at the edges of a 390px screen
@@ -2129,6 +2133,8 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
   .toolbar-sort .sortmenu-btn { width: 100%; justify-content: center; }
   /* Center the List/Board toggle on its own row instead of pinning it right. */
   .toolbar-view { margin-left: 0 !important; width: 100%; justify-content: center; }
+  /* No bell to sit under on a phone: let it flow with the rest. */
+  .toolbar-trash { margin-left: 0; order: 0; }
 }
 
 /* Premium mute toggle in the notifications panel header */
