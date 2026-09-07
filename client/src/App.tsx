@@ -3,8 +3,9 @@ import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'reac
 import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
 import { confirmLogout } from './lib/confirm'
-import { savedAccounts } from './accounts'
+import { savedAccounts, SavedAccount } from './accounts'
 import { runBackHandlers } from './back'
+import { useEscape } from './lib/useEscape'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
@@ -93,6 +94,9 @@ function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout, switchTo, addAccount } = useAuth()
   // Everyone signed in on this device except whoever is active.
   const otherAccounts = savedAccounts().filter((a) => a.id !== user?.id)
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  // Nothing to choose between on the first run — go straight to signing in.
+  const openSwitcher = () => { if (otherAccounts.length === 0) addAccount(); else setSwitcherOpen(true) }
   const [showProfile, setShowProfile] = useState(false)
   // The sidebar's "More" list. `profileSection` is which settings screen a click
   // asked for, so the modal can open straight onto it instead of showing its own
@@ -192,23 +196,6 @@ function Layout({ children }: { children: React.ReactNode }) {
           </button>
           {moreOpen && (
             <div className="nav-sub">
-              {/* Accounts first, ahead of the settings sections.
-                  On desktop these sit lower, in the profile modal, where the whole
-                  list is visible at once. Here the sub-list scrolls inside a narrow
-                  drawer with Log out pinned over its foot, so anything after six
-                  settings rows is found only by someone who already knows it is
-                  there — and switching account is not a setting, it is who you are. */}
-              {otherAccounts.map((a) => (
-                <button key={a.id} className="nav-sub-item" onClick={() => switchTo(a.id)}>
-                  <span className="nav-icon">
-                    <Avatar name={a.name} color={a.avatar_color} size={18}
-                      src={a.avatar_file ? userAvatarUrl(a.id, a.avatar_file) : undefined} />
-                  </span>Switch to {a.name}
-                </button>
-              ))}
-              <button className="nav-sub-item" onClick={addAccount}>
-                <span className="nav-icon"><Ic name="plus" size={15} /></span>Add another account
-              </button>
               {SECTIONS.map((s) => (
                 <button key={s.id} className="nav-sub-item" onClick={() => openProfileAt(s.id)}>
                   <span className="nav-icon"><Ic name={s.icon} size={15} /></span>{s.label}
@@ -245,6 +232,20 @@ function Layout({ children }: { children: React.ReactNode }) {
             — the only route was the top-bar avatar into Profile › Security. The
             drawer stays open behind the confirmation, which sits above it, so a
             cancel leaves you exactly where you were. */}
+        {/* Sits directly above Log out, as its own top-level action rather than
+            buried in More: it is the same kind of thing as logging out — about
+            WHO is using the app, not about a setting.
+
+            One entry, three behaviours, so the label is always honest:
+              no other account  → straight to sign-in; there is nothing to switch to
+              one or more       → a sheet to pick from, plus adding another
+            The sheet rather than an instant switch on a single account is what
+            keeps a third account reachable: with an automatic switch, tapping it
+            on either account would only ever bounce between the two. */}
+        <button className="sidebar-switch-m" onClick={openSwitcher}>
+          <Ic name="refresh" size={17} />
+          Switch accounts
+        </button>
         <button className="sidebar-logout-m" onClick={async () => { if (await confirmLogout(otherAccounts[0]?.name)) logout() }}>
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 3v9" />
@@ -331,6 +332,14 @@ function Layout({ children }: { children: React.ReactNode }) {
       </nav>
       {/* The section is cleared on close, so opening from the avatar next time
           lands on the menu rather than wherever the sidebar last sent you. */}
+      {switcherOpen && (
+        <AccountSwitcher
+          accounts={otherAccounts}
+          onPick={(id) => switchTo(id)}
+          onAdd={addAccount}
+          onClose={() => setSwitcherOpen(false)}
+        />
+      )}
       {showProfile && (
         <ProfileModal
           initialSection={profileSection}
@@ -504,5 +513,53 @@ export default function App() {
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
     </>
+  )
+}
+
+// The account chooser behind "Switch accounts".
+//
+// Deliberately a sheet even when there is only one other account, rather than an
+// instant switch. An instant switch reads better for exactly two accounts and then
+// traps you: tapping it from either side only ever bounces between the pair, and
+// there is no way left to add a third. The sheet costs one tap and keeps the door
+// open — with three accounts it lists three, with four, four.
+function AccountSwitcher({ accounts, onPick, onAdd, onClose }: {
+  accounts: SavedAccount[]
+  onPick: (id: string) => void
+  onAdd: () => void
+  onClose: () => void
+}) {
+  useEscape(onClose)
+  return (
+    <div className="modal-center" onClick={onClose}>
+      <div className="modal acct-switch" role="dialog" aria-modal="true" aria-label="Switch accounts"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="card-head spread">
+          <h3 style={{ fontSize: 16 }}>Switch accounts</h3>
+          <button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="card-pad" style={{ display: 'grid', gap: 6 }}>
+          {accounts.map((a) => (
+            <button key={a.id} className="acct-switch-row" onClick={() => onPick(a.id)}>
+              <Avatar name={a.name} color={a.avatar_color} size={34}
+                src={a.avatar_file ? userAvatarUrl(a.id, a.avatar_file) : undefined} />
+              <span className="acct-switch-meta">
+                <span className="acct-switch-name">{a.name}</span>
+                <span className="muted acct-switch-mail">{a.email}</span>
+              </span>
+              <span className="acct-switch-chev">›</span>
+            </button>
+          ))}
+          <button className="acct-switch-row acct-switch-add" onClick={onAdd}>
+            <span className="acct-switch-plus"><Ic name="plus" size={17} /></span>
+            <span className="acct-switch-meta">
+              <span className="acct-switch-name">Add another account</span>
+              <span className="muted acct-switch-mail">Stay signed in here and sign in as someone else</span>
+            </span>
+            <span className="acct-switch-chev">›</span>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
