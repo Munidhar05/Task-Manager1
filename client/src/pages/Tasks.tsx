@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
 import { TaskHandoverLine } from '../components/TaskOriginBadge'
@@ -31,13 +31,6 @@ const dueDateForPriority = (priority: string) => {
 
 // Auto-growing textarea: wraps long text and grows with content so the whole
 // title is readable instead of scrolling word-by-word inside a one-line input.
-function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  const ref = React.useRef<HTMLTextAreaElement>(null)
-  const fit = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }
-  React.useEffect(fit, [props.value])
-  return <textarea ref={ref} rows={1} {...props} onInput={fit} style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }} />
-}
-
 // Clean line-art magnifier for the collapsible search control.
 const SearchIcon = ({ size = 18 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

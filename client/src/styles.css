@@ -315,6 +315,9 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 /* Sign out from the drawer — phones only, switched on in the max-width:720px
    block below. Desktop already has the power button in the profile row. */
 .sidebar-logout-m { display: none; }
+/* Mobile-only, like the Log out button it sits above. Desktop reaches the same
+   thing through the profile modal, where the whole list already fits. */
+.sidebar-switch-m { display: none; }
 .sidebar-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .sidebar-sync { display: inline-flex; align-items: center; gap: 7px; font-size: var(--t-xs); font-weight: 600; color: var(--sidebar-muted); min-width: 0; }
 .sidebar-sync span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2280,6 +2283,14 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
     background: #fff; color: #b91c1c; font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer;
     transition: background .15s; }
   .sidebar-logout-m:active { background: #fef2f2; }
+  /* margin-top:auto lives on the switch button now — it is the first of the pair,
+     so it is what has to be pushed to the foot; Log out follows it. */
+  .sidebar-switch-m { display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%;
+    margin-top: auto; margin-bottom: 8px; padding: 12px; border: 1px solid var(--border);
+    border-radius: var(--r-md); background: var(--surface); color: var(--text); font: inherit;
+    font-size: 13.5px; font-weight: 700; cursor: pointer; transition: background .15s; }
+  .sidebar-switch-m:active { background: var(--bg); }
+  .sidebar-logout-m { margin-top: 0; }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
   /* Meetings toolbar: center the count + action buttons instead of right-aligning */
@@ -3021,3 +3032,20 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   .table-cards tbody tr.row-done { box-shadow: inset 3px 0 0 #10b981; }
 }
 
+
+/* Account chooser (App.tsx → AccountSwitcher). Rows big enough to be a phone tap
+   target, with the email under the name: two people in one org often share a first
+   name, and the address is what tells them apart. */
+.acct-switch { max-width: 420px; width: 92%; }
+.acct-switch-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface); color: var(--text); font: inherit; cursor: pointer;
+  transition: background .15s, border-color .15s; }
+.acct-switch-row:hover { background: var(--n-50); border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); }
+.acct-switch-meta { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.acct-switch-name { font-size: 13.5px; font-weight: 700; }
+.acct-switch-mail { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-switch-chev { color: var(--muted); font-size: 17px; }
+.acct-switch-plus { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface)); color: var(--primary); flex-shrink: 0; }
+.acct-switch-add { border-style: dashed; }

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Task, User, Attachment, taskAttachmentUrl } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
@@ -632,7 +632,12 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                     </div>
                     {editing ? (
                       <div className="grid" style={{ gap: 6, marginTop: 4 }}>
-                        <textarea rows={2} value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)} autoFocus style={{ width: '100%', fontSize: 13 }} />
+                        <AutoTextarea
+                          value={commentDraft}
+                          onChange={(e) => setCommentDraft(e.target.value)}
+                          autoFocus
+                          style={{ width: '100%', fontSize: 13 }}
+                        />
                         <div className="row" style={{ gap: 6 }}>
                           <button className="btn btn-primary btn-sm" disabled={busy || !commentDraft.trim()} onClick={() => saveComment(c)}>Save</button>
                           <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEditingComment(null)}>Cancel</button>
@@ -648,7 +653,18 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               )
             })}
             <div className="row" style={{ marginTop: 10 }}>
-              <input data-va="task.drawer.comment" aria-label="Add a comment" placeholder="Add a comment…" value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addComment()} />
+              <AutoTextarea
+                data-va="task.drawer.comment"
+                aria-label="Add a comment"
+                placeholder="Add a comment…"
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                // Enter posts, Shift+Enter breaks the line — the messenger
+                // convention, and the only way to write a second line now that
+                // this is a textarea rather than a single-line input.
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addComment() } }}
+                style={{ flex: 1 }}
+              />
               <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>
             </div>
           </div>
