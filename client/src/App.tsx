@@ -3,6 +3,7 @@ import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'reac
 import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
 import { confirmLogout } from './lib/confirm'
+import { savedAccounts } from './accounts'
 import { runBackHandlers } from './back'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
@@ -89,7 +90,9 @@ function syncAgo(ts: number) {
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth()
+  const { user, logout, switchTo, addAccount } = useAuth()
+  // Everyone signed in on this device except whoever is active.
+  const otherAccounts = savedAccounts().filter((a) => a.id !== user?.id)
   const [showProfile, setShowProfile] = useState(false)
   // The sidebar's "More" list. `profileSection` is which settings screen a click
   // asked for, so the modal can open straight onto it instead of showing its own
@@ -189,12 +192,29 @@ function Layout({ children }: { children: React.ReactNode }) {
           </button>
           {moreOpen && (
             <div className="nav-sub">
+              {/* Accounts first, ahead of the settings sections.
+                  On desktop these sit lower, in the profile modal, where the whole
+                  list is visible at once. Here the sub-list scrolls inside a narrow
+                  drawer with Log out pinned over its foot, so anything after six
+                  settings rows is found only by someone who already knows it is
+                  there — and switching account is not a setting, it is who you are. */}
+              {otherAccounts.map((a) => (
+                <button key={a.id} className="nav-sub-item" onClick={() => switchTo(a.id)}>
+                  <span className="nav-icon">
+                    <Avatar name={a.name} color={a.avatar_color} size={18}
+                      src={a.avatar_file ? userAvatarUrl(a.id, a.avatar_file) : undefined} />
+                  </span>Switch to {a.name}
+                </button>
+              ))}
+              <button className="nav-sub-item" onClick={addAccount}>
+                <span className="nav-icon"><Ic name="plus" size={15} /></span>Add another account
+              </button>
               {SECTIONS.map((s) => (
                 <button key={s.id} className="nav-sub-item" onClick={() => openProfileAt(s.id)}>
                   <span className="nav-icon"><Ic name={s.icon} size={15} /></span>{s.label}
                 </button>
               ))}
-              <button className="nav-sub-item nav-sub-logout" onClick={async () => { if (await confirmLogout()) logout() }}>
+              <button className="nav-sub-item nav-sub-logout" onClick={async () => { if (await confirmLogout(otherAccounts[0]?.name)) logout() }}>
                 <span className="nav-icon">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 3v9" /><path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
@@ -225,7 +245,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             — the only route was the top-bar avatar into Profile › Security. The
             drawer stays open behind the confirmation, which sits above it, so a
             cancel leaves you exactly where you were. */}
-        <button className="sidebar-logout-m" onClick={async () => { if (await confirmLogout()) logout() }}>
+        <button className="sidebar-logout-m" onClick={async () => { if (await confirmLogout(otherAccounts[0]?.name)) logout() }}>
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 3v9" />
             <path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
