@@ -52,6 +52,11 @@ const ANNOTATIONS = {
   add_comment: { destructiveHint: false, idempotentHint: false },
   mark_notifications_read: { destructiveHint: false, idempotentHint: true },
   restore_task: { destructiveHint: false, idempotentHint: true },
+  review_meeting_tasks: { readOnlyHint: true, openWorldHint: false },
+  update_meeting_task: { destructiveHint: false, idempotentHint: true },
+  reject_meeting_task: { destructiveHint: false, idempotentHint: true },
+  // Creates a meeting record and calls an LLM, but assigns nothing.
+  add_meeting: { destructiveHint: false, idempotentHint: false },
   // delete_task is reversible for 30 days, but it still removes the task from
   // everyone's board today — the hint is about what the user sees, not about
   // whether the bytes survive.
@@ -362,19 +367,157 @@ const TOOLS = [
       return toolText('All notifications marked read.')
     },
   },
+  // ---- the meeting review loop ---------------------------------------------
+  // add_meeting → review_meeting_tasks → (update / reject) → assign_meeting_tasks.
+  //
+  // The shape mirrors the app's own review screen rather than shortcutting it: the
+  // AI proposes, a person checks who each task landed on, and only then does
+  // anything become real. Nothing here assigns without an explicit reviewed flag.
+  {
+    name: 'add_meeting',
+    title: 'Analyse a meeting',
+    description: "Turn a meeting transcript or notes into suggested tasks. NOTHING IS ASSIGNED — the tasks land in a review queue, and assign_meeting_tasks is a separate, later step. Claude cannot record audio: paste or dictate the notes, or record in the VoTask app and review the result here. Follow this with review_meeting_tasks and show the user what was found.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'e.g. "Marketing sync, 6 Sept"' },
+        transcript: { type: 'string', description: 'The transcript or notes. Verbatim is better than summarised — the analyser quotes it as evidence for who owns what.' },
+        meeting_date: { type: 'string', description: 'YYYY-MM-DD. Defaults to today.' },
+        participant_ids: { type: 'array', items: { type: 'string' }, description: 'From list_people. Only these people can be suggested as owners, so passing them makes the matching far better.' },
+      },
+      required: ['transcript'],
+    },
+    run: async (call, args) => {
+      const r = await call('/api/meetings', 'POST', {
+        title: args.title || 'Meeting', transcript: args.transcript,
+        ...(args.meeting_date ? { meeting_date: args.meeting_date } : {}),
+        ...(Array.isArray(args.participant_ids) ? { participant_ids: args.participant_ids } : {}),
+      })
+      return toolJson({
+        meeting_id: r.id, suggested_tasks: r.suggestion_count, analysed_by: r.engine,
+        next: 'Call review_meeting_tasks and show the user every task with its owner, priority and deadline. Nothing is assigned yet.',
+      })
+    },
+  },
+  {
+    name: 'review_meeting_tasks',
+    title: "Review a meeting's suggested tasks",
+    description: "Every task the AI proposed from a meeting and has not yet assigned, with the owner it picked, the deadline, the confidence and the line of transcript it inferred each from. Show ALL of it to the user and ask whether the tasks and the people are right — the evidence quote is what lets them judge, so do not summarise it away. Fix anything wrong with update_meeting_task, drop anything unwanted with reject_meeting_task.",
+    inputSchema: { type: 'object', properties: { meeting_id: { type: 'string' } }, required: ['meeting_id'] },
+    run: async (call, args) => {
+      const m = await call(`/api/meetings/${encodeURIComponent(args.meeting_id)}`)
+      const pending = (m.suggestions || []).filter((s) => s.status === 'pending')
+      return toolJson({
+        meeting: m.title, date: (m.meeting_date || '').slice(0, 10),
+        awaiting_review: pending.length,
+        tasks: pending.map((s) => ({
+          suggestion_id: s.id,
+          title: s.title,
+          description: s.description,
+          owner: s.suggested_assignee_name
+            || (s.suggested_assignee_raw ? `heard "${s.suggested_assignee_raw}" — not a known attendee` : null),
+          owner_id: s.suggested_assignee_id,
+          priority: s.priority,
+          deadline: s.due_date || s.due_date_raw || null,
+          confidence: s.confidence,
+          why_this_owner: s.assignee_reasoning,
+          heard_in_the_meeting: s.source_quote,
+        })),
+        needs_an_owner: pending.filter((s) => !s.suggested_assignee_id).length,
+        next: 'Nothing is assigned yet. Present these to the user, correct what is wrong, then call assign_meeting_tasks with reviewed true.',
+      })
+    },
+  },
+  {
+    name: 'update_meeting_task',
+    title: 'Correct a suggested task',
+    description: 'Fix a suggested task before it is assigned — usually the owner the AI guessed wrong, but title, priority and deadline too. Editing a suggestion changes nothing real; the task still does not exist until assign_meeting_tasks runs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        suggestion_id: { type: 'string', description: 'From review_meeting_tasks.' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        assignee_id: { type: 'string', description: 'From list_people. Empty string clears the owner.' },
+        priority: { type: 'string', enum: PRIORITIES },
+        due_date: { type: 'string', description: 'YYYY-MM-DD' },
+      },
+      required: ['suggestion_id'],
+    },
+    run: async (call, args) => {
+      if (args.priority && !PRIORITIES.includes(args.priority)) {
+        return toolText(`"${args.priority}" is not a priority. Use one of: ${PRIORITIES.join(', ')}.`, true)
+      }
+      const body = {}
+      for (const f of ['title', 'description', 'priority', 'due_date']) if (args[f] != null && args[f] !== '') body[f] = args[f]
+      if (args.assignee_id != null) body.suggested_assignee_id = args.assignee_id || null
+      if (!Object.keys(body).length) return toolText('Nothing to change — name at least one field.', true)
+      const s = await call(`/api/meetings/suggestions/${encodeURIComponent(args.suggestion_id)}`, 'PATCH', body)
+      // Re-read through the meeting rather than trusting the PATCH response. That
+      // response is the raw row, with no join to users, so reporting its
+      // suggested_assignee_name says "owner: null" immediately after successfully
+      // setting an owner — the one moment the user most needs the answer to be true.
+      let fresh = null
+      try {
+        const m = await call(`/api/meetings/${encodeURIComponent(s.meeting_id)}`)
+        fresh = (m.suggestions || []).find((x) => x.id === s.id) || null
+      } catch { /* fall back to the PATCH row below */ }
+      const cur = fresh || s
+      return toolJson({
+        updated: Object.keys(body),
+        task: {
+          title: cur.title,
+          owner: cur.suggested_assignee_name || null,
+          owner_id: cur.suggested_assignee_id || null,
+          priority: cur.priority,
+          deadline: cur.due_date,
+        },
+        note: 'Still unassigned. assign_meeting_tasks is what makes it real.',
+      })
+    },
+  },
+  {
+    name: 'reject_meeting_task',
+    title: 'Drop a suggested task',
+    description: "Remove a suggested task from the review queue — the AI heard something that is not a task, or a duplicate. Reversible: it moves to Rejected on the meeting page and can be restored there.",
+    inputSchema: { type: 'object', properties: { suggestion_id: { type: 'string' } }, required: ['suggestion_id'] },
+    run: async (call, args) => {
+      await call(`/api/meetings/suggestions/${encodeURIComponent(args.suggestion_id)}/reject`, 'POST', {})
+      return toolText('Dropped from the review queue. It can be restored on the meeting page.')
+    },
+  },
   {
     name: 'assign_meeting_tasks',
-    title: 'Assign a meeting\'s suggested tasks',
-    description: "Turn a meeting's pending AI suggestions into real, assigned tasks. Every assignee is NOTIFIED immediately and this cannot be undone in bulk — read get_meeting first, tell the user how many tasks and which people, and get a yes. Suggestions with no owner are skipped rather than assigned to nobody.",
+    title: 'Assign the reviewed tasks',
+    description: "Turn reviewed suggestions into real, assigned tasks. Every assignee is NOTIFIED immediately and this cannot be undone in bulk. REVIEW FIRST: this tool refuses without reviewed true, which you may only set after showing the user each task with its owner and hearing them approve. Suggestions with no owner are skipped rather than assigned to nobody.",
     inputSchema: {
       type: 'object',
       properties: {
         meeting_id: { type: 'string' },
-        ids: { type: 'array', items: { type: 'string' }, description: 'Specific suggestion ids. Omit to assign every pending one.' },
+        ids: { type: 'array', items: { type: 'string' }, description: 'Suggestion ids the user approved. Omit to assign every pending one — only do that if they approved all of them.' },
+        reviewed: { type: 'boolean', description: 'Only after the user has seen the tasks and their owners, and said yes.' },
       },
       required: ['meeting_id'],
     },
     run: async (call, args) => {
+      // The gate exists because this is the step that reaches other people. A task
+      // assigned to the wrong person is not a database problem to be corrected
+      // later — they have already been notified, and they have already started.
+      if (!args.reviewed) {
+        const m = await call(`/api/meetings/${encodeURIComponent(args.meeting_id)}`)
+        const pending = (m.suggestions || []).filter((s) => s.status === 'pending')
+        const withOwner = pending.filter((s) => s.suggested_assignee_id)
+        const people = [...new Set(withOwner.map((s) => s.suggested_assignee_name).filter(Boolean))]
+        return toolText(
+          'Nothing has been assigned. Show the user each task with its owner, priority and deadline '
+          + '(review_meeting_tasks has them) and ask whether the tasks are right and on the right people.\n\n'
+          + `This would create ${withOwner.length} task(s) and notify ${people.length} person/people`
+          + `${people.length ? ': ' + people.join(', ') : ''}.`
+          + `${pending.length - withOwner.length ? ` ${pending.length - withOwner.length} have no owner and would be skipped.` : ''}\n\n`
+          + 'When they approve, call again with reviewed true — and with ids if they only approved some.',
+          true,
+        )
+      }
       const body = Array.isArray(args.ids) && args.ids.length ? { ids: args.ids } : {}
       const r = await call(`/api/meetings/${encodeURIComponent(args.meeting_id)}/assign`, 'POST', body)
       return toolJson({ assigned: r.assigned, skipped_no_owner: r.skipped })
