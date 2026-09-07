@@ -43,6 +43,7 @@ const ANNOTATIONS = {
   list_meetings: { readOnlyHint: true, openWorldHint: false },
   get_meeting: { readOnlyHint: true, openWorldHint: false },
   list_notifications: { readOnlyHint: true, openWorldHint: false },
+  list_deleted_tasks: { readOnlyHint: true, openWorldHint: false },
   ask_votask: { readOnlyHint: true, openWorldHint: false },
   whoami: { readOnlyHint: true, openWorldHint: false },
   create_task: { destructiveHint: false, idempotentHint: false },
@@ -50,7 +51,10 @@ const ANNOTATIONS = {
   set_task_status: { destructiveHint: false, idempotentHint: true },
   add_comment: { destructiveHint: false, idempotentHint: false },
   mark_notifications_read: { destructiveHint: false, idempotentHint: true },
-  // The two that cannot be walked back from a chat window.
+  restore_task: { destructiveHint: false, idempotentHint: true },
+  // delete_task is reversible for 30 days, but it still removes the task from
+  // everyone's board today — the hint is about what the user sees, not about
+  // whether the bytes survive.
   delete_task: { destructiveHint: true, idempotentHint: true },
   assign_meeting_tasks: { destructiveHint: true, idempotentHint: false },
 }
@@ -278,20 +282,61 @@ const TOOLS = [
   {
     name: 'delete_task',
     title: 'Delete a task',
-    description: "Delete a task permanently. There is no undo and no recycle bin — the row and its comments are gone. CONFIRM WITH THE USER FIRST, quoting the task's title back to them, and never delete more than they named. Prefer set_task_status to Done for work that is finished rather than unwanted.",
+    description: "Move a task to the recycle bin. It stays recoverable for 30 days (restore_task, or the Deleted tab in the app), then is purged for good. ASK THE USER TO CONFIRM FIRST — this tool refuses the call without confirmed true, and the refusal quotes the task's title so you can put the real name in front of them. Never delete more than they named; for work that is finished rather than unwanted, set_task_status to Done.",
     inputSchema: {
       type: 'object',
       properties: {
-        task_id: { type: 'string', description: 'From list_tasks. Read it back to the user before calling.' },
+        task_id: { type: 'string', description: 'From list_tasks.' },
+        confirmed: { type: 'boolean', description: 'Only after the user has said yes to the exact task named back to them.' },
       },
       required: ['task_id'],
     },
     run: async (call, args) => {
-      // Read it first so the confirmation names the real task rather than an id,
-      // and so a wrong id fails before anything is destroyed rather than after.
+      // Read first, always. A wrong id then fails while the task still exists
+      // rather than after, and the confirmation can name the task instead of an
+      // opaque id — "delete task_94gk…?" is not a question anyone can answer.
       const t = await call(`/api/tasks/${encodeURIComponent(args.task_id)}`)
-      await call(`/api/tasks/${encodeURIComponent(args.task_id)}`, 'DELETE')
-      return toolText(`Deleted "${t.title}". This cannot be undone.`)
+      if (!args.confirmed) {
+        return toolText(
+          `Nothing has been deleted. Ask the user to confirm, naming the task:\n\n`
+          + `  Are you sure you want to delete "${t.title}"`
+          + `${t.assignee?.name || t.assignee_name ? ` (assigned to ${t.assignee?.name || t.assignee_name})` : ''}?\n`
+          + `  It can be restored for 30 days, after which it is gone for good.\n\n`
+          + `If they say yes, call delete_task again with confirmed true.`,
+          true,
+        )
+      }
+      const r = await call(`/api/tasks/${encodeURIComponent(args.task_id)}`, 'DELETE')
+      const until = r?.recoverable_until ? String(r.recoverable_until).slice(0, 10) : 'about 30 days'
+      return toolText(`Deleted "${t.title}". Recoverable until ${until} with restore_task, then purged permanently.`)
+    },
+  },
+  {
+    name: 'list_deleted_tasks',
+    title: 'Recycle bin',
+    description: 'Tasks that have been deleted and can still be restored, with the date each stops being recoverable. Managers see the whole organization; everyone else sees what they deleted themselves.',
+    inputSchema: { type: 'object', properties: {} },
+    run: async (call) => {
+      const d = await call('/api/tasks/trash')
+      return toolJson({
+        recovery_days: d.recovery_days,
+        deleted: (d.tasks || []).map((t) => ({
+          id: t.id, title: t.title, assignee: t.assignee_name, priority: t.priority,
+          deleted_at: t.deleted_at, deleted_by: t.deleted_by,
+          recoverable_until: String(t.purge_after || '').slice(0, 10),
+        })),
+      })
+    },
+  },
+  {
+    name: 'restore_task',
+    title: 'Restore a deleted task',
+    description: 'Put a deleted task back, with its comments and attachments. Get the id from list_deleted_tasks. Safe and reversible — you can always delete it again.',
+    inputSchema: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
+    run: async (call, args) => {
+      const r = await call(`/api/tasks/trash/${encodeURIComponent(args.task_id)}/restore`, 'POST', {})
+      const t = r?.task
+      return toolJson({ restored: true, task: t ? { id: t.id, title: t.title, status: t.status, priority: t.priority, assignee: t.assignee?.name || t.assignee_name || null } : { id: args.task_id } })
     },
   },
   {
