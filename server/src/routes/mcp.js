@@ -30,6 +30,30 @@ const PROTOCOL_VERSION = '2025-06-18'
 const SERVER_INFO = { name: 'votask', title: 'VoTask', version: '1.0.0' }
 // Mirrors the CHECK constraint on tasks.priority in db.js.
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
+const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
+
+// MCP tool annotations. These are hints, not enforcement — the client uses them
+// to decide what to confirm with the user before running. Marking the reads is
+// what stops a client prompting for every list_tasks; marking delete_task
+// destructive is what makes it prompt for the one that matters.
+const ANNOTATIONS = {
+  list_tasks: { readOnlyHint: true, openWorldHint: false },
+  get_task: { readOnlyHint: true, openWorldHint: false },
+  list_people: { readOnlyHint: true, openWorldHint: false },
+  list_meetings: { readOnlyHint: true, openWorldHint: false },
+  get_meeting: { readOnlyHint: true, openWorldHint: false },
+  list_notifications: { readOnlyHint: true, openWorldHint: false },
+  ask_votask: { readOnlyHint: true, openWorldHint: false },
+  whoami: { readOnlyHint: true, openWorldHint: false },
+  create_task: { destructiveHint: false, idempotentHint: false },
+  update_task: { destructiveHint: false, idempotentHint: true },
+  set_task_status: { destructiveHint: false, idempotentHint: true },
+  add_comment: { destructiveHint: false, idempotentHint: false },
+  mark_notifications_read: { destructiveHint: false, idempotentHint: true },
+  // The two that cannot be walked back from a chat window.
+  delete_task: { destructiveHint: true, idempotentHint: true },
+  assign_meeting_tasks: { destructiveHint: true, idempotentHint: false },
+}
 
 // ---- JSON-RPC plumbing -----------------------------------------------------
 
@@ -62,8 +86,8 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        status: { type: 'string', description: 'To Do | In Progress | Blocked | In Review | Done | Reopened' },
-        priority: { type: 'string', description: 'Critical | High | Medium | Low' },
+        status: { type: 'string', enum: STATUSES },
+        priority: { type: 'string', enum: PRIORITIES },
         assignee: { type: 'string', description: "A user id. Use list_people first if you only have a name." },
         q: { type: 'string', description: 'Free-text search over titles' },
         mine: { type: 'boolean', description: "Only the caller's own tasks" },
@@ -104,7 +128,7 @@ const TOOLS = [
         title: { type: 'string' },
         description: { type: 'string' },
         assignee_id: { type: 'string', description: 'From list_people. Omit to leave unassigned.' },
-        priority: { type: 'string', description: 'Critical | High | Medium | Low. Ask the user; do not assume.' },
+        priority: { type: 'string', enum: PRIORITIES, description: 'Ask the user; do not assume.' },
         due_date: { type: 'string', description: 'YYYY-MM-DD. Ask the user; do not assume.' },
         use_defaults: { type: 'boolean', description: "Only after the user has said they don't mind. Medium priority, deadline derived from it." },
       },
@@ -128,11 +152,16 @@ const TOOLS = [
       if (!args.priority) missing.push('the priority (Critical, High, Medium or Low)')
       if (!args.due_date) missing.push('the deadline (a date)')
       if (missing.length && !args.use_defaults) {
+        // Presented as a numbered choice rather than an open question. "What
+        // priority?" makes the user compose an answer; a list makes them pick one,
+        // which is the nearest thing to a dropdown that a chat window offers.
+        const ask = []
+        if (!args.priority) ask.push('Priority — 1) Critical  2) High  3) Medium  4) Low')
+        if (!args.due_date) ask.push('Deadline — a date (YYYY-MM-DD), or say "no deadline" and one will be derived')
         return toolText(
-          `Before creating this task, ask the user for ${missing.join(' and ')}. `
-          + 'Then call create_task again with the answer. If they say they do not mind, '
-          + 'call again with use_defaults true — the task becomes Medium priority with a deadline derived from it. '
-          + 'Nothing has been created yet.',
+          'Nothing has been created yet. Ask the user to choose, showing these options verbatim:\n\n'
+          + ask.map((l) => `  ${l}`).join('\n')
+          + '\n\nThen call create_task again with their answer. If they say they do not mind, call again with use_defaults true.',
           true,
         )
       }
@@ -163,7 +192,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         task_id: { type: 'string' },
-        status: { type: 'string', description: 'To Do | In Progress | Blocked | In Review | Done | Reopened' },
+        status: { type: 'string', enum: STATUSES },
       },
       required: ['task_id', 'status'],
     },
@@ -180,7 +209,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'From list_tasks.' },
-        priority: { type: 'string', description: 'Critical | High | Medium | Low' },
+        priority: { type: 'string', enum: PRIORITIES },
         assignee_id: { type: 'string', description: 'From list_people. Empty string unassigns. The new owner is notified, and so is the previous one.' },
         due_date: { type: 'string', description: 'YYYY-MM-DD' },
         title: { type: 'string' },
@@ -212,6 +241,98 @@ const TOOLS = [
           due_date: t.due_date, assignee: t.assignee?.name || t.assignee_name || null, progress: t.progress,
         },
       })
+    },
+  },
+  {
+    name: 'get_task',
+    title: 'Read one task',
+    description: "Everything about a single task: description, owner, deadline, progress, comments, subtasks and where it came from. Use it before editing something you did not create, so you are changing what you think you are.",
+    inputSchema: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
+    run: async (call, args) => {
+      const t = await call(`/api/tasks/${encodeURIComponent(args.task_id)}`)
+      return toolJson({
+        id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority,
+        due_date: t.due_date, progress: t.progress,
+        assignee: t.assignee?.name || t.assignee_name || null,
+        assigned_by: t.assignedBy?.name || null,
+        from_meeting: t.meeting_id || null,
+        comments: (t.comments || []).map((c) => ({ by: c.user_name || c.author_name, at: c.created_at, body: c.body })),
+        subtasks: (t.subtasks || []).map((x) => ({ id: x.id, title: x.title, status: x.status })),
+      })
+    },
+  },
+  {
+    name: 'add_comment',
+    title: 'Comment on a task',
+    description: 'Add a comment to a task. This is a note on the work itself, visible to everyone who can see the task — it is not a chat message to a person.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string' }, body: { type: 'string' } },
+      required: ['task_id', 'body'],
+    },
+    run: async (call, args) => {
+      await call(`/api/tasks/${encodeURIComponent(args.task_id)}/comments`, 'POST', { body: args.body })
+      return toolText('Comment added.')
+    },
+  },
+  {
+    name: 'delete_task',
+    title: 'Delete a task',
+    description: "Delete a task permanently. There is no undo and no recycle bin — the row and its comments are gone. CONFIRM WITH THE USER FIRST, quoting the task's title back to them, and never delete more than they named. Prefer set_task_status to Done for work that is finished rather than unwanted.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'From list_tasks. Read it back to the user before calling.' },
+      },
+      required: ['task_id'],
+    },
+    run: async (call, args) => {
+      // Read it first so the confirmation names the real task rather than an id,
+      // and so a wrong id fails before anything is destroyed rather than after.
+      const t = await call(`/api/tasks/${encodeURIComponent(args.task_id)}`)
+      await call(`/api/tasks/${encodeURIComponent(args.task_id)}`, 'DELETE')
+      return toolText(`Deleted "${t.title}". This cannot be undone.`)
+    },
+  },
+  {
+    name: 'list_notifications',
+    title: 'My notifications',
+    description: "The caller's own in-app notifications — assignments, approvals, reassignments. Use for 'what did I miss?'.",
+    inputSchema: { type: 'object', properties: {} },
+    run: async (call) => {
+      const d = await call('/api/notifications')
+      const rows = Array.isArray(d) ? d : d.notifications || []
+      return toolJson(rows.slice(0, 40).map((n) => ({
+        type: n.type, message: n.message, read: !!n.read, at: n.created_at, task_id: n.task_id,
+      })))
+    },
+  },
+  {
+    name: 'mark_notifications_read',
+    title: 'Clear notifications',
+    description: "Mark all of the caller's notifications as read.",
+    inputSchema: { type: 'object', properties: {} },
+    run: async (call) => {
+      await call('/api/notifications/read-all', 'POST', {})
+      return toolText('All notifications marked read.')
+    },
+  },
+  {
+    name: 'assign_meeting_tasks',
+    title: 'Assign a meeting\'s suggested tasks',
+    description: "Turn a meeting's pending AI suggestions into real, assigned tasks. Every assignee is NOTIFIED immediately and this cannot be undone in bulk — read get_meeting first, tell the user how many tasks and which people, and get a yes. Suggestions with no owner are skipped rather than assigned to nobody.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meeting_id: { type: 'string' },
+        ids: { type: 'array', items: { type: 'string' }, description: 'Specific suggestion ids. Omit to assign every pending one.' },
+      },
+      required: ['meeting_id'],
+    },
+    run: async (call, args) => {
+      const body = Array.isArray(args.ids) && args.ids.length ? { ids: args.ids } : {}
+      const r = await call(`/api/meetings/${encodeURIComponent(args.meeting_id)}/assign`, 'POST', body)
+      return toolJson({ assigned: r.assigned, skipped_no_owner: r.skipped })
     },
   },
   {
@@ -275,7 +396,7 @@ const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))
 // never a URL, and every path is a literal inside the tool that owns it. The
 // allowlist makes that structural rather than incidental, so a future tool taking
 // a caller-supplied path could not quietly become an escalation.
-const LOOPBACK_ALLOWED = new RegExp('^/api/(tasks|users|meetings|assistant/query|auth/me)(/|[?]|$)')
+const LOOPBACK_ALLOWED = new RegExp('^/api/(tasks|users|meetings|notifications|assistant/query|auth/me)(/|[?]|$)')
 
 function loopbackCaller(user) {
   const base = `http://127.0.0.1:${process.env.PORT || 4000}`
@@ -338,7 +459,11 @@ async function handle(msg, user) {
   }
   if (method === 'ping') return rpcOk(id, {})
   if (method === 'tools/list') {
-    return rpcOk(id, { tools: TOOLS.map(({ name, title, description, inputSchema }) => ({ name, title, description, inputSchema })) })
+    return rpcOk(id, {
+      tools: TOOLS.map(({ name, title, description, inputSchema }) => ({
+        name, title, description, inputSchema, ...(ANNOTATIONS[name] ? { annotations: ANNOTATIONS[name] } : {}),
+      })),
+    })
   }
   if (method === 'tools/call') {
     const tool = TOOL_BY_NAME.get(params?.name)
