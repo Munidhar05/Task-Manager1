@@ -50,6 +50,9 @@ const ANNOTATIONS = {
   update_task: { destructiveHint: false, idempotentHint: true },
   set_task_status: { destructiveHint: false, idempotentHint: true },
   add_comment: { destructiveHint: false, idempotentHint: false },
+  edit_comment: { destructiveHint: false, idempotentHint: true },
+  // No recycle bin for comments, unlike tasks.
+  delete_comment: { destructiveHint: true, idempotentHint: true },
   mark_notifications_read: { destructiveHint: false, idempotentHint: true },
   restore_task: { destructiveHint: false, idempotentHint: true },
   review_meeting_tasks: { readOnlyHint: true, openWorldHint: false },
@@ -265,7 +268,10 @@ const TOOLS = [
         assignee: t.assignee?.name || t.assignee_name || null,
         assigned_by: t.assignedBy?.name || null,
         from_meeting: t.meeting_id || null,
-        comments: (t.comments || []).map((c) => ({ by: c.user_name || c.author_name, at: c.created_at, body: c.body })),
+        comments: (t.comments || []).map((c) => ({
+          comment_id: c.id, by: c.user_name || c.author_name, at: c.created_at,
+          body: c.body, edited: !!c.edited_at,
+        })),
         subtasks: (t.subtasks || []).map((x) => ({ id: x.id, title: x.title, status: x.status })),
       })
     },
@@ -282,6 +288,41 @@ const TOOLS = [
     run: async (call, args) => {
       await call(`/api/tasks/${encodeURIComponent(args.task_id)}/comments`, 'POST', { body: args.body })
       return toolText('Comment added.')
+    },
+  },
+  {
+    name: 'edit_comment',
+    title: 'Edit a comment',
+    description: "Reword one of YOUR OWN comments. Get comment_id from get_task. Someone else's comment cannot be edited by anyone — the thread is the record of who said what. The comment is marked as edited afterwards.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string' },
+        comment_id: { type: 'string', description: 'From get_task.' },
+        body: { type: 'string', description: 'The full replacement text, not a patch.' },
+      },
+      required: ['task_id', 'comment_id', 'body'],
+    },
+    run: async (call, args) => {
+      await call(`/api/tasks/${encodeURIComponent(args.task_id)}/comments/${encodeURIComponent(args.comment_id)}`, 'PATCH', { body: args.body })
+      return toolText('Comment updated, and marked as edited.')
+    },
+  },
+  {
+    name: 'delete_comment',
+    title: 'Delete a comment',
+    description: "Remove a comment. Your own always; a manager or admin may remove anyone's. Unlike a task, a deleted comment does NOT go to the recycle bin — it is gone. Read it back to the user before deleting someone else's.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string' },
+        comment_id: { type: 'string', description: 'From get_task.' },
+      },
+      required: ['task_id', 'comment_id'],
+    },
+    run: async (call, args) => {
+      await call(`/api/tasks/${encodeURIComponent(args.task_id)}/comments/${encodeURIComponent(args.comment_id)}`, 'DELETE')
+      return toolText('Comment deleted. This one is not recoverable.')
     },
   },
   {

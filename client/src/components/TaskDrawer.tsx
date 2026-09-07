@@ -33,6 +33,9 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   const [task, setTask] = useState<Task | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [comment, setComment] = useState('')
+  // Which comment is open for editing, and the draft text while it is.
+  const [editingComment, setEditingComment] = useState<string | null>(null)
+  const [commentDraft, setCommentDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [pendingAssignee, setPendingAssignee] = useState('')
   // A status the user has picked but not yet confirmed — applied only on "Accept".
@@ -122,6 +125,24 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   }
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
   const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
+  const saveComment = async (c: any) => {
+    const body = commentDraft.trim()
+    if (!body || body === c.body) { setEditingComment(null); return }
+    await mutate(() => api.patch(`/tasks/${taskId}/comments/${c.id}`, { body }))
+    setEditingComment(null)
+  }
+  // A comment has no recycle bin, unlike a task — so this asks, and says so.
+  const removeComment = async (c: any) => {
+    const ok = await confirmDialog({
+      title: 'Delete this comment?',
+      message: `“${c.body.length > 120 ? c.body.slice(0, 117) + '…' : c.body}”
+
+This cannot be undone — comments are not kept in the recycle bin.`,
+      confirmText: 'Delete', danger: true,
+    })
+    if (!ok) return
+    await mutate(() => api.del(`/tasks/${taskId}/comments/${c.id}`))
+  }
 
   // ---- Agent surface -------------------------------------------------------
   // Every capability drives the drawer's OWN handlers, so a voice edit and a hand
@@ -558,15 +579,50 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
 
           <div>
             <label>Comments ({task.comments?.length || 0})</label>
-            {task.comments?.map((c: any) => (
-              <div className="comment" key={c.id}>
-                <Avatar name={c.user_name} color={c.avatar_color} size={28} />
-                <div className="body">
-                  <div className="spread"><strong style={{ fontSize: 12.5 }}>{c.user_name}</strong><span className="muted" style={{ fontSize: 11 }}>{new Date(c.created_at).toLocaleString()}</span></div>
-                  <div style={{ fontSize: 13 }}>{c.body}</div>
+            {task.comments?.map((c: any) => {
+              // Editing is your own words only, deliberately: the thread is the
+              // record of who said what, and rewriting someone else's line would
+              // quietly turn it into something else. Deleting is yours, or a
+              // manager's — that is the lever for something that must come down.
+              const mine = c.user_id === user?.id
+              const editing = editingComment === c.id
+              return (
+                <div className="comment" key={c.id}>
+                  <Avatar name={c.user_name} color={c.avatar_color} size={28} />
+                  <div className="body" style={{ minWidth: 0 }}>
+                    <div className="spread">
+                      <strong style={{ fontSize: 12.5 }}>{c.user_name}</strong>
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        {new Date(c.created_at).toLocaleString()}{c.edited_at ? ' · edited' : ''}
+                      </span>
+                    </div>
+                    {editing ? (
+                      <div className="grid" style={{ gap: 6, marginTop: 4 }}>
+                        <textarea rows={2} value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)} autoFocus style={{ width: '100%', fontSize: 13 }} />
+                        <div className="row" style={{ gap: 6 }}>
+                          <button className="btn btn-primary btn-sm" disabled={busy || !commentDraft.trim()} onClick={() => saveComment(c)}>Save</button>
+                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEditingComment(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{c.body}</div>
+                        {(mine || isManager) && (
+                          <div className="row" style={{ gap: 8, marginTop: 3 }}>
+                            {mine && (
+                              <button className="btn btn-ghost btn-sm" style={{ padding: '1px 6px', fontSize: 11.5 }}
+                                onClick={() => { setEditingComment(c.id); setCommentDraft(c.body) }}>Edit</button>
+                            )}
+                            <button className="btn btn-ghost btn-sm" style={{ padding: '1px 6px', fontSize: 11.5, color: 'var(--danger-ink)' }}
+                              disabled={busy} onClick={() => removeComment(c)}>Delete</button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
             <div className="row" style={{ marginTop: 10 }}>
               <input data-va="task.drawer.comment" aria-label="Add a comment" placeholder="Add a comment…" value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addComment()} />
               <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>
