@@ -545,6 +545,33 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(token_hash);
   CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id, revoked_at);
+
+  -- Recycle bin. A deleted task is MOVED here rather than flagged in place.
+  --
+  -- The obvious design is a deleted_at column plus "AND deleted_at IS NULL" on
+  -- every read. There are ~70 places that query tasks — dashboards, the digest,
+  -- the leaderboard, RAG indexing, the voice agent's snapshot — and missing one
+  -- means a deleted task quietly reappears in someone's numbers. Moving the row
+  -- out makes that impossible: it is not in the table, so nothing can find it,
+  -- and not one existing query has to change.
+  --
+  -- The cost is that restore must put back what the FK cascade took with it, so
+  -- the payload column snapshots the task, its subtasks, comments, attachments
+  -- and dependencies as JSON. Attachment FILES stay on disk until the purge —
+  -- that is the one place where deleting early would make "recoverable" a lie.
+  CREATE TABLE IF NOT EXISTS deleted_tasks (
+    id TEXT PRIMARY KEY,                     -- the original task id; restore is idempotent
+    org_id TEXT NOT NULL,
+    title TEXT NOT NULL,                     -- listed without parsing the payload
+    assignee_name TEXT,
+    deleted_by TEXT NOT NULL,
+    deleted_by_name TEXT,
+    deleted_at TEXT NOT NULL,
+    purge_after TEXT NOT NULL,               -- deleted_at + RECOVERY_DAYS
+    payload TEXT NOT NULL                    -- JSON snapshot; see restore in routes/tasks.js
+  );
+  CREATE INDEX IF NOT EXISTS idx_deleted_tasks_org ON deleted_tasks(org_id, deleted_at);
+  CREATE INDEX IF NOT EXISTS idx_deleted_tasks_purge ON deleted_tasks(purge_after);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.

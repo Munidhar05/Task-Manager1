@@ -409,6 +409,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // Opening a task by id (e.g. ?task=… from a clicked notification) shows its drawer.
   const [openId, setOpenId] = useState<string | null>(searchParams.get('task'))
   const [showNew, setShowNew] = useState(false)
+  const [showTrash, setShowTrash] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
   // Wide enough to show the list and one task side by side. Below this the
   // drawer stays a modal, because a pane would leave neither half usable.
@@ -801,6 +802,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               <span className="filterbtn-dot">{Number(!!filters.priority) + Number(!!filters.status) + Number(!!filters.assignee)}</span>
             )}
           </button>
+          {/* Sits at the far right of the toolbar, under the notification bell,
+              rather than among the filters: it is not a way of narrowing the list,
+              it is a different list. See .toolbar-trash. */}
+          <button className="btn btn-sm row toolbar-trash" style={{ gap: 6 }} title="Tasks deleted in the last 30 days" onClick={() => setShowTrash(true)}>
+            <Ic name="trash" size={14} /> Deleted Tasks
+          </button>
           <button data-va="tasks.newTask" className="btn btn-primary btn-sm toolbar-newtask" onClick={() => setShowNew(true)}>+ New task</button>
         </div>
         {/* DESKTOP: the three filter dropdowns (+ sortable column headers). Hidden on
@@ -994,6 +1001,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           updated task; anything else (delete, uploads) falls back to a reload. */}
       {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
+      {showTrash && <TrashModal onClose={() => setShowTrash(false)} onRestored={load} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
       {filtersOpen && (
         <FiltersDialog
@@ -1371,6 +1379,113 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
             <button className="btn" onClick={onClose}>Cancel</button>
             <button data-va="tasks.new.submit" className="btn btn-primary" onClick={save} disabled={busy || !form.title}>{busy ? <span className="spinner" /> : 'Create task'}</button>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface TrashRow {
+  id: string; title: string; assignee_name: string | null
+  priority?: string; status?: string; due_date?: string | null
+  deleted_at: string; deleted_by: string | null; purge_after: string
+  comments: number; attachments: number
+}
+
+// The recycle bin.
+//
+// A deleted task is not gone, it is here, for RECOVERY_DAYS. The countdown is the
+// point of the screen: "deleted yesterday" is reassuring and useless, "3 days left"
+// is the thing that makes someone act. Permanent deletion lives behind a second,
+// separate button so that emptying the bin can never be a slip of the same click
+// that filled it.
+function TrashModal({ onClose, onRestored }: { onClose: () => void; onRestored: () => void }) {
+  const [rows, setRows] = useState<TrashRow[]>([])
+  const [days, setDays] = useState(30)
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [err, setErr] = useState('')
+
+  const load = () => {
+    setLoading(true)
+    api.get('/tasks/trash')
+      .then((d) => { setRows(d.tasks || []); setDays(d.recovery_days || 30) })
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
+  useEscape(onClose)
+
+  const daysLeft = (iso: string) => Math.max(0, Math.ceil((Date.parse(iso) - Date.now()) / 86400000))
+
+  const restore = async (t: TrashRow) => {
+    setBusyId(t.id); setErr('')
+    try { await api.post(`/tasks/trash/${t.id}/restore`, {}); toast.success(`Restored "${t.title}"`); load(); onRestored() }
+    catch (e: any) { setErr(e.message) } finally { setBusyId(null) }
+  }
+
+  const purge = async (t: TrashRow) => {
+    if (!window.confirm(`Delete "${t.title}" permanently?\n\nThis cannot be undone — it will not be recoverable afterwards.`)) return
+    setBusyId(t.id); setErr('')
+    try { await api.del(`/tasks/trash/${t.id}`); toast.success('Deleted permanently'); load() }
+    catch (e: any) { setErr(e.message) } finally { setBusyId(null) }
+  }
+
+  return (
+    <div className="modal-center" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Recently deleted tasks"
+        onClick={(e) => e.stopPropagation()} style={{ maxWidth: 780, width: '94%' }}>
+        <div className="card-head spread">
+          <h3 className="row" style={{ gap: 8 }}><Ic name="trash" size={16} /> Recently deleted</h3>
+          <button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="card-pad" style={{ maxHeight: '68vh', overflow: 'auto' }}>
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
+            Deleted tasks are kept for {days} days and can be restored with their comments and attachments.
+            After that they are removed permanently.
+          </div>
+          {err && <div style={{ color: 'var(--danger-ink)', fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
+          {loading ? <span className="spinner" /> : rows.length === 0 ? (
+            <EmptyState icon={<Ic name="trash" size={40} />} title="Nothing deleted"
+              hint="Tasks you delete show up here, and can be restored for a month." />
+          ) : (
+            <table>
+              <thead><tr><th>Task</th><th>Deleted</th><th>Time left</th><th></th></tr></thead>
+              <tbody>
+                {rows.map((t) => {
+                  const left = daysLeft(t.purge_after)
+                  return (
+                    <tr key={t.id}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{t.title}</div>
+                        <div className="muted" style={{ fontSize: 11.5 }}>
+                          {t.assignee_name || 'Unassigned'}
+                          {t.priority ? ` · ${t.priority}` : ''}
+                          {t.comments ? ` · ${t.comments} comment${t.comments > 1 ? 's' : ''}` : ''}
+                          {t.attachments ? ` · ${t.attachments} file${t.attachments > 1 ? 's' : ''}` : ''}
+                        </div>
+                      </td>
+                      <td className="muted" style={{ fontSize: 12 }}>
+                        {new Date(t.deleted_at).toLocaleDateString()}
+                        {t.deleted_by ? <><br />by {t.deleted_by}</> : null}
+                      </td>
+                      <td style={{ fontSize: 12, fontWeight: 600, color: left <= 3 ? 'var(--danger-ink)' : 'inherit' }}>
+                        {left === 0 ? 'today' : `${left} day${left > 1 ? 's' : ''}`}
+                      </td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-primary btn-sm" disabled={busyId === t.id} onClick={() => restore(t)}>
+                          {busyId === t.id ? <span className="spinner" /> : 'Restore'}
+                        </button>{' '}
+                        <button className="btn btn-sm btn-danger" disabled={busyId === t.id} onClick={() => purge(t)} title="Delete permanently now">
+                          Delete forever
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>
