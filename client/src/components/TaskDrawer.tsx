@@ -36,6 +36,9 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   // Which comment is open for editing, and the draft text while it is.
   const [editingComment, setEditingComment] = useState<string | null>(null)
   const [commentDraft, setCommentDraft] = useState('')
+  // Which comment's ⋯ menu is open. Same pattern as the chat message menu,
+  // reusing its classes so the two read as the same control.
+  const [commentMenu, setCommentMenu] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [pendingAssignee, setPendingAssignee] = useState('')
   // A status the user has picked but not yet confirmed — applied only on "Accept".
@@ -71,6 +74,18 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
     setDragProgress(null); pendingProgress.current = null; draggingRef.current = false
   }, [taskId])
   useEffect(() => () => { if (progressTimer.current) clearTimeout(progressTimer.current) }, [])
+  // Close the comment menu on any click outside it.
+  //
+  // This listens for mousedown, which fires BEFORE click — so the menu itself
+  // stops mousedown propagating (see msg-menu-wrap below). Without that the menu
+  // unmounts before its own button's onClick can fire, and Edit silently does
+  // nothing: the menu closes and no editor opens.
+  useEffect(() => {
+    if (!commentMenu) return
+    const close = () => setCommentMenu(null)
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [commentMenu])
   // Keep the member picker in sync whenever the task's current owner changes.
   useEffect(() => { setPendingAssignee(task?.assignee?.id || '') }, [task?.assignee?.id])
   // Reset the pending status whenever the saved status changes (incl. after Accept).
@@ -592,8 +607,27 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                   <div className="body" style={{ minWidth: 0 }}>
                     <div className="spread">
                       <strong style={{ fontSize: 12.5 }}>{c.user_name}</strong>
-                      <span className="muted" style={{ fontSize: 11 }}>
-                        {new Date(c.created_at).toLocaleString()}{c.edited_at ? ' · edited' : ''}
+                      <span className="row" style={{ gap: 4 }}>
+                        <span className="muted" style={{ fontSize: 11 }}>
+                          {new Date(c.created_at).toLocaleString()}{c.edited_at ? ' · edited' : ''}
+                        </span>
+                        {(mine || isManager) && !editing && (
+                          <div className="msg-menu-wrap" onMouseDown={(e) => e.stopPropagation()}>
+                            <button
+                              className="msg-tool-btn" title="Comment options" aria-label="Comment options"
+                              aria-haspopup="menu" aria-expanded={commentMenu === c.id}
+                              onClick={(e) => { e.stopPropagation(); setCommentMenu(commentMenu === c.id ? null : c.id) }}
+                            >⋯</button>
+                            {commentMenu === c.id && (
+                              <div className="msg-menu mine" role="menu" onClick={(e) => e.stopPropagation()}>
+                                {mine && (
+                                  <button role="menuitem" onClick={() => { setCommentMenu(null); setEditingComment(c.id); setCommentDraft(c.body) }}>Edit</button>
+                                )}
+                                <button className="danger" role="menuitem" onClick={() => { setCommentMenu(null); removeComment(c) }}>Delete</button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </span>
                     </div>
                     {editing ? (
@@ -607,16 +641,6 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                     ) : (
                       <>
                         <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{c.body}</div>
-                        {(mine || isManager) && (
-                          <div className="row" style={{ gap: 8, marginTop: 3 }}>
-                            {mine && (
-                              <button className="btn btn-ghost btn-sm" style={{ padding: '1px 6px', fontSize: 11.5 }}
-                                onClick={() => { setEditingComment(c.id); setCommentDraft(c.body) }}>Edit</button>
-                            )}
-                            <button className="btn btn-ghost btn-sm" style={{ padding: '1px 6px', fontSize: 11.5, color: 'var(--danger-ink)' }}
-                              disabled={busy} onClick={() => removeComment(c)}>Delete</button>
-                          </div>
-                        )}
                       </>
                     )}
                   </div>
