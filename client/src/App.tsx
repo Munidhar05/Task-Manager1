@@ -243,7 +243,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             keeps a third account reachable: with an automatic switch, tapping it
             on either account would only ever bounce between the two. */}
         <button className="sidebar-switch-m" onClick={openSwitcher}>
-          <Ic name="refresh" size={17} />
+          <Ic name="swap" size={17} />
           Switch accounts
         </button>
         <button className="sidebar-logout-m" onClick={async () => { if (await confirmLogout(otherAccounts[0]?.name)) logout() }}>
