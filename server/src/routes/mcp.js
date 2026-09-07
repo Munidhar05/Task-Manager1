@@ -97,26 +97,62 @@ const TOOLS = [
   {
     name: 'create_task',
     title: 'Create a task',
-    description: 'Create a task and assign it. Resolve the person with list_people first — a wrong assignee is not a recoverable mistake.',
+    description: "Create a task and assign it. ASK THE USER for the priority and the deadline before calling — do not guess them, and do not fall back to defaults on their behalf. This tool refuses the call if either is missing. Resolve the person with list_people first: a wrong assignee is not a recoverable mistake. If the user says they do not mind what the priority or deadline is, call again with use_defaults true.",
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string' },
         description: { type: 'string' },
         assignee_id: { type: 'string', description: 'From list_people. Omit to leave unassigned.' },
-        priority: { type: 'string', description: 'Critical | High | Medium | Low (default Medium)' },
-        due_date: { type: 'string', description: 'YYYY-MM-DD. Omitted means the app picks one from the priority.' },
+        priority: { type: 'string', description: 'Critical | High | Medium | Low. Ask the user; do not assume.' },
+        due_date: { type: 'string', description: 'YYYY-MM-DD. Ask the user; do not assume.' },
+        use_defaults: { type: 'boolean', description: "Only after the user has said they don't mind. Medium priority, deadline derived from it." },
       },
       required: ['title'],
     },
+    // Priority and deadline are enforced HERE, not just asked for in the
+    // description above.
+    //
+    // A model reads "optional with a default" as permission to proceed, so the
+    // task silently became Medium with a date nobody chose — and the first time
+    // anyone noticed was when it turned up on someone's board with the wrong
+    // urgency. A description alone does not fix that; it is advice the model may
+    // reasonably skip when it thinks it is being efficient. Refusing the call is
+    // what makes asking the only way through. `use_defaults` keeps that from
+    // becoming a dead end when the user genuinely does not care.
     run: async (call, args) => {
+      if (args.priority && !PRIORITIES.includes(args.priority)) {
+        return toolText(`"${args.priority}" is not a priority. Use one of: ${PRIORITIES.join(', ')}.`, true)
+      }
+      const missing = []
+      if (!args.priority) missing.push('the priority (Critical, High, Medium or Low)')
+      if (!args.due_date) missing.push('the deadline (a date)')
+      if (missing.length && !args.use_defaults) {
+        return toolText(
+          `Before creating this task, ask the user for ${missing.join(' and ')}. `
+          + 'Then call create_task again with the answer. If they say they do not mind, '
+          + 'call again with use_defaults true — the task becomes Medium priority with a deadline derived from it. '
+          + 'Nothing has been created yet.',
+          true,
+        )
+      }
+
       const created = await call('/api/tasks', 'POST', {
         title: args.title, description: args.description || '',
         assignee_id: args.assignee_id || null,
         priority: args.priority || 'Medium',
         ...(args.due_date ? { due_date: args.due_date } : {}),
       })
-      return toolJson({ created: true, id: created.id, title: created.title })
+      // Report what was actually stored, not what was asked for: the deadline may
+      // have been derived from the priority, and the user should hear the real one.
+      return toolJson({
+        created: true,
+        task: {
+          id: created.id, title: created.title, priority: created.priority,
+          due_date: created.due_date, status: created.status,
+          assignee: created.assignee?.name || created.assignee_name || null,
+        },
+      })
     },
   },
   {
