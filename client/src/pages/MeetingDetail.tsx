@@ -159,11 +159,11 @@ export default function MeetingDetail() {
               <div className="card section">
                 <div className="card-head"><h3>Rejected Suggestions ({rejected.length})</h3></div>
                 <div className="card-pad grid" style={{ gap: 8 }}>
-                  {restoreErr && <div style={{ color: '#ef4444', fontSize: 12.5 }}>{restoreErr}</div>}
+                  {restoreErr && <div style={{ color: 'var(--danger-ink)', fontSize: 12.5 }}>{restoreErr}</div>}
                   {rejected.map((sg) => (
-                    <div key={sg.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
+                    <div key={sg.id} className="spread" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', background: 'var(--n-50)' }}>
                       <div>
-                        <div style={{ fontWeight: 600, textDecoration: 'line-through', color: '#9c9082' }}>{sg.title}</div>
+                        <div style={{ fontWeight: 600, textDecoration: 'line-through', color: 'var(--muted)' }}>{sg.title}</div>
                         <div className="muted" style={{ fontSize: 12 }}>
                           {sg.suggested_assignee_name || sg.suggested_assignee_raw || 'No owner'} · {dueLabel(sg)}
                         </div>
@@ -433,10 +433,10 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
             // Once a row is acted on, collapse it into a compact confirmation strip.
             if (r._status === 'assigned' || r._status === 'rejected' || r._status === 'merged') {
               const label = r._status === 'assigned' ? 'Assigned & notified' : r._status === 'rejected' ? 'Rejected' : 'Merged'
-              const color = r._status === 'assigned' ? '#10b981' : r._status === 'rejected' ? '#ef4444' : '#7a6f63'
+              const color = r._status === 'assigned' ? 'var(--success-ink)' : r._status === 'rejected' ? 'var(--danger-ink)' : 'var(--muted)'
               return (
-                <div key={r.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
-                  <span style={{ fontWeight: 600, textDecoration: r._status === 'assigned' ? 'none' : 'line-through', color: r._status === 'assigned' ? 'inherit' : '#9c9082' }}>{r.title}</span>
+                <div key={r.id} className="spread" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', background: 'var(--n-50)' }}>
+                  <span style={{ fontWeight: 600, textDecoration: r._status === 'assigned' ? 'none' : 'line-through', color: r._status === 'assigned' ? 'inherit' : 'var(--muted)' }}>{r.title}</span>
                   <span className="row" style={{ gap: 10 }}>
                     <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
                     {(r._status === 'rejected' || r._status === 'merged') && (
@@ -448,7 +448,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
             }
             const busy = r._status === 'busy'
             return (
-              <div key={r.id} style={{ border: '1px solid ' + (r._error ? '#ef444466' : '#e7ddd1'), borderRadius: 10, padding: 12 }}>
+              <div key={r.id} style={{ border: '1px solid ' + (r._error ? 'var(--danger-border)' : 'var(--border)'), borderRadius: 10, padding: 12 }}>
                 <div className="grid" style={{ gap: 8 }}>
                   {/* The title is the field being edited, so it gets the width. The
                       confidence chip can't shrink (nowrap, ~190px), which on a phone
@@ -506,10 +506,10 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
             )
           })}
         </div>
-        <div className="card-pad spread" style={{ borderTop: '1px solid #eee' }}>
+        <div className="card-pad spread" style={{ borderTop: '1px solid var(--border)' }}>
           <div className="muted" style={{ fontSize: 12.5 }}>
             {assignedCount} assigned · {remaining} left{noOwnerCount ? ` · ${noOwnerCount} need an owner` : ''}
-            {bulkErr && <span style={{ color: '#ef4444', marginLeft: 8 }}>{bulkErr}</span>}
+            {bulkErr && <span style={{ color: 'var(--danger-ink)', marginLeft: 8 }}>{bulkErr}</span>}
           </div>
           <div className="row">
             <button className="btn" onClick={onClose}>{remaining === 0 ? 'Close' : 'Done'}</button>

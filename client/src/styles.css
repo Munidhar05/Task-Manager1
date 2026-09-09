@@ -2037,11 +2037,14 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .empty-state-action { margin-top: 14px; }
 
 /* Segmented List/Board toggle */
-.seg { display: inline-flex; background: rgba(16,24,40,.06); border-radius: 9px; padding: 3px; gap: 2px; }
+/* Tinted against --text, not a fixed near-black: the tray has to read as a
+   recess on a light page AND on a dark one, and rgba(16,24,40,.06) simply
+   vanishes into the dark palette's #0f1216 background. */
+.seg { display: inline-flex; background: color-mix(in srgb, var(--text) 7%, transparent); border-radius: 9px; padding: 3px; gap: 2px; }
 .seg-btn { border: none; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 5px 12px; border-radius: 7px; cursor: pointer; }
 .seg-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 /* Count riding inside a segment button ("Unreviewed AI tasks (3)"). */
-.seg-n { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: rgba(16,24,40,.10); font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; }
+.seg-n { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: color-mix(in srgb, var(--text) 14%, transparent); font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; }
 .seg-n-alert { background: var(--warning-bg); color: var(--warning-ink); }
 
 /* Quick-filter chips */
