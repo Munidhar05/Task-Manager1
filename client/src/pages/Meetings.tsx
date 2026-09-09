@@ -105,6 +105,17 @@ export default function Meetings() {
   // are still on this device, waiting in localStorage.
   const inProgress = React.useMemo(() => new Set(listReviewDrafts(user?.id || 'anon').map((d) => d.meetingId)), [user?.id])
 
+  // With no meetings, the empty state owns the whole page — so the one thing to do
+  // next belongs in the middle of it, not only in the top-right corner. Deliberately
+  // no data-va: findVaEl takes the FIRST match, and the toolbar button is the one the
+  // voice agent should go on pressing.
+  const startHere = isManager ? (
+    <div className="row" style={{ gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+      <button className="btn btn-primary" onClick={() => setShowLive(true)}>● Start meeting</button>
+      <button className="btn" onClick={() => setShowUpload(true)}>+ Upload meeting</button>
+    </div>
+  ) : undefined
+
   const del = async (m: any) => {
     if (!(await confirmDialog({ title: 'Delete meeting', message: `Delete "${m.title}" and its ${m.task_count || 0} extracted task(s)? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return
     await api.del('/meetings/' + m.id)
@@ -177,7 +188,7 @@ export default function Meetings() {
             {filter === 'unreviewed'
               ? <EmptyState icon={<Ic name="check" size={40} />} title="Every meeting has been reviewed" hint="AI suggestions from all your meetings have been assigned or dismissed."
                   action={<button className="btn btn-sm" onClick={() => setFilter('all')}>Show all meetings</button>} />
-              : <EmptyState icon={<Ic name="mic" size={40} />} title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." />}
+              : <EmptyState icon={<Ic name="mic" size={40} />} title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." action={startHere} />}
           </div>
         )}
       </div>
