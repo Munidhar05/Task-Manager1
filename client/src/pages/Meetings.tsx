@@ -9,6 +9,7 @@ import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { LANG_LABEL, EmptyState, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
+import { listReviewDrafts } from '../lib/reviewDraft'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
 
@@ -86,6 +87,24 @@ export default function Meetings() {
   useEffect(() => { load() }, [])
   const isManager = user?.role !== 'employee'
 
+  // "Unreviewed" is the whole reason this page gets opened after a meeting: the
+  // AI's tasks sit as suggestions until a person approves them, and a long
+  // meeting's queue takes long enough to work through that it routinely gets
+  // abandoned halfway. In the URL so the dashboard can link straight to it.
+  const filter = searchParams.get('filter') === 'unreviewed' ? 'unreviewed' : 'all'
+  const setFilter = (f: 'all' | 'unreviewed') => {
+    const next = new URLSearchParams(searchParams)
+    if (f === 'unreviewed') next.set('filter', 'unreviewed')
+    else next.delete('filter')
+    setSearchParams(next, { replace: true })
+  }
+  const unreviewed = meetings.filter((m) => m.pending_count > 0)
+  const shown = filter === 'unreviewed' ? unreviewed : meetings
+
+  // Meetings this person had started reviewing and never finished — the edits
+  // are still on this device, waiting in localStorage.
+  const inProgress = React.useMemo(() => new Set(listReviewDrafts(user?.id || 'anon').map((d) => d.meetingId)), [user?.id])
+
   const del = async (m: any) => {
     if (!(await confirmDialog({ title: 'Delete meeting', message: `Delete "${m.title}" and its ${m.task_count || 0} extracted task(s)? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return
     await api.del('/meetings/' + m.id)
@@ -95,7 +114,14 @@ export default function Meetings() {
   return (
     <>
       <div className="toolbar">
-        <div className="muted">{meetings.length} meeting(s) processed</div>
+        <div className="seg" role="tablist" aria-label="Filter meetings">
+          <button role="tab" aria-selected={filter === 'all'} className={'seg-btn' + (filter === 'all' ? ' active' : '')} onClick={() => setFilter('all')}>
+            All <span className="seg-n">{meetings.length}</span>
+          </button>
+          <button role="tab" aria-selected={filter === 'unreviewed'} className={'seg-btn' + (filter === 'unreviewed' ? ' active' : '')} onClick={() => setFilter('unreviewed')}>
+            Unreviewed AI tasks {unreviewed.length > 0 && <span className="seg-n seg-n-alert">{unreviewed.length}</span>}
+          </button>
+        </div>
         {isManager && (
           <div className="row meetings-actions" style={{ gap: 8 }}>
             <button data-va="meetings.startLive" className="btn btn-primary" onClick={() => setShowLive(true)}>● Start meeting</button>
@@ -104,7 +130,7 @@ export default function Meetings() {
         )}
       </div>
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
-        {meetings.map((m) => (
+        {shown.map((m) => (
           <div key={m.id} className="card clickable" onClick={() => nav('/meetings/' + m.id)}>
             <div className="card-pad">
               <div className="spread">
@@ -123,6 +149,11 @@ export default function Meetings() {
                   {m.pending_count ? <span style={{ color: '#f2622e' }}>{m.pending_count} pending review</span> : `${m.task_count} tasks`}
                 </strong>
               </div>
+              {/* An unfinished review is worth more than the pending count: it says
+                  this person already did some of the work and stopped. */}
+              {inProgress.has(m.id) && m.pending_count > 0 && (
+                <div className="mt-inprogress"><Ic name="edit" size={13} /> Your review is unfinished — tap to carry on</div>
+              )}
               {isManager && (
                 <div className="row" style={{ gap: 6, marginTop: 12 }} onClick={(e) => e.stopPropagation()}>
                   <button className="btn btn-sm row" style={{ gap: 6 }} onClick={() => setEditing(m)}><Ic name="edit" size={14} /> Edit</button>
@@ -141,9 +172,12 @@ export default function Meetings() {
               action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
           </div>
         )}
-        {loaded && !error && meetings.length === 0 && (
+        {loaded && !error && shown.length === 0 && (
           <div className="card" style={{ gridColumn: '1 / -1' }}>
-            <EmptyState icon={<Ic name="mic" size={40} />} title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." />
+            {filter === 'unreviewed'
+              ? <EmptyState icon={<Ic name="check" size={40} />} title="Every meeting has been reviewed" hint="AI suggestions from all your meetings have been assigned or dismissed."
+                  action={<button className="btn btn-sm" onClick={() => setFilter('all')}>Show all meetings</button>} />
+              : <EmptyState icon={<Ic name="mic" size={40} />} title="No meetings yet" hint="Upload or record a meeting to see the AI extract tasks automatically." />}
           </div>
         )}
       </div>

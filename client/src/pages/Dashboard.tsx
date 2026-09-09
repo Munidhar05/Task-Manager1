@@ -7,6 +7,7 @@ import TaskDrawer from '../components/TaskDrawer'
 import TaskOriginBadge, { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { presetRange, todayYmd, ReportRange, downloadManagerReport } from '../report'
 import { toast } from '../lib/toast'
+import { listReviewDrafts } from '../lib/reviewDraft'
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -52,6 +53,48 @@ function AiSuggestBanner({ overdue, onGo }: { overdue: number; onGo: () => void 
       <span className="ai-suggest-go" aria-hidden="true">›</span>
     </button>
   )
+}
+
+// Meeting tasks the AI extracted and nobody has approved yet. This is the first
+// thing a manager should see after a meeting, and — since a killed app cold-starts
+// on the dashboard, not on the screen they were interrupted on — it is also the
+// only signpost back to a review they abandoned halfway through.
+function UnreviewedBanner({ meetings, drafts, onGo }: { meetings: any[]; drafts: Set<string>; onGo: (id: string) => void }) {
+  if (!meetings.length) return null
+  const tasks = meetings.reduce((n, m) => n + (m.pending_count || 0), 0)
+  // An unfinished review outranks a merely untouched one: that manager already
+  // spent time on it, and their edits are sitting on this device waiting.
+  const resume = meetings.find((m) => drafts.has(m.id))
+  const target = resume || meetings[0]
+  return (
+    <button className="ai-suggest section" onClick={() => onGo(target.id)}>
+      <span className="ai-suggest-ic"><Ic name="ai" size={22} /></span>
+      <span className="ai-suggest-body">
+        <span className="ai-suggest-title">
+          {tasks} AI meeting task{tasks === 1 ? '' : 's'} waiting to be reviewed
+        </span>
+        <span className="ai-suggest-sub">
+          {resume
+            ? `You left “${resume.title}” half-reviewed — your edits were saved.`
+            : `From ${meetings.length} meeting${meetings.length === 1 ? '' : 's'}. Nothing is assigned until you approve it.`}
+        </span>
+      </span>
+      <span className="ai-suggest-go" aria-hidden="true">›</span>
+    </button>
+  )
+}
+
+// Meetings with suggestions still pending, plus which of them this device holds
+// unfinished edits for. Its own endpoint rather than a field on the dashboard
+// payload, so a banner about two meetings can't drag the whole dashboard
+// aggregate — or fail with it: a 500 here just hides the banner.
+function useUnreviewedMeetings(userId?: string) {
+  const [meetings, setMeetings] = useState<any[]>([])
+  useEffect(() => {
+    api.get('/meetings/pending-review').then(setMeetings).catch(() => setMeetings([]))
+  }, [])
+  const drafts = React.useMemo(() => new Set(listReviewDrafts(userId || 'anon').map((d) => d.meetingId)), [userId])
+  return { meetings, drafts }
 }
 
 // Relative "time ago" for audit rows. SQLite stores UTC as a bare "YYYY-MM-DD
@@ -427,6 +470,8 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   const datePopRef = React.useRef<HTMLDivElement>(null)
   const d = useDrawer()
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const unreviewed = useUnreviewedMeetings(user?.id)
 
   // Close the "till date" popup when clicking anywhere outside it.
   useEffect(() => {
@@ -537,6 +582,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
   return (
     <div className="pbi" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
       {toolbar}
+      <UnreviewedBanner meetings={unreviewed.meetings} drafts={unreviewed.drafts} onGo={(id) => navigate('/meetings/' + id)} />
       <AiSuggestBanner overdue={c.overdue} onGo={() => navigate('/tasks?view=overdue')} />
       <div className="pbi-kpis">
         <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#f2622e" onClick={() => navigate('/tasks')} />

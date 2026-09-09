@@ -168,6 +168,21 @@ r.get('/', (req, res) => {
   res.json(rows.map((m) => ({ ...m, detected_languages: JSON.parse(m.detected_languages || '[]'), summary: JSON.parse(m.summary_json || '{}') })))
 })
 
+// Meetings whose AI suggestions nobody has finished reviewing. Its own endpoint
+// rather than a filter over LIST because that one selects `m.*`, which drags the
+// entire raw transcript along — far too much to ship to a dashboard card that
+// wants a title and a count. Declared before '/:id' or that route swallows it.
+r.get('/pending-review', (req, res) => {
+  const rows = db.prepare(`
+    SELECT m.id, m.title, m.meeting_date, m.created_at, COUNT(s.id) AS pending_count
+    FROM meetings m JOIN suggested_tasks s ON s.meeting_id=m.id AND s.status='pending'
+    WHERE m.org_id=?
+    GROUP BY m.id
+    ORDER BY m.meeting_date DESC, m.created_at DESC
+  `).all(req.user.org_id)
+  res.json(rows)
+})
+
 // DETAIL
 r.get('/:id', (req, res) => {
   const m = db.prepare('SELECT * FROM meetings WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)

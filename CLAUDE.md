@@ -116,6 +116,14 @@ Cross-cutting UI is imperative, not context: `toast.success(...)` / `toast.error
 presentational pieces (`Ic`, `Avatar`, `Badge`, `Bar`, `Donut`, `EmptyState`, the priority /
 status / category colour maps) all live in the single `ui.tsx`.
 
+Meeting review is the one screen whose unsaved state is kept on disk. A manager works
+through a meeting's AI suggestions for minutes before assigning any of them, and a
+backgrounded WebView can be reclaimed at any point in that; `lib/reviewDraft.ts` autosaves
+their per-row edits to localStorage, `MeetingDetail` reopens the review screen on them when
+you return, and the dashboard banner + the Meetings page's "Unreviewed AI tasks" filter are
+how you find your way back after a cold start. The suggestions themselves were never at
+risk — they live server-side as `suggested_tasks.status='pending'` until someone acts.
+
 **All styling is one global `styles.css`** — no CSS modules, no styled-components, no
 Tailwind. Class names are hand-namespaced by feature (`.lb-*` leaderboard, `.fb-*` feedback,
 `.va-*` voice assistant, `.bn-*` bottom nav). Add new rules next to their feature's block.
