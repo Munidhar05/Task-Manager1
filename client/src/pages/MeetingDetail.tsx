@@ -246,7 +246,13 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
   // AI didn't capture a deadline, so the manager sees the date before assigning.
   const rowFields = (p: Suggestion): ReviewEdit => ({
     title: p.title,
-    description: p.description || '',
+    // The extractor rarely has a real description: rules.js builds title and
+    // description from the same sentence, and every LLM path falls back to
+    // `description || title` server-side. Echoing that copy into its own box
+    // just says the same thing twice, so an exact duplicate reads as empty.
+    // Nothing is lost — createTaskFromSuggestion falls back to the title again
+    // when the assigned task is created.
+    description: p.description && p.description !== p.title ? p.description : '',
     suggested_assignee_id: p.suggested_assignee_id || '',
     priority: p.priority,
     due_date: p.due_date || defaultDueDate(p.priority),
@@ -327,7 +333,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
     set(i, { _status: 'busy', _error: '' })
     try {
       await api.patch(`/meetings/suggestions/${r.id}`, {
-        title: r.title, suggested_assignee_id: r.suggested_assignee_id,
+        title: r.title, description: r.description || '', suggested_assignee_id: r.suggested_assignee_id,
         priority: r.priority, due_date: r.due_date || null,
       })
       const res = await api.post(`/meetings/${meeting.id}/assign`, { ids: [r.id] })
@@ -386,7 +392,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
     try {
       for (const r of targets) {
         await api.patch(`/meetings/suggestions/${r.id}`, {
-          title: r.title, suggested_assignee_id: r.suggested_assignee_id,
+          title: r.title, description: r.description || '', suggested_assignee_id: r.suggested_assignee_id,
           priority: r.priority, due_date: r.due_date || null,
         })
       }
@@ -454,6 +460,15 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
                       <AutoTextarea value={r.title} onChange={(e) => set(i, { title: e.target.value })} className="rv-title" />
                     </div>
                     <div className="rv-conf"><ConfidenceScore score={r.confidence} /></div>
+                  </div>
+                  <div>
+                    <label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+                    <AutoTextarea
+                      value={r.description || ''}
+                      onChange={(e) => set(i, { description: e.target.value })}
+                      placeholder="Optional — add any detail the title doesn't already carry."
+                      style={{ width: '100%' }}
+                    />
                   </div>
                   <div className="grid grid-3" style={{ gap: 8 }}>
                     <div>

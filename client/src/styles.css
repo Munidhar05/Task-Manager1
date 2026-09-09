@@ -2246,6 +2246,16 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .search-active-clear { border: none; background: transparent; color: var(--primary); font-size: 14px; line-height: 1; cursor: pointer; padding: 9px 11px 9px 6px; flex-shrink: 0; }
 .search-active-clear:hover { color: var(--primary-dark); }
 .meetings-actions { margin-left: auto; } /* right-aligned on desktop; centered on phones (see below) */
+/* Recorder transport. Green means capturing, red means stopping — the pair a
+   person checks at a glance mid-meeting, from across a table, often on a dark
+   screen. Solid fills rather than the app's quiet outline .btn-danger, which
+   is red TEXT on a pale button and all but disappears in the dark theme.
+   Their own classes, not a change to .btn-danger, because every Delete in the
+   app is deliberately that quiet outline and should stay that way. */
+.btn-rec-start { background: linear-gradient(135deg, #10b981, #059669); color: #fff; border-color: #059669; box-shadow: 0 2px 7px rgba(16,185,129,.30); }
+.btn-rec-start:hover:not(:disabled) { background: linear-gradient(135deg, #059669, #047857); border-color: #047857; color: #fff; }
+.btn-rec-stop { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; border-color: #dc2626; box-shadow: 0 2px 7px rgba(239,68,68,.30); }
+.btn-rec-stop:hover:not(:disabled) { background: linear-gradient(135deg, #dc2626, #b91c1c); border-color: #b91c1c; color: #fff; }
 /* A review this device holds unfinished edits for — see lib/reviewDraft.ts. */
 .mt-inprogress { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 7px 10px; border-radius: 8px; background: var(--warning-bg); color: var(--warning-ink); font-size: 12.5px; font-weight: 600; }
 /* Banner at the top of Review & Assign after edits are restored from disk. */

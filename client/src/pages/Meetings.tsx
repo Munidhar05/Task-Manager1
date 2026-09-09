@@ -870,14 +870,14 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           )}
           <div className="row" style={{ gap: 10 }}>
             {!recording ? (
-              <button data-va="meetings.live.record" className="btn btn-primary" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
+              <button data-va="meetings.live.record" className="btn btn-rec-start" onClick={start} disabled={mode === 'browser' && !browserSupported}>● Start recording</button>
             ) : paused ? (
               <>
-                <button data-va="meetings.live.resume" className="btn btn-primary" onClick={resumeRecording}>▶ Resume meeting</button>
-                <button data-va="meetings.live.stop" className="btn btn-danger" onClick={stop}>■ Stop</button>
+                <button data-va="meetings.live.resume" className="btn btn-rec-start" onClick={resumeRecording}>▶ Resume meeting</button>
+                <button data-va="meetings.live.stop" className="btn btn-rec-stop" onClick={stop}>■ Stop</button>
               </>
             ) : (
-              <button data-va="meetings.live.stop" className="btn btn-danger" onClick={stop}>■ Stop</button>
+              <button data-va="meetings.live.stop" className="btn btn-rec-stop" onClick={stop}>■ Stop</button>
             )}
             {recording && !paused && transcribing && <span className="spinner" />}
           </div>
