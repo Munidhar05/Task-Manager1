@@ -3,8 +3,10 @@ import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'reac
 import { Capacitor } from '@capacitor/core'
 import { useAuth } from './auth'
 import { confirmLogout } from './lib/confirm'
+import { savedAccounts, SavedAccount } from './accounts'
 import { runBackHandlers } from './back'
-import { api, userAvatarUrl } from './api'
+import { useEscape } from './lib/useEscape'
+import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
@@ -13,6 +15,7 @@ import FeedbackButton from './components/FeedbackButton'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
+import QuickInvite from './components/QuickInvite'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import AcceptInvite from './pages/AcceptInvite'
@@ -29,6 +32,9 @@ import Leaderboard from './pages/Leaderboard'
 import Admin from './pages/Admin'
 import Platform from './pages/Platform'
 import PrivacyPolicy from './pages/PrivacyPolicy'
+import Landing from './pages/Landing'
+import JoinWorkspace from './pages/JoinWorkspace'
+import InviteTeam from './pages/InviteTeam'
 
 // Clean line-style sidebar icons (inherit currentColor, so they turn white when active).
 const Icon = ({ children }: { children: React.ReactNode }) => (
@@ -85,7 +91,12 @@ function syncAgo(ts: number) {
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth()
+  const { user, logout, switchTo, addAccount } = useAuth()
+  // Everyone signed in on this device except whoever is active.
+  const otherAccounts = savedAccounts().filter((a) => a.id !== user?.id)
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  // Nothing to choose between on the first run — go straight to signing in.
+  const openSwitcher = () => { if (otherAccounts.length === 0) addAccount(); else setSwitcherOpen(true) }
   const [showProfile, setShowProfile] = useState(false)
   // The sidebar's "More" list. `profileSection` is which settings screen a click
   // asked for, so the modal can open straight onto it instead of showing its own
@@ -94,6 +105,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   const [profileSection, setProfileSection] = useState<SectionId | undefined>(undefined)
   const openProfileAt = (id: SectionId) => { setProfileSection(id); setShowProfile(true); setOpen(false) }
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showInvite, setShowInvite] = useState(false)
   const loc = useLocation()
   // No explicit in-app back button: Android handles "back" via the hardware
   // button / swipe gesture (see useAndroidBackButton), and browsers have their own.
@@ -149,6 +161,25 @@ function Layout({ children }: { children: React.ReactNode }) {
             </NavLink>
           ))}
 
+          {/* Invite lives here, not in NAV: NAV also feeds the mobile bottom bar
+              via slice(), so a new row there would silently push an existing tab
+              out of the thumb zone. Managers only — POST /invites refuses
+              employees, and a button that always fails is worse than no button. */}
+          {user.role !== 'employee' && !user.workspace_personal && (
+            <button
+              type="button"
+              className="nav-invite"
+              onClick={(e) => { e.stopPropagation(); setOpen(false); setShowInvite(true) }}
+              title="Invite someone to this workspace"
+            >
+              <span className="nav-icon">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M19 8v6M22 11h-6" />
+                </svg>
+              </span>Invite people
+            </button>
+          )}
+
           {/* Settings live under the nav rather than only behind the avatar: the
               rail had the room, and "where do I change my password" is a question
               the menu should answer without a hunt. Collapsed by default so the
@@ -170,7 +201,7 @@ function Layout({ children }: { children: React.ReactNode }) {
                   <span className="nav-icon"><Ic name={s.icon} size={15} /></span>{s.label}
                 </button>
               ))}
-              <button className="nav-sub-item nav-sub-logout" onClick={async () => { if (await confirmLogout()) logout() }}>
+              <button className="nav-sub-item nav-sub-logout" onClick={async () => { if (await confirmLogout(otherAccounts[0]?.name)) logout() }}>
                 <span className="nav-icon">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 3v9" /><path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
@@ -201,7 +232,21 @@ function Layout({ children }: { children: React.ReactNode }) {
             — the only route was the top-bar avatar into Profile › Security. The
             drawer stays open behind the confirmation, which sits above it, so a
             cancel leaves you exactly where you were. */}
-        <button className="sidebar-logout-m" onClick={async () => { if (await confirmLogout()) logout() }}>
+        {/* Sits directly above Log out, as its own top-level action rather than
+            buried in More: it is the same kind of thing as logging out — about
+            WHO is using the app, not about a setting.
+
+            One entry, three behaviours, so the label is always honest:
+              no other account  → straight to sign-in; there is nothing to switch to
+              one or more       → a sheet to pick from, plus adding another
+            The sheet rather than an instant switch on a single account is what
+            keeps a third account reachable: with an automatic switch, tapping it
+            on either account would only ever bounce between the two. */}
+        <button className="sidebar-switch-m" onClick={openSwitcher}>
+          <Ic name="swap" size={17} />
+          Switch accounts
+        </button>
+        <button className="sidebar-logout-m" onClick={async () => { if (await confirmLogout(otherAccounts[0]?.name)) logout() }}>
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 3v9" />
             <path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
@@ -287,6 +332,14 @@ function Layout({ children }: { children: React.ReactNode }) {
       </nav>
       {/* The section is cleared on close, so opening from the avatar next time
           lands on the menu rather than wherever the sidebar last sent you. */}
+      {switcherOpen && (
+        <AccountSwitcher
+          accounts={otherAccounts}
+          onPick={(id) => switchTo(id)}
+          onAdd={addAccount}
+          onClose={() => setSwitcherOpen(false)}
+        />
+      )}
       {showProfile && (
         <ProfileModal
           initialSection={profileSection}
@@ -297,6 +350,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       {/* Corner feedback tab — hidden while the modal is open so it isn't behind it. */}
       {!showFeedback && <FeedbackButton onClick={() => setShowFeedback(true)} />}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
+      {showInvite && <QuickInvite onClose={() => setShowInvite(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />
     </div>
@@ -360,6 +414,50 @@ function Home() {
   return <Dashboard />
 }
 
+const RouteSpinner = () => (
+  <div style={{ display: 'grid', placeItems: 'center', height: '100vh' }}><span className="spinner" /></div>
+)
+
+// "/" is two different pages depending on who is asking. Signed in, it's the
+// dashboard. Signed OUT it is the public welcome page — not a bounce to the login
+// form, because a first-time visitor arriving at the bare domain has no idea what
+// VoTask is yet, and a password box doesn't tell them. Deep links into the app
+// (/tasks, /chats, …) still go to /login via Protected: those visitors already
+// know where they were headed.
+//
+// Both gates wait for `loading` rather than reading `user` alone, or a returning
+// user with a stored token would see the marketing page flash before /auth/me
+// resolves them into the app.
+function HomeRoute() {
+  const { user, loading } = useAuth()
+  if (loading) return <RouteSpinner />
+  if (!user) return <Landing />
+  return <Protected><Home /></Protected>
+}
+
+// The step shown straight after creating a company workspace.
+//
+// Gated on the TOKEN rather than the resolved user, because two separate races
+// otherwise bounce it to /login and from there to "/": a cold load starts with
+// user=null while /auth/me is still in flight, and arriving from signup can
+// render once with the new location before the new user has propagated. The
+// token is written synchronously by signup() and login(), so it is true the
+// instant either succeeds and needs no React state to have settled.
+function InviteTeamRoute() {
+  const { loading } = useAuth()
+  if (loading) return <RouteSpinner />
+  if (!getToken()) return <Navigate to="/login" replace />
+  return <InviteTeam />
+}
+
+// The same page under its own stable URL, so the login/signup screens (and any
+// link someone shares) have something to point back at.
+function WelcomeRoute() {
+  const { user, loading } = useAuth()
+  if (loading) return <RouteSpinner />
+  return user ? <Navigate to="/" replace /> : <Landing />
+}
+
 // Make the Android hardware back button step back through the app (close an open
 // panel/modal, then go back a screen) instead of quitting the app outright.
 function useAndroidBackButton() {
@@ -396,7 +494,13 @@ export default function App() {
       <Route path="/reset-password" element={user ? <Navigate to="/" replace /> : <ResetPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
-      <Route path="/" element={<Protected><Home /></Protected>} />
+      <Route path="/welcome" element={<WelcomeRoute />} />
+      <Route path="/join" element={<JoinWorkspace />} />
+      <Route path="/join/:code" element={<JoinWorkspace />} />
+      {/* Signed IN, but outside Layout: the step right after signup should be a
+          focused screen, not the app chrome with an empty dashboard behind it. */}
+      <Route path="/invite-team" element={<InviteTeamRoute />} />
+      <Route path="/" element={<HomeRoute />} />
       <Route path="/my-tasks" element={<Protected roles={['manager']}><Tasks personal /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
       <Route path="/chats" element={<Protected><Chats /></Protected>} />
@@ -409,5 +513,53 @@ export default function App() {
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
     </>
+  )
+}
+
+// The account chooser behind "Switch accounts".
+//
+// Deliberately a sheet even when there is only one other account, rather than an
+// instant switch. An instant switch reads better for exactly two accounts and then
+// traps you: tapping it from either side only ever bounces between the pair, and
+// there is no way left to add a third. The sheet costs one tap and keeps the door
+// open — with three accounts it lists three, with four, four.
+function AccountSwitcher({ accounts, onPick, onAdd, onClose }: {
+  accounts: SavedAccount[]
+  onPick: (id: string) => void
+  onAdd: () => void
+  onClose: () => void
+}) {
+  useEscape(onClose)
+  return (
+    <div className="modal-center" onClick={onClose}>
+      <div className="modal acct-switch" role="dialog" aria-modal="true" aria-label="Switch accounts"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="card-head spread">
+          <h3 style={{ fontSize: 16 }}>Switch accounts</h3>
+          <button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="card-pad" style={{ display: 'grid', gap: 6 }}>
+          {accounts.map((a) => (
+            <button key={a.id} className="acct-switch-row" onClick={() => onPick(a.id)}>
+              <Avatar name={a.name} color={a.avatar_color} size={34}
+                src={a.avatar_file ? userAvatarUrl(a.id, a.avatar_file) : undefined} />
+              <span className="acct-switch-meta">
+                <span className="acct-switch-name">{a.name}</span>
+                <span className="muted acct-switch-mail">{a.email}</span>
+              </span>
+              <span className="acct-switch-chev">›</span>
+            </button>
+          ))}
+          <button className="acct-switch-row acct-switch-add" onClick={onAdd}>
+            <span className="acct-switch-plus"><Ic name="plus" size={17} /></span>
+            <span className="acct-switch-meta">
+              <span className="acct-switch-name">Add another account</span>
+              <span className="muted acct-switch-mail">Stay signed in here and sign in as someone else</span>
+            </span>
+            <span className="acct-switch-chev">›</span>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

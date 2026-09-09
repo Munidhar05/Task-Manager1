@@ -214,6 +214,25 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_devtok_user ON device_tokens(user_id);
 
+  -- Requests to join an org via its shareable link / org code. Deliberately NOT
+  -- rows in the users table: a pending person must be invisible to every existing
+  -- query (dashboards, assignee pickers, chat, leaderboard, RAG retrieval), and a
+  -- users.status column would have meant auditing every one of them to add a
+  -- filter. Nothing here becomes a user until a manager approves, at which point
+  -- the row is replayed into users with the password they already chose.
+  CREATE TABLE IF NOT EXISTS join_requests (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | denied
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT,
+    FOREIGN KEY (org_id) REFERENCES organizations(id)
+  );
+
   CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -413,6 +432,10 @@ export function initSchema() {
     FOREIGN KEY (org_id) REFERENCES organizations(id)
   );
   CREATE INDEX IF NOT EXISTS idx_invites_org ON invites(org_id, status);
+  CREATE INDEX IF NOT EXISTS idx_join_requests_org ON join_requests(org_id, status);
+  -- One live request per person per org; a denied or approved one may be retried.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_join_requests_pending
+    ON join_requests(org_id, email) WHERE status = 'pending';
 
   -- Single-use, expiring tokens for "forgot password".
   CREATE TABLE IF NOT EXISTS password_resets (
@@ -493,6 +516,62 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_fbev_org ON feedback_events(org_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_fbev_user ON feedback_events(user_id);
+
+  -- Long-lived API keys: how something that is not a browser reaches this API.
+  -- A JWT comes from a password login and expires; an agent, a script or a CI job
+  -- has no password to type and no session to refresh, so it carries one of these.
+  --
+  -- A key IS a user: it inherits the role and org of whoever minted it and can do
+  -- no more than they can. That is the whole permission model — there are no key
+  -- scopes, because a half-understood scope system reads as a safety guarantee it
+  -- does not provide. Give a key to a tool you would give your own login to.
+  --
+  -- Only the SHA-256 of the token is stored. The plaintext is shown once, at
+  -- creation, and is unrecoverable afterwards; the prefix column exists so a key
+  -- can be recognized in a list without being able to reconstruct it.
+  CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,                   -- the key acts as this user
+    name TEXT NOT NULL,                      -- "Claude Code on my laptop"
+    prefix TEXT NOT NULL,                    -- first few chars, for identification
+    token_hash TEXT NOT NULL UNIQUE,         -- sha256(token), hex
+    last_used_at TEXT,
+    expires_at TEXT,                         -- null = no expiry
+    revoked_at TEXT,                         -- set instead of deleting, so the
+                                             -- audit trail keeps the whole story
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(token_hash);
+  CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id, revoked_at);
+
+  -- Recycle bin. A deleted task is MOVED here rather than flagged in place.
+  --
+  -- The obvious design is a deleted_at column plus "AND deleted_at IS NULL" on
+  -- every read. There are ~70 places that query tasks — dashboards, the digest,
+  -- the leaderboard, RAG indexing, the voice agent's snapshot — and missing one
+  -- means a deleted task quietly reappears in someone's numbers. Moving the row
+  -- out makes that impossible: it is not in the table, so nothing can find it,
+  -- and not one existing query has to change.
+  --
+  -- The cost is that restore must put back what the FK cascade took with it, so
+  -- the payload column snapshots the task, its subtasks, comments, attachments
+  -- and dependencies as JSON. Attachment FILES stay on disk until the purge —
+  -- that is the one place where deleting early would make "recoverable" a lie.
+  CREATE TABLE IF NOT EXISTS deleted_tasks (
+    id TEXT PRIMARY KEY,                     -- the original task id; restore is idempotent
+    org_id TEXT NOT NULL,
+    title TEXT NOT NULL,                     -- listed without parsing the payload
+    assignee_name TEXT,
+    deleted_by TEXT NOT NULL,
+    deleted_by_name TEXT,
+    deleted_at TEXT NOT NULL,
+    purge_after TEXT NOT NULL,               -- deleted_at + RECOVERY_DAYS
+    payload TEXT NOT NULL                    -- JSON snapshot; see restore in routes/tasks.js
+  );
+  CREATE INDEX IF NOT EXISTS idx_deleted_tasks_org ON deleted_tasks(org_id, deleted_at);
+  CREATE INDEX IF NOT EXISTS idx_deleted_tasks_purge ON deleted_tasks(purge_after);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.
@@ -516,6 +595,17 @@ export function initSchema() {
   // month default. Set/cleared by managers via PUT /api/scores/range.
   ensureColumn('organizations', 'leaderboard_from', 'TEXT')
   ensureColumn('organizations', 'leaderboard_to', 'TEXT')
+
+  // Shareable join link / org code. Off by default: switching it on is a
+  // deliberate act, because it opens a second door into an org that until now
+  // could only be entered by per-person invite.
+  ensureColumn('organizations', 'join_code', 'TEXT')
+  ensureColumn('organizations', 'join_enabled', 'INTEGER DEFAULT 0')
+  ensureColumn('organizations', 'join_role', "TEXT DEFAULT 'employee'")
+  ensureColumn('organizations', 'join_expires_at', 'TEXT')
+  // Created AFTER the ensureColumn calls above, or a database predating those
+  // columns fails to boot on this line.
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_org_join_code ON organizations(join_code) WHERE join_code IS NOT NULL;")
   ensureColumn('users', 'email_verified', 'INTEGER DEFAULT 0')
   // Feedback prompt tags — the chips picked under "What do you like most?" (4-5★)
   // or "What could we improve?" (1-3★). A JSON array of labels, NULL when none
@@ -540,6 +630,15 @@ export function initSchema() {
   // auto-detected from the task text. NULL = Uncategorized. See categories.js.
   ensureColumn('tasks', 'category', 'TEXT')
   ensureColumn('suggested_tasks', 'category', 'TEXT')
+  // What an API key is allowed to be: 'full' is a REST credential sent in an
+  // Authorization header; 'mcp' is a Claude connector key, which by necessity
+  // travels inside a URL and is therefore refused everywhere except /mcp. If a
+  // connector URL leaks out of a log, the finder gets the eight curated MCP
+  // tools rather than the whole API.
+  ensureColumn('api_keys', 'scope', "TEXT DEFAULT 'full'")
+  // A comment that can be changed after the fact needs to say so, or the record
+  // of who agreed to what silently stops being a record.
+  ensureColumn('task_comments', 'edited_at', 'TEXT')
   // Reassignment trail. Changing assignee_id overwrites the previous owner in
   // place, so without these a reassigned task is indistinguishable from one that
   // was assigned directly, and the person it was taken from leaves no trace.

@@ -133,11 +133,11 @@ export default function UserManagement() {
 
 // Invite a teammate by email. Shows the resulting accept-link so the manager can
 // copy/share it directly — essential when SMTP isn't configured (preview mode).
-function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
+export function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState<any>({ email: '', role: 'employee', department_id: '' })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [result, setResult] = useState<{ link: string; emailed: boolean } | null>(null)
+  const [result, setResult] = useState<{ link: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const roleOptions = isAdmin ? ['employee', 'manager', 'admin'] : ['employee', 'manager']
 
@@ -148,7 +148,7 @@ function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin
     setBusy(true)
     try {
       const r = await api.post('/invites', { email, role: f.role, department_id: f.department_id || null })
-      setResult({ link: r.link, emailed: r.emailed })
+      setResult({ link: r.link })
       onDone()
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -164,10 +164,8 @@ function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin
         <div className="card-pad grid" style={{ gap: 12 }}>
           {result ? (
             <>
-              <div className="muted" style={{ fontSize: 13.5, lineHeight: 1.5, background: result.emailed ? '#ecfdf5' : '#fffbeb', border: `1px solid ${result.emailed ? '#a7f3d0' : '#fde68a'}`, borderRadius: 8, padding: '12px 14px' }}>
-                {result.emailed
-                  ? 'Invitation emailed. They can also use the link below.'
-                  : 'Invitation created. Email isn’t configured, so copy this link and share it directly:'}
+              <div className="inv-ready">
+                Invitation ready. Send them this link — it sets their password and puts them straight in.
               </div>
               <div className="row" style={{ gap: 8 }}>
                 <input readOnly value={result.link} style={{ flex: 1 }} onFocus={(e) => e.currentTarget.select()} />

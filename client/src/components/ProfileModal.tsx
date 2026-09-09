@@ -6,6 +6,7 @@ import { WALLPAPERS, getWallpaperId, applyWallpaper } from '../lib/wallpaper'
 import { THEME_OPTIONS, ThemeChoice, getThemeChoice, applyTheme, resolveTheme } from '../lib/theme'
 import { useEscape } from '../lib/useEscape'
 import { confirmDialog, confirmLogout } from '../lib/confirm'
+import { savedAccounts } from '../accounts'
 
 // The profile hub, one concern per screen. It used to be a single column that
 // ran photo -> name -> wallpaper -> password -> feedback in one scroll, so
@@ -55,7 +56,9 @@ const when = (raw?: string) => {
 }
 
 export default function ProfileModal({ onClose, onFeedback, initialSection }: { onClose: () => void; onFeedback?: () => void; initialSection?: SectionId }) {
-  const { user, refresh, logout } = useAuth()
+  const { user, refresh, logout, switchTo, addAccount } = useAuth()
+  // Everyone signed in on this device except whoever is active right now.
+  const others = savedAccounts().filter((a) => a.id !== user?.id)
   useEscape(onClose)
 
   // Opened from the sidebar's "More" list, the section is already chosen — land on
@@ -408,7 +411,37 @@ export default function ProfileModal({ onClose, onFeedback, initialSection }: { 
                 want one tap from opening the profile. On a phone the menu is the
                 first screen, so it is visible immediately; on desktop the menu is
                 always on screen, so it stays reachable from every section. */}
-            <button className="pf-nav-item pf-nav-logout" onClick={async () => { if (await confirmLogout()) { onClose(); logout() } }}>
+            {/* Accounts already signed in on this device. Shown above Log out
+                because "I want to be someone else" is usually what is meant when
+                someone reaches for logging out — offering the cheaper action first
+                saves a password. */}
+            {others.length > 0 && (
+              <div className="pf-nav-accounts">
+                <div className="pf-nav-accounts-label">Switch account</div>
+                {others.map((a) => (
+                  <button key={a.id} className="pf-nav-item" onClick={() => { onClose(); switchTo(a.id) }}>
+                    <span className="pf-nav-ic">
+                      <Avatar name={a.name} color={a.avatar_color} size={22}
+                        src={a.avatar_file ? userAvatarUrl(a.id, a.avatar_file) : undefined} />
+                    </span>
+                    <span className="pf-nav-text">
+                      <span className="pf-nav-label">{a.name}</span>
+                      <span className="muted pf-nav-hint">{a.email}</span>
+                    </span>
+                    <span className="pf-nav-chev">›</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button className="pf-nav-item" onClick={() => { onClose(); addAccount() }}>
+              <span className="pf-nav-ic"><Ic name="plus" size={17} /></span>
+              <span className="pf-nav-text">
+                <span className="pf-nav-label">Add another account</span>
+                <span className="muted pf-nav-hint">Stay signed in here and sign in as someone else</span>
+              </span>
+              <span className="pf-nav-chev">›</span>
+            </button>
+            <button className="pf-nav-item pf-nav-logout" onClick={async () => { if (await confirmLogout(others[0]?.name)) { onClose(); logout() } }}>
               <span className="pf-nav-ic">
                 <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 3v9" />

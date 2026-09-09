@@ -1,52 +1,117 @@
 import React, { useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, API_BASE } from '../api'
+import { useAuth } from '../auth'
 import { Stat, Badge } from '../ui'
 import UserManagement from '../components/UserManagement'
+import JoinLink from '../components/JoinLink'
 import FeedbackReviews from '../components/FeedbackReviews'
 import { toast } from '../lib/toast'
+import { confirmDialog } from '../lib/confirm'
 import { useSurface } from '../voice/uiRegistry'
 import { flashPress, pause, findVaEl } from '../voice/uiController'
 
 // Manage which email domains may join this organization. Empty = any domain.
+// Who is allowed into this workspace.
+//
+// This was a bare list of domains with "leave empty to allow any" as the only
+// hint — so the real question (is this workspace open or closed?) was implied by
+// whether a box happened to be empty. Worse, signup silently seeds the list with
+// the founder's own email domain, so a workspace arrives locked to a domain
+// nobody chose and the first invite fails with a message about a rule the
+// manager never set.
+//
+// It is now the either/or it always was, stated outright, with the domain list
+// as detail of the closed option rather than the whole interface.
 function AllowedDomains() {
+  const { user } = useAuth()
   const [domains, setDomains] = useState<string[]>([])
+  const [mode, setMode] = useState<'any' | 'restricted'>('any')
   const [input, setInput] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
+
   useEffect(() => {
-    api.get('/users/meta/org').then((d) => { setDomains(d.allowed_domains || []); setLoaded(true) }).catch(() => setLoaded(true))
+    api.get('/users/meta/org').then((d) => {
+      const list = d.allowed_domains || []
+      setDomains(list)
+      setMode(list.length ? 'restricted' : 'any')
+      setLoaded(true)
+    }).catch(() => setLoaded(true))
   }, [])
+
   const add = () => {
     const d = input.trim().toLowerCase().replace(/^@/, '')
     if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) { toast.error('Enter a valid domain, e.g. acme.com'); return }
     if (!domains.includes(d)) setDomains([...domains, d])
     setInput('')
   }
+
+  // Switching to "restricted" with nothing listed would save an empty list and
+  // silently mean the opposite, so seed it with the signed-in manager's own
+  // domain — the one they almost certainly mean.
+  const pick = (m: 'any' | 'restricted') => {
+    setMode(m)
+    if (m === 'restricted' && domains.length === 0) {
+      const own = (user?.email || '').split('@')[1]
+      if (own) setDomains([own.toLowerCase()])
+    }
+  }
+
   const save = async () => {
+    if (mode === 'restricted' && domains.length === 0) {
+      toast.error('Add at least one domain, or choose "Anyone".')
+      return
+    }
     setSaving(true)
     try {
-      const r = await api.patch('/users/meta/org', { allowed_domains: domains })
-      setDomains(r.allowed_domains || []); toast.success('Allowed domains saved.')
+      // "any" sends an empty list — that IS how the server stores no restriction.
+      const r = await api.patch('/users/meta/org', { allowed_domains: mode === 'any' ? [] : domains })
+      const list = r.allowed_domains || []
+      setDomains(list)
+      setMode(list.length ? 'restricted' : 'any')
+      toast.success(list.length ? `Only ${list.join(', ')} can join.` : 'Anyone can be invited now.')
     } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
   }
+
+  if (!loaded) return null
+
   return (
     <div className="card section">
-      <div className="card-head"><h3>Allowed email domains</h3></div>
-      <div className="card-pad" style={{ display: 'grid', gap: 12 }}>
-        <div className="muted" style={{ fontSize: 12.5 }}>
-          Only these domains can be invited or added to your organization (members still verify their email).
-          Leave empty to allow any domain.
-        </div>
-        <div className="domain-chips">
-          {loaded && domains.length === 0 && <span className="muted" style={{ fontSize: 13 }}>No restriction — any domain is allowed.</span>}
-          {domains.map((d) => (
-            <span key={d} className="domain-chip">{d}<button onClick={() => setDomains(domains.filter((x) => x !== d))} aria-label={`Remove ${d}`}>✕</button></span>
-          ))}
-        </div>
-        <div className="row" style={{ gap: 8 }}>
-          <input placeholder="acme.com" value={input} onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} style={{ maxWidth: 240 }} />
-          <button className="btn btn-sm" onClick={add}>+ Add domain</button>
+      <div className="card-head"><h3>Who can join this workspace</h3></div>
+      <div className="card-pad" style={{ display: 'grid', gap: 14 }}>
+        <label className={'dom-opt' + (mode === 'any' ? ' on' : '')}>
+          <input type="radio" name="domain-policy" checked={mode === 'any'} onChange={() => pick('any')} />
+          <span>
+            <b>Anyone you invite</b>
+            <span className="dom-hint">Any email address can be invited or use the join link. Best when your team uses personal addresses.</span>
+          </span>
+        </label>
+
+        <label className={'dom-opt' + (mode === 'restricted' ? ' on' : '')}>
+          <input type="radio" name="domain-policy" checked={mode === 'restricted'} onChange={() => pick('restricted')} />
+          <span>
+            <b>Only our own email domains</b>
+            <span className="dom-hint">Everyone else is refused, even with a valid invite or join code.</span>
+          </span>
+        </label>
+
+        {mode === 'restricted' && (
+          <div className="dom-detail">
+            <div className="domain-chips">
+              {domains.map((d) => (
+                <span key={d} className="domain-chip">{d}<button onClick={() => setDomains(domains.filter((x) => x !== d))} aria-label={`Remove ${d}`}>✕</button></span>
+              ))}
+              {domains.length === 0 && <span className="muted" style={{ fontSize: 13 }}>Add at least one domain below.</span>}
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 10 }}>
+              <input placeholder="acme.com" value={input} onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} style={{ maxWidth: 240 }} />
+              <button className="btn btn-sm" onClick={add}>+ Add domain</button>
+            </div>
+          </div>
+        )}
+
+        <div className="row">
           <button className="btn btn-primary btn-sm" onClick={save} disabled={saving} style={{ marginLeft: 'auto' }}>
             {saving ? <span className="spinner" /> : 'Save'}
           </button>
@@ -56,14 +121,14 @@ function AllowedDomains() {
   )
 }
 
-type AdminTab = 'overview' | 'users' | 'audit' | 'usage' | 'feedback'
+type AdminTab = 'overview' | 'users' | 'audit' | 'keys' | 'usage' | 'feedback'
 
 export default function Admin() {
   // The feedback modal deep-links here with ?tab=feedback, so the initial tab
   // comes from the URL when it names a real one.
   const [tab, setTab] = useState<AdminTab>(() => {
     const want = new URLSearchParams(window.location.search).get('tab')
-    return (['overview', 'users', 'audit', 'usage', 'feedback'] as const).includes(want as AdminTab)
+    return (['overview', 'users', 'audit', 'keys', 'usage', 'feedback'] as const).includes(want as AdminTab)
       ? (want as AdminTab) : 'overview'
   })
   // The Usage tab appears only if the platform admin granted this org access.
@@ -91,12 +156,14 @@ export default function Admin() {
         <button className={'btn btn-sm' + (tab === 'overview' ? ' btn-primary' : '')} data-va="admin.tab.overview" onClick={() => setTab('overview')}>Overview</button>
         <button className={'btn btn-sm' + (tab === 'users' ? ' btn-primary' : '')} data-va="admin.tab.users" onClick={() => setTab('users')}>User Management</button>
         <button className={'btn btn-sm' + (tab === 'audit' ? ' btn-primary' : '')} data-va="admin.tab.audit" onClick={() => setTab('audit')}>Audit Log</button>
+        <button className={'btn btn-sm' + (tab === 'keys' ? ' btn-primary' : '')} data-va="admin.tab.keys" onClick={() => setTab('keys')}>API Keys</button>
         <button className={'btn btn-sm' + (tab === 'feedback' ? ' btn-primary' : '')} data-va="admin.tab.feedback" onClick={() => setTab('feedback')}>Feedback</button>
         {usageAllowed && <button className={'btn btn-sm' + (tab === 'usage' ? ' btn-primary' : '')} data-va="admin.tab.usage" onClick={() => setTab('usage')}>AI Usage</button>}
       </div>
       {tab === 'overview' && <Overview />}
-      {tab === 'users' && <><AllowedDomains /><UserManagement /></>}
+      {tab === 'users' && <><AllowedDomains /><JoinLink /><UserManagement /></>}
       {tab === 'audit' && <Audit />}
+      {tab === 'keys' && <ApiKeys />}
       {tab === 'feedback' && <Feedback />}
       {tab === 'usage' && usageAllowed && <UsagePanel data={usage} />}
     </>
@@ -198,6 +265,148 @@ function Feedback() {
       <div className="card-head"><h3>App feedback</h3></div>
       <div className="card-pad fb-admin">
         <FeedbackReviews />
+      </div>
+    </div>
+  )
+}
+
+// API keys — the credential something that is not a browser uses to reach the API.
+//
+// The plaintext exists in exactly one place for a few seconds: this component's
+// state, right after creation. It is never fetched again, because the server only
+// keeps a hash — so the copy box is not a convenience, it is the only chance.
+function ApiKeys() {
+  const [keys, setKeys] = useState<any[]>([])
+  const [name, setName] = useState('')
+  const [expiry, setExpiry] = useState('')
+  const [scope, setScope] = useState<'full' | 'mcp'>('mcp')
+  const [busy, setBusy] = useState(false)
+  const [fresh, setFresh] = useState<string>('')   // shown once, never re-fetchable
+  const [copied, setCopied] = useState(false)
+  const [copiedUrl, setCopiedUrl] = useState(false)
+  const [freshScope, setFreshScope] = useState<'full' | 'mcp'>('mcp')
+  // In dev API_BASE is empty (Vite proxies), but a connector is reached from
+  // Anthropic's cloud — so it must be an absolute, publicly resolvable origin.
+  const connectorUrl = `${API_BASE || window.location.origin}/mcp/${fresh}`
+
+  const load = () => api.get('/keys').then((d) => setKeys(d.keys)).catch((e) => toast.error(e.message))
+  useEffect(() => { load() }, [])
+
+  const create = async () => {
+    if (!name.trim()) { toast.error('Give the key a name so you can recognise it later.'); return }
+    setBusy(true)
+    try {
+      const days = Number(expiry)
+      const r = await api.post('/keys', { name: name.trim(), scope, ...(days > 0 ? { expires_in_days: days } : {}) })
+      setFresh(r.token); setFreshScope(scope); setCopied(false); setCopiedUrl(false); setName(''); setExpiry('')
+      await load()
+    } catch (e: any) { toast.error(e.message) } finally { setBusy(false) }
+  }
+
+  const revoke = async (k: any) => {
+    if (!(await confirmDialog({
+      title: 'Revoke this key?',
+      message: `Anything using “${k.name}” stops working immediately. This cannot be undone — issue a new key instead.`,
+      confirmText: 'Revoke', danger: true,
+    }))) return
+    try { await api.del(`/keys/${k.id}`); await load(); toast.success('Key revoked.') }
+    catch (e: any) { toast.error(e.message) }
+  }
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(fresh); setCopied(true) }
+    catch { toast.error('Copy failed — select the key and copy it by hand.') }
+  }
+  const copyUrl = async () => {
+    try { await navigator.clipboard.writeText(connectorUrl); setCopiedUrl(true) }
+    catch { toast.error('Copy failed — select the URL and copy it by hand.') }
+  }
+
+  return (
+    <div className="card section">
+      <div className="card-head"><h3>API keys</h3></div>
+      <div className="card-pad" style={{ display: 'grid', gap: 14 }}>
+        <div className="muted" style={{ fontSize: 12.5, maxWidth: 720 }}>
+          A key lets a script, an agent or a CI job call this API without signing in. It acts as
+          <strong> you</strong> — same organization, same role, same permissions — so give one only to a tool
+          you would hand your own login to. Send it as <code>Authorization: Bearer &lt;key&gt;</code>.
+          <br />
+          To use VoTask from <strong>claude.ai or Claude Desktop</strong>, don't paste the key anywhere — the
+          connector form has no field for one. Add the <em>connector URL</em> shown when you create a key,
+          under Customize &rarr; Connectors &rarr; Add custom connector. Give that connector its own key and
+          nothing else, because the key travels inside that URL.
+        </div>
+
+        {/* The one and only sighting of the plaintext. */}
+        {fresh && (
+          <div style={{ border: '1px solid var(--primary)', borderRadius: 'var(--r-lg)', padding: 12, display: 'grid', gap: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 12.5 }}>Copy this now — it cannot be shown again.</div>
+            <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f6f3ee)', padding: '8px 10px', borderRadius: 8 }}>{fresh}</code>
+            {freshScope === 'mcp' && (<>
+              <div style={{ fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>Connector URL — paste this into Claude</div>
+              <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f6f3ee)', padding: '8px 10px', borderRadius: 8 }}>{connectorUrl}</code>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Customize &rarr; Connectors &rarr; + &rarr; Add custom connector. This key works ONLY here — it is
+                refused by the rest of the API, so the URL leaking does not hand over a general credential.
+              </div>
+            </>)}
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn btn-primary btn-sm" onClick={copy}>{copied ? '✓ Copied' : 'Copy key'}</button>
+              {freshScope === 'mcp' && <button className="btn btn-sm" onClick={copyUrl}>{copiedUrl ? '✓ Copied' : 'Copy connector URL'}</button>}
+              <button className="btn btn-ghost btn-sm" onClick={() => setFresh('')}>I've saved it</button>
+            </div>
+          </div>
+        )}
+
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ flex: '1 1 240px' }}>
+            <label>Name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Claude Code on my laptop"
+              onKeyDown={(e) => { if (e.key === 'Enter') create() }} />
+          </div>
+          <div style={{ width: 210 }}>
+            <label>Used for</label>
+            <select value={scope} onChange={(e) => setScope(e.target.value as 'full' | 'mcp')}>
+              <option value="mcp">Claude connector (claude.ai)</option>
+              <option value="full">API access (scripts, Claude Code)</option>
+            </select>
+          </div>
+          <div style={{ width: 150 }}>
+            <label>Expires in</label>
+            <select value={expiry} onChange={(e) => setExpiry(e.target.value)}>
+              <option value="">Never</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">1 year</option>
+            </select>
+          </div>
+          <button className="btn btn-primary" disabled={busy} onClick={create}>{busy ? <span className="spinner" /> : 'Create key'}</button>
+        </div>
+
+        <table>
+          <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+          <tbody>
+            {keys.map((k) => {
+              const dead = !!k.revoked_at || (k.expires_at && k.expires_at <= new Date().toISOString())
+              return (
+                <tr key={k.id} style={dead ? { opacity: 0.55 } : undefined}>
+                  <td style={{ fontWeight: 600 }}>{k.name}</td>
+                  <td className="muted" style={{ fontSize: 12 }}><code>{k.prefix}…</code>{k.scope === 'mcp' && <><br /><span style={{ fontSize: 11 }}>Claude connector</span></>}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{new Date(k.created_at).toLocaleDateString()}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    {k.revoked_at
+                      ? <Badge color="#9c9082" soft>Revoked</Badge>
+                      : k.expires_at && k.expires_at <= new Date().toISOString()
+                        ? <Badge color="#9c9082" soft>Expired</Badge>
+                        : <button className="btn btn-sm btn-danger" onClick={() => revoke(k)}>Revoke</button>}
+                  </td>
+                </tr>
+              )
+            })}
+            {keys.length === 0 && <tr><td colSpan={5} className="empty">No API keys yet.</td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   )

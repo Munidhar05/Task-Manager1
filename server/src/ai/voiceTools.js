@@ -28,7 +28,11 @@ const MGR = ['manager', 'admin']
 export const TOOLS = [
   // ---- tasks: create & edit ------------------------------------------------
   { name: 'create_task', kind: 'mutate', roles: ALL,
-    desc: 'Create a new task.',
+    desc: 'Create a NEW task. This is what "assign a task to Ravi", "give Anjali a task", '
+      + '"add a task for the deck review" and "create a task" ALL mean — the word "assign" does '
+      + 'NOT imply an existing task. If the user names work that does not exist yet, it is this '
+      + 'tool, and the assignee simply becomes assignee_name. Only reach for assign_task when '
+      + 'they point at a task that already exists.',
     args: 'title (short, English), description, assignee_name|null, priority (' + PRIORITIES.join('|') + '), due_date_raw (deadline exactly as spoken, or null)' },
 
   { name: 'update_task', kind: 'mutate', roles: ALL,
@@ -40,7 +44,10 @@ export const TOOLS = [
     args: 'task_id, status (' + STATUSES.join('|') + ')' },
 
   { name: 'assign_task', kind: 'mutate', roles: ALL,
-    desc: 'Assign or reassign an existing task to a person.',
+    desc: 'Move an ALREADY-EXISTING task to a different person — "reassign the pricing deck to '
+      + 'Anjali", "move the login bug to Pawan". Requires a real task_id you have seen in the '
+      + 'snapshot or found via search_tasks. If no such task exists, the user is asking you to '
+      + 'CREATE one: use create_task instead. Never ask "which task?" for work that was never created.',
     args: 'task_id, assignee_name' },
 
   { name: 'add_comment', kind: 'mutate', roles: ALL,

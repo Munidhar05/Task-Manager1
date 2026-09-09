@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import TaskBoard from '../components/TaskBoard'
 import { TaskHandoverLine } from '../components/TaskOriginBadge'
@@ -31,13 +31,6 @@ const dueDateForPriority = (priority: string) => {
 
 // Auto-growing textarea: wraps long text and grows with content so the whole
 // title is readable instead of scrolling word-by-word inside a one-line input.
-function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  const ref = React.useRef<HTMLTextAreaElement>(null)
-  const fit = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }
-  React.useEffect(fit, [props.value])
-  return <textarea ref={ref} rows={1} {...props} onInput={fit} style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }} />
-}
-
 // Clean line-art magnifier for the collapsible search control.
 const SearchIcon = ({ size = 18 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -409,6 +402,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // Opening a task by id (e.g. ?task=… from a clicked notification) shows its drawer.
   const [openId, setOpenId] = useState<string | null>(searchParams.get('task'))
   const [showNew, setShowNew] = useState(false)
+  const [showTrash, setShowTrash] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
   // Wide enough to show the list and one task side by side. Below this the
   // drawer stays a modal, because a pane would leave neither half usable.
@@ -801,6 +795,12 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               <span className="filterbtn-dot">{Number(!!filters.priority) + Number(!!filters.status) + Number(!!filters.assignee)}</span>
             )}
           </button>
+          {/* Sits at the far right of the toolbar, under the notification bell,
+              rather than among the filters: it is not a way of narrowing the list,
+              it is a different list. See .toolbar-trash. */}
+          <button className="btn btn-sm row toolbar-trash" style={{ gap: 6 }} title="Tasks deleted in the last 30 days" onClick={() => setShowTrash(true)}>
+            <Ic name="trash" size={14} /> Deleted Tasks
+          </button>
           <button data-va="tasks.newTask" className="btn btn-primary btn-sm toolbar-newtask" onClick={() => setShowNew(true)}>+ New task</button>
         </div>
         {/* DESKTOP: the three filter dropdowns (+ sortable column headers). Hidden on
@@ -994,6 +994,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           updated task; anything else (delete, uploads) falls back to a reload. */}
       {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
       {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
+      {showTrash && <TrashModal onClose={() => setShowTrash(false)} onRestored={load} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
       {filtersOpen && (
         <FiltersDialog
@@ -1103,6 +1104,18 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
       await flashPress(findField('submit'))
       return await save()
     },
+    // Fill, then stop. The agent uses this instead of submit() so the person
+    // reads what was heard before it becomes a real task assigned to a real
+    // colleague. Everything else about the workflow is unchanged — the fields
+    // are filled by driving the actual form, so what you approve is exactly what
+    // saves. Focusing Create (rather than only flashing it) means Enter finishes
+    // the job, so the fast path stays one keystroke.
+    handOver: async () => {
+      await pause(260)
+      await settle()
+      await flashPress(findField('submit'))
+      return { ...form, assignee_name: assignable.find((u) => u.id === form.assignee_id)?.name || null }
+    },
     cancel: () => onClose(),
   })
 
@@ -1115,7 +1128,16 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     && typeof (window as any).MediaRecorder !== 'undefined'
   const mrRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const chunksRef = useRef<BlobPart[]>([])
+  const listeningRef = useRef(false)          // read inside MediaRecorder callbacks
+  // Elapsed recording time. Tied to `listening`, not to the segment loop, so it
+  // counts the whole take rather than restarting every 20s when a segment rolls.
+  const [recSecs, setRecSecs] = useState(0)
+  const recTimerRef = useRef<number | null>(null)
+  const segTimerRef = useRef<number | null>(null)
+  const segSeqRef = useRef(0)                 // spoken order of each segment
+  const segTextRef = useRef<string[]>([])     // transcript per segment, by seq
+  const segJobsRef = useRef<Promise<unknown>[]>([])
+  const segErrRef = useRef('')
   const [listening, setListening] = useState(false) // actively recording
   const [parsing, setParsing] = useState(false)     // transcribing + AI extraction
   const [heard, setHeard] = useState('')
@@ -1130,7 +1152,10 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
     streamRef.current = null
   }
-  useEffect(() => releaseMic, []) // release on unmount (close)
+  useEffect(() => () => {
+    releaseMic()
+    if (recTimerRef.current) clearInterval(recTimerRef.current)
+  }, []) // release the mic and the ticker on unmount (close)
 
   // Merge the AI-extracted fields into the form. Assignee applies only when not in
   // personal mode. The due date is NEVER left blank: spoken date wins, else it
@@ -1156,32 +1181,105 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     })
   }
 
-  // Upload the recorded clip → transcript → structured fields.
-  const transcribeAndApply = async (blob: Blob) => {
+  // Send ONE segment for transcription. Returns its text; the caller stitches.
+  const transcribeSegment = async (blob: Blob) => {
+    const fd = new FormData()
+    fd.append('audio', blob, 'task.webm')
+    const headers: Record<string, string> = {}
+    const token = getToken()
+    if (token) headers.authorization = `Bearer ${token}`
+    const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
+    return String(data?.text || '').trim()
+  }
+
+  // Speak for as long as you like.
+  //
+  // Sarvam's instant endpoint refuses anything past 30 seconds, and this recorder
+  // used to hand it one unbounded blob — so a long task description failed AFTER
+  // you had finished speaking, with the audio already gone. The answer is not to
+  // cut the person off: recording runs until they stop it, and the CLIP is what
+  // gets divided.
+  //
+  // Segments are cut by stopping and restarting MediaRecorder rather than using
+  // start(timeslice). A timeslice emits fragments where only the first carries the
+  // webm header, so segments 2..n are not decodable alone and every one of them
+  // would fail upstream. Stop/start yields complete, independently valid files.
+  // The MediaStream is untouched across cycles, so the mic is never re-acquired
+  // and no audio is lost to a device spin-up.
+  const SEGMENT_MS = 20000   // comfortably inside Sarvam's 30s ceiling
+  const startSegment = (stream: MediaStream) => {
+    let mr: MediaRecorder
+    try { mr = new MediaRecorder(stream, { mimeType: 'audio/webm' }) } catch { mr = new MediaRecorder(stream) }
+    mrRef.current = mr
+    const parts: BlobPart[] = []
+    const seq = segSeqRef.current++
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data) }
+    mr.onstop = () => {
+      const blob = new Blob(parts, { type: mr.mimeType || 'audio/webm' })
+      // Segments upload in parallel but must be stitched in the order they were
+      // SPOKEN, so each keeps its sequence number instead of racing to append.
+      if (blob.size) {
+        segTextRef.current[seq] = ''
+        segJobsRef.current.push(
+          transcribeSegment(blob)
+            .then((t) => { segTextRef.current[seq] = t; setHeard(segTextRef.current.filter(Boolean).join(' ')) })
+            .catch((err) => { segErrRef.current = err?.message || 'Transcription failed' })
+        )
+      }
+      if (listeningRef.current) startSegment(stream)   // still talking — next segment
+      else finishRecording()
+    }
+    try { mr.start() } catch {
+      setListening(false); listeningRef.current = false
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
+      releaseMic(); return
+    }
+    segTimerRef.current = window.setTimeout(() => {
+      if (mrRef.current === mr && mr.state !== 'inactive') { try { mr.stop() } catch {} }
+    }, SEGMENT_MS)
+  }
+
+  // Runs once the final segment has closed: wait for every upload, stitch the
+  // transcript in spoken order, then run the LLM parse ONCE over the whole thing.
+  // The fields it fills — assignee, priority, due date — only make sense against
+  // the complete sentence, not a 20-second slice of it.
+  const finishRecording = async () => {
+    if (segTimerRef.current) { clearTimeout(segTimerRef.current); segTimerRef.current = null }
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
+    streamRef.current = null
+    if (!segJobsRef.current.length) return
     setParsing(true)
     try {
-      const fd = new FormData()
-      fd.append('audio', blob, 'task.webm')
-      const headers: Record<string, string> = {}
-      const token = getToken()
-      if (token) headers.authorization = `Bearer ${token}`
-      const res = await fetch(`${API_BASE}/api/tasks/transcribe`, { method: 'POST', headers, body: fd, cache: 'no-store' })
-      const data = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`)
-      const text = String(data?.text || '').trim()
+      await Promise.allSettled(segJobsRef.current)
+      const text = segTextRef.current.filter(Boolean).join(' ').trim()
       setHeard(text)
-      if (!text) { toast.info("Didn't catch that — please tap Speak and try again."); return }
+      if (!text) { toast.error(segErrRef.current || "Didn't catch that — please tap Speak and try again."); return }
+      // A failed segment mid-way means words are missing. Say so, rather than
+      // quietly building a task out of half a sentence.
+      if (segErrRef.current) toast.info('Part of the audio could not be transcribed — check the text before creating.')
       await applyVoice(text)
     } catch (err: any) {
       toast.error(err?.message || 'Could not transcribe the audio. Check your connection and try again.')
-    } finally { setParsing(false) }
+    } finally {
+      setParsing(false)
+      segJobsRef.current = []; segTextRef.current = []; segErrRef.current = ''; segSeqRef.current = 0
+    }
   }
 
+  // m:ss — minutes are not zero-padded because a task is rarely dictated for ten.
+  const recClock = `${Math.floor(recSecs / 60)}:${String(recSecs % 60).padStart(2, '0')}`
+
   const toggleMic = async () => {
-    // Tapping while recording = Stop → onstop transcribes the captured clip.
+    // Tapping while recording = Stop → the open segment closes and its onstop
+    // calls finishRecording() once every upload has landed.
     if (listening) {
       setListening(false)
-      try { mrRef.current?.stop() } catch {}
+      listeningRef.current = false
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
+      if (segTimerRef.current) { clearTimeout(segTimerRef.current); segTimerRef.current = null }
+      try { mrRef.current?.stop() } catch { finishRecording() }
       return
     }
     if (!canRecord) { toast.error('Voice input needs microphone access on this device.'); return }
@@ -1189,21 +1287,14 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
     catch { toast.error('Microphone access is blocked. Allow mic permission for this app and try again.'); return }
     streamRef.current = stream
-    chunksRef.current = []
-    let mr: MediaRecorder
-    try { mr = new MediaRecorder(stream, { mimeType: 'audio/webm' }) } catch { mr = new MediaRecorder(stream) }
-    mrRef.current = mr
-    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
-    mr.onstop = () => {
-      try { streamRef.current?.getTracks().forEach((t) => t.stop()) } catch {}
-      streamRef.current = null
-      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' })
-      chunksRef.current = []
-      if (blob.size) transcribeAndApply(blob)
-    }
+    segSeqRef.current = 0; segTextRef.current = []; segJobsRef.current = []; segErrRef.current = ''
     setHeard('')
-    try { mr.start() } catch { setListening(false); releaseMic(); return }
     setListening(true)
+    listeningRef.current = true
+    setRecSecs(0)
+    if (recTimerRef.current) clearInterval(recTimerRef.current)
+    recTimerRef.current = window.setInterval(() => setRecSecs((n) => n + 1), 1000)
+    startSegment(stream)
   }
 
   return (
@@ -1215,7 +1306,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
           <div>
             <label>
               Title
-              {listening && <span style={{ color: '#15803d', fontWeight: 700, fontSize: 11 }}> ● recording…</span>}
+              {listening && <span style={{ color: '#b91c1c', fontWeight: 700, fontSize: 11 }}> ● recording {recClock}</span>}
               {parsing && <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 11 }}> ● understanding…</span>}
             </label>
             {canRecord && (
@@ -1230,7 +1321,7 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
                   {parsing
                     ? <><span className="spinner" /> Thinking…</>
                     : listening
-                      ? <><span className="mic-dot" /> Stop recording</>
+                      ? <><span className="mic-dot" /> Stop recording · {recClock}</>
                       : <><MicIcon size={18} /> Speak your task</>}
                 </button>
               </div>
@@ -1281,6 +1372,113 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
             <button className="btn" onClick={onClose}>Cancel</button>
             <button data-va="tasks.new.submit" className="btn btn-primary" onClick={save} disabled={busy || !form.title}>{busy ? <span className="spinner" /> : 'Create task'}</button>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface TrashRow {
+  id: string; title: string; assignee_name: string | null
+  priority?: string; status?: string; due_date?: string | null
+  deleted_at: string; deleted_by: string | null; purge_after: string
+  comments: number; attachments: number
+}
+
+// The recycle bin.
+//
+// A deleted task is not gone, it is here, for RECOVERY_DAYS. The countdown is the
+// point of the screen: "deleted yesterday" is reassuring and useless, "3 days left"
+// is the thing that makes someone act. Permanent deletion lives behind a second,
+// separate button so that emptying the bin can never be a slip of the same click
+// that filled it.
+function TrashModal({ onClose, onRestored }: { onClose: () => void; onRestored: () => void }) {
+  const [rows, setRows] = useState<TrashRow[]>([])
+  const [days, setDays] = useState(30)
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [err, setErr] = useState('')
+
+  const load = () => {
+    setLoading(true)
+    api.get('/tasks/trash')
+      .then((d) => { setRows(d.tasks || []); setDays(d.recovery_days || 30) })
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
+  useEscape(onClose)
+
+  const daysLeft = (iso: string) => Math.max(0, Math.ceil((Date.parse(iso) - Date.now()) / 86400000))
+
+  const restore = async (t: TrashRow) => {
+    setBusyId(t.id); setErr('')
+    try { await api.post(`/tasks/trash/${t.id}/restore`, {}); toast.success(`Restored "${t.title}"`); load(); onRestored() }
+    catch (e: any) { setErr(e.message) } finally { setBusyId(null) }
+  }
+
+  const purge = async (t: TrashRow) => {
+    if (!window.confirm(`Delete "${t.title}" permanently?\n\nThis cannot be undone — it will not be recoverable afterwards.`)) return
+    setBusyId(t.id); setErr('')
+    try { await api.del(`/tasks/trash/${t.id}`); toast.success('Deleted permanently'); load() }
+    catch (e: any) { setErr(e.message) } finally { setBusyId(null) }
+  }
+
+  return (
+    <div className="modal-center" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Recently deleted tasks"
+        onClick={(e) => e.stopPropagation()} style={{ maxWidth: 780, width: '94%' }}>
+        <div className="card-head spread">
+          <h3 className="row" style={{ gap: 8 }}><Ic name="trash" size={16} /> Recently deleted</h3>
+          <button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="card-pad" style={{ maxHeight: '68vh', overflow: 'auto' }}>
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
+            Deleted tasks are kept for {days} days and can be restored with their comments and attachments.
+            After that they are removed permanently.
+          </div>
+          {err && <div style={{ color: 'var(--danger-ink)', fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
+          {loading ? <span className="spinner" /> : rows.length === 0 ? (
+            <EmptyState icon={<Ic name="trash" size={40} />} title="Nothing deleted"
+              hint="Tasks you delete show up here, and can be restored for a month." />
+          ) : (
+            <table>
+              <thead><tr><th>Task</th><th>Deleted</th><th>Time left</th><th></th></tr></thead>
+              <tbody>
+                {rows.map((t) => {
+                  const left = daysLeft(t.purge_after)
+                  return (
+                    <tr key={t.id}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{t.title}</div>
+                        <div className="muted" style={{ fontSize: 11.5 }}>
+                          {t.assignee_name || 'Unassigned'}
+                          {t.priority ? ` · ${t.priority}` : ''}
+                          {t.comments ? ` · ${t.comments} comment${t.comments > 1 ? 's' : ''}` : ''}
+                          {t.attachments ? ` · ${t.attachments} file${t.attachments > 1 ? 's' : ''}` : ''}
+                        </div>
+                      </td>
+                      <td className="muted" style={{ fontSize: 12 }}>
+                        {new Date(t.deleted_at).toLocaleDateString()}
+                        {t.deleted_by ? <><br />by {t.deleted_by}</> : null}
+                      </td>
+                      <td style={{ fontSize: 12, fontWeight: 600, color: left <= 3 ? 'var(--danger-ink)' : 'inherit' }}>
+                        {left === 0 ? 'today' : `${left} day${left > 1 ? 's' : ''}`}
+                      </td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-primary btn-sm" disabled={busyId === t.id} onClick={() => restore(t)}>
+                          {busyId === t.id ? <span className="spinner" /> : 'Restore'}
+                        </button>{' '}
+                        <button className="btn btn-sm btn-danger" disabled={busyId === t.id} onClick={() => purge(t)} title="Delete permanently now">
+                          Delete forever
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

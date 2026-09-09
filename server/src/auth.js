@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
+import crypto from 'node:crypto'
 import { db } from './db.js'
 import { id, now, deviceLabel } from './util.js'
 
@@ -61,10 +62,76 @@ export function verifyToken(token) {
   }
 }
 
+// ---- API keys ---------------------------------------------------------------
+// The non-browser way in. See the api_keys table in db.js for the model; the
+// short version is that a key IS a user, with that user's role and org.
+
+export const API_KEY_PREFIX = 'votask_sk_'
+export const isApiKey = (token) => typeof token === 'string' && token.startsWith(API_KEY_PREFIX)
+// SHA-256 rather than bcrypt, deliberately. bcrypt's cost exists to slow down
+// guessing a low-entropy human password; a key is 256 bits of CSPRNG output, so
+// there is nothing to guess, and paying ~100ms of KDF on every single API request
+// would be a real cost for no gain.
+export const hashApiKey = (token) => crypto.createHash('sha256').update(token).digest('hex')
+
+// Mint a new key. Returns the plaintext ONCE — the caller must hand it straight
+// to the user, because nothing can recover it afterwards.
+export function generateApiKey() {
+  const token = API_KEY_PREFIX + crypto.randomBytes(32).toString('base64url')
+  return { token, hash: hashApiKey(token), prefix: token.slice(0, API_KEY_PREFIX.length + 6) }
+}
+
+// Resolve a key to its user, or null. Null covers unknown, revoked, expired, and
+// the case where the owner has since been deleted or moved to another org — a key
+// must never outlive the access it was granted alongside.
+export function userForApiKey(token, { allowScopes = ['full'] } = {}) {
+  const row = db.prepare('SELECT * FROM api_keys WHERE token_hash = ?').get(hashApiKey(token))
+  if (!row || row.revoked_at) return null
+  if (row.expires_at && row.expires_at <= new Date().toISOString()) return null
+  // Scope is the blast-radius control. A connector key rides inside a URL, which
+  // is a place secrets leak from, so it is refused everywhere except /mcp — a
+  // leaked connector URL must not also be a general REST credential.
+  if (!allowScopes.includes(row.scope || 'full')) return null
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(row.user_id)
+  if (!user || user.org_id !== row.org_id) return null
+  touchApiKey(row)
+  return { user, key: row }
+}
+
+// "Last used" is for the human deciding whether a key is still needed, so
+// minute-granularity is plenty — and a write on every request to a hot endpoint
+// would be pure overhead.
+function touchApiKey(row) {
+  const iso = new Date().toISOString()
+  if (row.last_used_at && Date.now() - Date.parse(row.last_used_at) < 60_000) return
+  try { db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(iso, row.id) } catch { /* best-effort */ }
+}
+
+// Refuse an API key where only a real signed-in session will do.
+//
+// Minting keys is the one that matters: a stolen key that can mint replacements
+// for itself cannot be revoked, because every revocation leaves behind the key it
+// just issued. Anything that changes credentials belongs here for the same reason.
+export function requireSession(req, res, next) {
+  if (req.apiKey) {
+    return res.status(403).json({ error: 'This action needs a signed-in session, not an API key.' })
+  }
+  next()
+}
+
 export function authRequired(req, res, next) {
   const header = req.headers.authorization || ''
   const token = header.startsWith('Bearer ') ? header.slice(7) : null
   if (!token) return res.status(401).json({ error: 'Authentication required' })
+  if (isApiKey(token)) {
+    // Only 'full' keys are REST credentials. A connector key presented here is a
+    // sign its URL leaked, so it is rejected exactly like an unknown one.
+    const hit = userForApiKey(token, { allowScopes: ['full'] })
+    if (!hit) return res.status(401).json({ error: 'Invalid, expired or revoked API key' })
+    req.user = hit.user
+    req.apiKey = hit.key      // set ONLY on key auth — requireSession reads it
+    return next()
+  }
   try {
     const payload = jwt.verify(token, SECRET)
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub)

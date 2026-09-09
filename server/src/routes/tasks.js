@@ -27,6 +27,24 @@ const r = Router()
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ATTACH_DIR = path.join(__dirname, '..', '..', 'data', 'task_uploads')
 fs.mkdirSync(ATTACH_DIR, { recursive: true })
+
+// How long a deleted task stays recoverable. A month is long enough that "we
+// deleted the wrong thing" surfaces at the next planning meeting rather than
+// after the evidence is gone.
+export const RECOVERY_DAYS = Number(process.env.TASK_RECOVERY_DAYS || 30)
+
+// The real, irreversible delete. Reached two ways: someone empties an entry from
+// the bin on purpose, or the scheduler reaps one whose month is up. The attachment
+// files are unlinked HERE and nowhere else — up to this moment the task is
+// genuinely restorable, files included.
+export function purgeDeletedTask(row) {
+  try {
+    for (const a of JSON.parse(row.payload).attachments || []) {
+      if (a.stored_name) try { fs.unlinkSync(path.join(ATTACH_DIR, a.stored_name)) } catch {}
+    }
+  } catch { /* a malformed payload must not block the purge */ }
+  db.prepare('DELETE FROM deleted_tasks WHERE id=?').run(row.id)
+}
 const ATTACH_MAX = Number(process.env.TASK_ATTACH_MAX_MB || 50) * 1024 * 1024
 // Only reference material makes sense here: images, PDFs, and videos.
 const ATTACH_OK = (mime) => /^(image\/|video\/)/.test(mime) || mime === 'application/pdf'
@@ -182,6 +200,91 @@ r.get('/', (req, res) => {
   sql += " ORDER BY CASE t.priority WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, t.due_date IS NULL, t.due_date"
   const rows = db.prepare(sql).all(...args)
   res.json(rows.map(hydrate))
+})
+
+// ---- recycle bin ------------------------------------------------------------
+// These MUST be declared above `/:id`, or Express matches "trash" as a task id.
+
+// Who may see and undo a deletion. A manager deals with the whole org's mistakes;
+// an employee only ever deleted their own work, so that is all they get back.
+const trashVisibleTo = (user) =>
+  user.role === 'manager' || user.role === 'admin'
+    ? db.prepare('SELECT * FROM deleted_tasks WHERE org_id=? ORDER BY deleted_at DESC').all(user.org_id)
+    : db.prepare('SELECT * FROM deleted_tasks WHERE org_id=? AND deleted_by=? ORDER BY deleted_at DESC').all(user.org_id, user.id)
+
+r.get('/trash', (req, res) => {
+  res.json({
+    recovery_days: RECOVERY_DAYS,
+    tasks: trashVisibleTo(req.user).map((d) => {
+      const p = JSON.parse(d.payload)
+      return {
+        id: d.id, title: d.title, assignee_name: d.assignee_name,
+        priority: p.task?.priority, status: p.task?.status, due_date: p.task?.due_date,
+        deleted_at: d.deleted_at, deleted_by: d.deleted_by_name, purge_after: d.purge_after,
+        comments: (p.comments || []).length, attachments: (p.attachments || []).length,
+      }
+    }),
+  })
+})
+
+// Put a task back, with everything the cascade took.
+//
+// The world may have moved on since it was deleted, so each foreign key is
+// re-checked rather than trusted: an assignee who has left becomes unassigned,
+// a parent that is itself gone becomes null (the subtask returns as a top-level
+// task rather than vanishing again), and a dependency whose other end no longer
+// exists is dropped. Restoring MOST of a task beats refusing to restore any of it.
+r.post('/trash/:id/restore', (req, res) => {
+  const d = trashVisibleTo(req.user).find((x) => x.id === req.params.id)
+  if (!d) return res.status(404).json({ error: 'Not found' })
+  const p = JSON.parse(d.payload)
+  const userExists = (id) => !!(id && db.prepare('SELECT id FROM users WHERE id=?').get(id))
+  const taskExists = (id) => !!(id && db.prepare('SELECT id FROM tasks WHERE id=?').get(id))
+
+  const insertTask = (row) => {
+    const r2 = { ...row }
+    if (!userExists(r2.assignee_id)) r2.assignee_id = null
+    if (!userExists(r2.assigned_by_id)) r2.assigned_by_id = null
+    if (r2.parent_task_id && r2.parent_task_id !== d.id && !taskExists(r2.parent_task_id)) r2.parent_task_id = null
+    const cols = Object.keys(r2)
+    db.prepare(`INSERT OR IGNORE INTO tasks (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`)
+      .run(...cols.map((c) => r2[c]))
+  }
+
+  db.transaction(() => {
+    insertTask(p.task)
+    for (const s of p.subtasks || []) insertTask(s)
+    for (const c of p.comments || []) {
+      if (!userExists(c.user_id) || !taskExists(c.task_id)) continue
+      const cols = Object.keys(c)
+      db.prepare(`INSERT OR IGNORE INTO task_comments (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...cols.map((k) => c[k]))
+    }
+    for (const a of p.attachments || []) {
+      if (!taskExists(a.task_id)) continue
+      const cols = Object.keys(a)
+      db.prepare(`INSERT OR IGNORE INTO attachments (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...cols.map((k) => a[k]))
+    }
+    for (const dep of p.dependencies || []) {
+      if (!taskExists(dep.task_id) || !taskExists(dep.depends_on_task_id)) continue
+      db.prepare('INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?,?)').run(dep.task_id, dep.depends_on_task_id)
+    }
+    db.prepare('DELETE FROM deleted_tasks WHERE id=?').run(d.id)
+  })()
+
+  audit(req.user.org_id, req.user.id, 'task.restore', 'task', d.id, d.title)
+  indexTask(d.id)
+  const back = db.prepare('SELECT * FROM tasks WHERE id=?').get(d.id)
+  res.json({ ok: true, task: back ? hydrate(back) : null })
+})
+
+// Purge one now, before its month is up. Irreversible — this is the delete the
+// old handler used to do, moved behind a second, deliberate decision.
+r.delete('/trash/:id', (req, res) => {
+  const d = trashVisibleTo(req.user).find((x) => x.id === req.params.id)
+  if (!d) return res.status(404).json({ error: 'Not found' })
+  purgeDeletedTask(d)
+  audit(req.user.org_id, req.user.id, 'task.purge', 'task', d.id, d.title)
+  res.json({ ok: true })
 })
 
 r.get('/:id', (req, res) => {
@@ -595,6 +698,41 @@ r.delete('/:id/comments/latest-own', (req, res) => {
   res.json({ ok: true })
 })
 
+// EDIT a comment. Own comments only, and never anyone else's: a task's comment
+// thread is the record of who said what, and letting one person rewrite another's
+// words would quietly turn it into something else. `edited_at` is set so the
+// change is visible rather than silent.
+r.patch('/:id/comments/:cid', (req, res) => {
+  const body = String(req.body?.body || '').trim()
+  if (!body) return res.status(400).json({ error: 'body required' })
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const c = db.prepare('SELECT * FROM task_comments WHERE id=? AND task_id=?').get(req.params.cid, t.id)
+  if (!c) return res.status(404).json({ error: 'Not found' })
+  if (c.user_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own comments.' })
+  db.prepare('UPDATE task_comments SET body=?, edited_at=? WHERE id=?').run(body, now(), c.id)
+  audit(req.user.org_id, req.user.id, 'task.comment.edit', 'task', t.id)
+  res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+})
+
+// DELETE a comment by id. Own always; a manager or admin may remove anyone's,
+// which is the moderation lever — someone pasting the wrong customer's details
+// into a thread should not have to be around for it to come down.
+r.delete('/:id/comments/:cid', (req, res) => {
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const c = db.prepare('SELECT * FROM task_comments WHERE id=? AND task_id=?').get(req.params.cid, t.id)
+  if (!c) return res.status(404).json({ error: 'Not found' })
+  const isManager = req.user.role === 'manager' || req.user.role === 'admin'
+  if (c.user_id !== req.user.id && !isManager) {
+    return res.status(403).json({ error: 'You can only delete your own comments.' })
+  }
+  db.prepare('DELETE FROM task_comments WHERE id=?').run(c.id)
+  // The leaderboard counts comments live, so its point goes with it.
+  audit(req.user.org_id, req.user.id, 'task.comment.delete', 'task', t.id, c.user_id === req.user.id ? 'own' : `by ${c.user_id}`)
+  res.json({ ok: true })
+})
+
 // ATTACHMENTS — upload a reference image / PDF / video onto a task. One file per
 // request (the client loops for multiple). Anyone in the task's org may attach.
 const runAttachUpload = (req, res, next) => attachUpload.single('file')(req, res, (err) => {
@@ -653,17 +791,34 @@ r.delete('/:id', (req, res) => {
   if (!isManager && !isOwnSelfCreated(t, req.user.id) && !isOwnPrivateDraft) {
     return res.status(403).json({ error: 'You can only delete tasks you created for yourself.' })
   }
-  // Unlink attachment files for this task AND its subtasks before the row cascade
-  // removes their DB rows (the DB cascade doesn't touch the files on disk).
+  // Snapshot everything the FK cascade is about to take, THEN remove the row.
+  // Attachment files are deliberately left on disk — they are unlinked by the
+  // purge, because a "recoverable" task whose files are already gone is not one.
   const subIds = db.prepare('SELECT id FROM tasks WHERE parent_task_id=?').all(t.id).map((s) => s.id)
-  const ph = [t.id, ...subIds].map(() => '?').join(',')
-  for (const a of db.prepare(`SELECT stored_name FROM attachments WHERE task_id IN (${ph})`).all(t.id, ...subIds)) {
-    if (a.stored_name) try { fs.unlinkSync(path.join(ATTACH_DIR, a.stored_name)) } catch {}
+  const ids = [t.id, ...subIds]
+  const ph = ids.map(() => '?').join(',')
+  const payload = {
+    task: t,
+    subtasks: db.prepare(`SELECT * FROM tasks WHERE id IN (${ph}) AND id != ?`).all(...ids, t.id),
+    comments: db.prepare(`SELECT * FROM task_comments WHERE task_id IN (${ph})`).all(...ids),
+    attachments: db.prepare(`SELECT * FROM attachments WHERE task_id IN (${ph})`).all(...ids),
+    dependencies: db.prepare(`SELECT * FROM task_dependencies WHERE task_id IN (${ph}) OR depends_on_task_id IN (${ph})`).all(...ids, ...ids),
   }
-  db.prepare('DELETE FROM tasks WHERE id=?').run(t.id)
-  audit(req.user.org_id, req.user.id, 'task.delete', 'task', t.id)
+  const assigneeName = t.assignee_id
+    ? (db.prepare('SELECT name FROM users WHERE id=?').get(t.assignee_id)?.name || null)
+    : null
+
+  db.transaction(() => {
+    db.prepare(`INSERT OR REPLACE INTO deleted_tasks
+      (id, org_id, title, assignee_name, deleted_by, deleted_by_name, deleted_at, purge_after, payload)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(
+      t.id, t.org_id, t.title, assigneeName, req.user.id, req.user.name, now(),
+      new Date(Date.now() + RECOVERY_DAYS * 86_400_000).toISOString(), JSON.stringify(payload))
+    db.prepare('DELETE FROM tasks WHERE id=?').run(t.id)
+  })()
+  audit(req.user.org_id, req.user.id, 'task.delete', 'task', t.id, `recoverable until ${new Date(Date.now() + RECOVERY_DAYS * 86_400_000).toISOString().slice(0, 10)}`)
   removeEmbedding('task', t.id)
-  res.json({ ok: true })
+  res.json({ ok: true, recoverable_until: new Date(Date.now() + RECOVERY_DAYS * 86_400_000).toISOString(), recovery_days: RECOVERY_DAYS })
 })
 
 export default r

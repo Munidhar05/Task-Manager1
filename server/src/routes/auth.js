@@ -105,6 +105,16 @@ r.post('/login', (req, res) => {
   if (!email || !password) return res.status(400).json({ error: 'email and password required' })
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase().trim())
   if (!user || !verifyPassword(password, user.password_hash)) {
+    // Someone who joined by link and is still awaiting approval has no users row
+    // yet, so the generic message above would have them re-typing a password that
+    // is actually correct. Tell them what is really happening — but only if the
+    // password matches the pending request, so this can never be used to probe
+    // which addresses have asked to join.
+    const jr = db.prepare("SELECT jr.*, o.name org_name FROM join_requests jr JOIN organizations o ON o.id = jr.org_id WHERE jr.email = ? AND jr.status = 'pending'")
+      .get(email.toLowerCase().trim())
+    if (jr && verifyPassword(password, jr.password_hash)) {
+      return res.status(403).json({ error: `Your request to join ${jr.org_name} is waiting for a manager to approve it.` })
+    }
     return res.status(401).json({ error: 'Invalid credentials' })
   }
   // Sync platform-admin status from the env allowlist (grants or revokes on login).

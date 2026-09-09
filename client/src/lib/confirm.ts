@@ -41,9 +41,15 @@ export function resolveConfirm(value: boolean) {
 // unsent work (a half-typed comment, an unsaved edit) with no undo. Both entry
 // points ask through here so the wording can't drift apart, and so a third one
 // added later gets the confirmation for free.
-export const confirmLogout = () => confirmDialog({
+// `switchesTo` is the name of the account that becomes active afterwards, when
+// another is still signed in on this device. Saying so up front is the difference
+// between a switch and finding yourself logged in as someone else for no visible
+// reason.
+export const confirmLogout = (switchesTo?: string) => confirmDialog({
   title: 'Log out?',
-  message: "You'll need to sign in again to get back to your tasks. Anything you're part-way through typing will be lost.",
+  message: switchesTo
+    ? `This account will be removed from this device and you'll switch to ${switchesTo}. Anything you're part-way through typing will be lost.`
+    : "You'll need to sign in again to get back to your tasks. Anything you're part-way through typing will be lost.",
   confirmText: 'Log out',
   cancelText: 'Stay signed in',
   danger: true,

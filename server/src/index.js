@@ -11,6 +11,7 @@ import { ensureSeed } from './seed.js'
 
 import authRoutes from './routes/auth.js'
 import inviteRoutes from './routes/invites.js'
+import joinRoutes from './routes/join.js'
 import userRoutes from './routes/users.js'
 import meetingRoutes from './routes/meetings.js'
 import taskRoutes from './routes/tasks.js'
@@ -24,6 +25,8 @@ import usageRoutes from './routes/usage.js'
 import scoreRoutes from './routes/scores.js'
 import feedbackRoutes from './routes/feedback.js'
 import ttsRoutes from './routes/tts.js'
+import apiKeyRoutes from './routes/apiKeys.js'
+import mcpRoutes from './routes/mcp.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe, attachAssistantLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -53,6 +56,15 @@ app.get('/api/health', (req, res) => {
       ? `openrouter (voice: ${process.env.VOICE_MODEL_FAST || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash'} → ${process.env.VOICE_MODEL_SMART || 'google/gemini-2.5-pro'}, meetings: ${process.env.OPENROUTER_MEETING_MODEL || 'google/gemini-2.5-pro'})`
       : (process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'rule-based (offline)')),
     transcription: process.env.TRANSCRIPTION_PROVIDER || 'none',
+    // Which build is actually serving. Render injects these into every deploy,
+    // so this answers "did my merge reach production?" from a single curl —
+    // the question that otherwise takes reading the JS bundle for a string that
+    // ought to be in it. Nulls locally, where nothing sets them.
+    build: {
+      commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
+      branch: process.env.RENDER_GIT_BRANCH || null,
+      deployed_at: process.env.RENDER_DEPLOY_TIME || null,
+    },
     rag: {
       enabled: ragOn,
       model: ragOn ? embedModel() : null,
@@ -63,6 +75,7 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes)
 app.use('/api/invites', inviteRoutes)
+app.use('/api/join', joinRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/meetings', meetingRoutes)
 app.use('/api/tasks', taskRoutes)
@@ -76,6 +89,10 @@ app.use('/api/usage', usageRoutes)
 app.use('/api/scores', scoreRoutes)
 app.use('/api/feedback', feedbackRoutes)
 app.use('/api/tts', ttsRoutes)
+app.use('/api/keys', apiKeyRoutes)
+// Outside /api on purpose: MCP carries its own credential in the path and speaks
+// JSON-RPC, not REST, so none of the /api middleware applies to it.
+app.use('/mcp', mcpRoutes)
 
 // --- Serve the built web client (client/dist) from this SAME service ----------
 // So one URL hosts BOTH the website (for people without the Android app) AND the

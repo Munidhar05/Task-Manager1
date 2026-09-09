@@ -42,6 +42,9 @@ export function Ic({ name, size = 16 }: { name: keyof typeof ICON_PATHS; size?: 
 }
 const ICON_PATHS = {
   check: <path d="M20 6 9 17l-5-5" />,
+  // Two arrows running opposite ways — swapping one thing for another.
+  // Distinct from `refresh`, whose circular arrow means retry/reload.
+  swap: <><path d="M7 4 3 8l4 4" /><path d="M3 8h14" /><path d="m17 20 4-4-4-4" /><path d="M21 16H7" /></>,
   arrowRight: <><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></>,
   warning: <><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12" y2="17" /></>,
   block: <><circle cx="12" cy="12" r="9" /><path d="m5.6 5.6 12.8 12.8" /></>,
@@ -105,6 +108,34 @@ export function StatusBadge({ s }: { s: string }) {
 export function CategoryBadge({ c }: { c?: string | null }) {
   if (!c) return null
   return <Badge color={CATEGORY_COLORS[c] || '#64748b'} soft>{c}</Badge>
+}
+
+// A textarea that grows to fit what is in it, so nothing you type is hidden
+// behind an inner scrollbar.
+//
+// A fixed-height box for free text is a small cruelty: a comment three lines long
+// is read three lines at a time through a slot, and editing one means scrolling
+// inside a control while trying to judge the whole. It grows without a ceiling on
+// purpose — every place it is used sits in a scrollable panel, so a long entry
+// scrolls the panel (which the reader controls) instead of the box (which they
+// have to discover).
+//
+// The double assignment is required, not superstition: height must go back to
+// auto before scrollHeight is read, or the measurement is capped by the height
+// already set and the box can only ever grow.
+export function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = React.useRef<HTMLTextAreaElement>(null)
+  const fit = () => {
+    const el = ref.current
+    if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' }
+  }
+  useEffect(fit, [props.value])
+  return (
+    <textarea
+      ref={ref} rows={1} {...props} onInput={fit}
+      style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }}
+    />
+  )
 }
 
 export function Avatar({ name, color, size = 28, src }: { name?: string; color?: string; size?: number; src?: string | null }) {

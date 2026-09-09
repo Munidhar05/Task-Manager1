@@ -1,20 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api, Suggestion } from '../api'
-import { PriorityBadge, StatusBadge, ConfidenceScore, Evidence, confidenceBand, Avatar, Ic, dueLabel, LANG_LABEL, defaultDueDate } from '../ui'
+import { PriorityBadge, StatusBadge, ConfidenceScore, Evidence, confidenceBand, Avatar, Ic, dueLabel, LANG_LABEL, defaultDueDate, AutoTextarea } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import { confirmDialog } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
 
 // A textarea that grows to fit its content — so a long task wraps and is fully
 // readable instead of scrolling word-by-word inside a one-line input.
-function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  const ref = React.useRef<HTMLTextAreaElement>(null)
-  const fit = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }
-  React.useEffect(fit, [props.value])
-  return <textarea ref={ref} rows={1} {...props} onInput={fit} style={{ resize: 'none', overflow: 'hidden', lineHeight: 1.45, minHeight: 40, ...props.style }} />
-}
-
 const SUMMARY_SECTIONS: { key: string; label: string; icon: React.ReactNode }[] = [
   { key: 'key_decisions', label: 'Key Decisions', icon: <Ic name="check" /> },
   { key: 'action_items', label: 'Action Items', icon: <Ic name="arrowRight" /> },
