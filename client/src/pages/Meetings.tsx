@@ -484,6 +484,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // is the exact case this exists for. It is cleared in one place only — after
   // the server has accepted the meeting.
   const startedAtRef = useRef(recovered?.startedAt || Date.now())
+  // Visible proof the transcript is on disk. Without it, "is this being saved?"
+  // is unanswerable from the screen, which is the worst possible thing not to
+  // know while the meeting you are recording is the only copy.
+  const [savedAt, setSavedAt] = useState<number | null>(recovered?.savedAt || null)
+  const [saveFailed, setSaveFailed] = useState(false)
   useEffect(() => {
     // `interim` is the phrase being spoken right now, not yet promoted to a final
     // line. An interruption lands mid-sentence far more often than between them,
@@ -491,12 +496,14 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     // the recogniser had not finished confirming.
     const pending = interim.trim() ? [transcript.replace(/\s*$/, ''), `${speaker || 'Speaker'}: ${interim.trim()}`].filter(Boolean).join('\n') : transcript
     if (!pending.trim()) return
-    saveMeetingDraft(uid, {
+    const ok = saveMeetingDraft(uid, {
       title, description, participants, speaker, lang,
       transcript: pending, seconds,
       startedAt: startedAtRef.current,
       savedAt: Date.now(),
     })
+    setSaveFailed(!ok)
+    if (ok) setSavedAt(Date.now())
   }, [transcript, interim, title, description, participants, speaker, lang, seconds, uid])
 
   const SRClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -966,7 +973,13 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           </div>
 
           <div>
-            <div className="spread"><label>Live transcript (editable — fix any names before analyzing)</label>{transcript && <button className="btn btn-sm btn-ghost" onClick={() => setTranscript('')}>Clear</button>}</div>
+            <div className="spread">
+              <label className="row" style={{ gap: 8 }}>
+                Live transcript (editable — fix any names before analyzing)
+                {saveFailed
+                  ? <span className="md-save md-save-bad">⚠ NOT being saved — this browser is blocking storage</span>
+                  : savedAt && <span className="md-save">✓ saved to this device</span>}
+              </label>{transcript && <button className="btn btn-sm btn-ghost" onClick={() => setTranscript('')}>Clear</button>}</div>
             <textarea rows={8} value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder={`Recognized speech appears here as "${speaker}: …" lines.`} style={{ fontFamily: 'monospace', fontSize: 12.5 }} />
             {interim && <div className="muted" style={{ fontStyle: 'italic', fontSize: 12, marginTop: 4 }}>… {interim}</div>}
           </div>

@@ -48,9 +48,17 @@ export function loadMeetingDraft(userId: string): MeetingDraft | null {
   } catch { return null } // corrupt — better to show nothing than to crash the recorder
 }
 
-export function saveMeetingDraft(userId: string, d: MeetingDraft) {
-  try { localStorage.setItem(storeKey(userId), JSON.stringify(d)) }
-  catch { /* storage off or over quota — recording still works, it just won't survive a kill */ }
+// Returns whether the write actually landed. Swallowing the failure silently was
+// wrong: storage being off or full looks identical to "my meeting vanished", and
+// the person recording is the only one who can act on it — so the recorder says
+// so out loud rather than letting them find out after the meeting is over.
+export function saveMeetingDraft(userId: string, d: MeetingDraft): boolean {
+  try {
+    localStorage.setItem(storeKey(userId), JSON.stringify(d))
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function clearMeetingDraft(userId: string) {

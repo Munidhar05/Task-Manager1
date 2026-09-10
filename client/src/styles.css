@@ -2256,6 +2256,9 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .md-pending-main { min-width: 0; display: grid; gap: 3px; }
 .md-pending-title { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; color: var(--warning-ink); }
 .md-pending-sub { font-size: 12.5px; color: var(--warning-ink); opacity: .85; }
+/* "is my meeting safe?" answered on the screen that is recording it. */
+.md-save { font-size: 11.5px; font-weight: 600; color: var(--success-ink); opacity: .9; }
+.md-save-bad { color: var(--danger-ink); opacity: 1; }
 /* Recorder transport. Green means capturing, red means stopping — the pair a
    person checks at a glance mid-meeting, from across a table, often on a dark
    screen. Solid fills rather than the app's quiet outline .btn-danger, which
