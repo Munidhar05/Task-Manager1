@@ -2249,6 +2249,13 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .search-active-clear { border: none; background: transparent; color: var(--primary); font-size: 14px; line-height: 1; cursor: pointer; padding: 9px 11px 9px 6px; flex-shrink: 0; }
 .search-active-clear:hover { color: var(--primary-dark); }
 .meetings-actions { margin-left: auto; } /* right-aligned on desktop; centered on phones (see below) */
+/* A meeting recorded but never analyzed. It lives only in this browser's
+   storage, so the card has to read as unfinished business rather than as one
+   more meeting in the list — see lib/meetingDraft.ts. */
+.md-pending { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--warning-border); border-radius: var(--r-lg); background: var(--warning-bg); }
+.md-pending-main { min-width: 0; display: grid; gap: 3px; }
+.md-pending-title { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; color: var(--warning-ink); }
+.md-pending-sub { font-size: 12.5px; color: var(--warning-ink); opacity: .85; }
 /* Recorder transport. Green means capturing, red means stopping — the pair a
    person checks at a glance mid-meeting, from across a table, often on a dark
    screen. Solid fills rather than the app's quiet outline .btn-danger, which

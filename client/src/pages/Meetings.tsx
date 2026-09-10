@@ -10,6 +10,7 @@ import { useAuth } from '../auth'
 import { LANG_LABEL, EmptyState, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 import { listReviewDrafts } from '../lib/reviewDraft'
+import { MeetingDraft, loadMeetingDraft, saveMeetingDraft, clearMeetingDraft, draftLineCount, draftDuration, draftAgo } from '../lib/meetingDraft'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
 
@@ -105,6 +106,25 @@ export default function Meetings() {
   // are still on this device, waiting in localStorage.
   const inProgress = React.useMemo(() => new Set(listReviewDrafts(user?.id || 'anon').map((d) => d.meetingId)), [user?.id])
 
+  // A meeting that was recorded but never analyzed. It exists nowhere but this
+  // device — the server has never heard of it — so the list is the only place it
+  // can be found again, and it has to be impossible to miss.
+  const [pendingDraft, setPendingDraft] = useState<MeetingDraft | null>(() => loadMeetingDraft(user?.id || 'anon'))
+  const refreshDraft = () => setPendingDraft(loadMeetingDraft(user?.id || 'anon'))
+  const discardDraft = async () => {
+    const d = pendingDraft
+    if (!d) return
+    const ok = await confirmDialog({
+      title: 'Discard this recording?',
+      message: `“${d.title || 'Live Meeting'}” — ${draftLineCount(d)} lines, ${draftDuration(d)}. It has never been analyzed, so this cannot be undone and the recording is not stored anywhere else.`,
+      confirmText: 'Discard recording',
+      danger: true,
+    })
+    if (!ok) return
+    clearMeetingDraft(user?.id || 'anon')
+    refreshDraft()
+  }
+
   // With no meetings, the empty state owns the whole page — so the one thing to do
   // next belongs in the middle of it, not only in the top-right corner. Deliberately
   // no data-va: findVaEl takes the FIRST match, and the toolbar button is the one the
@@ -140,6 +160,25 @@ export default function Meetings() {
           </div>
         )}
       </div>
+      {/* Shown under BOTH filters on purpose: this meeting is not on the server at
+          all, so filtering it away would hide the only copy that exists. */}
+      {pendingDraft && isManager && (
+        <div className="md-pending section">
+          <div className="md-pending-main">
+            <div className="md-pending-title">
+              <Ic name="mic" size={15} /> Recorded but not analyzed yet
+            </div>
+            <div className="md-pending-sub">
+              “{pendingDraft.title || 'Live Meeting'}” — {draftLineCount(pendingDraft)} lines, {draftDuration(pendingDraft)}, saved {draftAgo(pendingDraft.savedAt)}.
+              This recording is only on this device until you analyze it.
+            </div>
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={() => setShowLive(true)}>Resume &amp; analyze</button>
+            <button className="btn" onClick={discardDraft}>Discard</button>
+          </div>
+        </div>
+      )}
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
         {shown.map((m) => (
           <div key={m.id} className="card clickable" onClick={() => nav('/meetings/' + m.id)}>
@@ -193,7 +232,7 @@ export default function Meetings() {
         )}
       </div>
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} onDone={(id) => { setShowUpload(false); load(); nav('/meetings/' + id) }} />}
-      {showLive && <LiveMeetingModal defaultSpeaker={user?.name || 'Manager'} onClose={() => setShowLive(false)} onDone={(id) => { setShowLive(false); load(); nav('/meetings/' + id) }} />}
+      {showLive && <LiveMeetingModal defaultSpeaker={user?.name || 'Manager'} onClose={() => { setShowLive(false); refreshDraft() }} onDone={(id) => { setShowLive(false); refreshDraft(); load(); nav('/meetings/' + id) }} />}
       {editing && <EditMeetingModal meeting={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load() }} />}
     </>
   )
@@ -393,12 +432,20 @@ function recordSegment(stream: MediaStream, ms: number): Promise<Blob> {
 }
 
 function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker: string; onClose: () => void; onDone: (id: string) => void }) {
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [participants, setParticipants] = useState<string[]>([])
+  const { user } = useAuth()
+  const uid = user?.id || 'anon'
+  // A meeting recorded earlier and never analyzed. Until the analyze button is
+  // pressed this transcript exists nowhere else — not on the server, not on any
+  // other device — so it is restored here rather than started over.
+  const [recovered] = useState(() => loadMeetingDraft(uid))
+  const [showRecovered, setShowRecovered] = useState(!!recovered)
+
+  const [title, setTitle] = useState(recovered?.title || '')
+  const [description, setDescription] = useState(recovered?.description || '')
+  const [participants, setParticipants] = useState<string[]>(recovered?.participants || [])
   const date = new Date().toISOString().slice(0, 10)
-  const [speaker, setSpeaker] = useState(defaultSpeaker)
-  const [lang, setLang] = useState('en-IN')
+  const [speaker, setSpeaker] = useState(recovered?.speaker || defaultSpeaker)
+  const [lang, setLang] = useState(recovered?.lang || 'en-IN')
   const [provider, setProvider] = useState('none')
   const [mode, setMode] = useState<'auto' | 'browser'>('browser')
   const [recording, setRecording] = useState(false)
@@ -407,12 +454,12 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // Connection state for the live recorder, shown as a status line rather than
   // an error — a reconnect during a long meeting is expected, not a failure.
   const [liveNote, setLiveNote] = useState('')
-  const [transcript, setTranscript] = useState('')
+  const [transcript, setTranscript] = useState(recovered?.transcript || '')
   const [interim, setInterim] = useState('')
   // Purely to explain the gap. Without it the transcript silently stops growing
   // mid-meeting and the only honest reading is "the recorder broke".
   const [agentTalking, setAgentTalking] = useState(false)
-  const [seconds, setSeconds] = useState(0)
+  const [seconds, setSeconds] = useState(recovered?.seconds || 0)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -428,6 +475,24 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   useEffect(() => { speakerRef.current = speaker }, [speaker])
   const transcriptRef = useRef('')
   useEffect(() => { transcriptRef.current = transcript }, [transcript])
+
+  // Write the meeting to disk as it is captured. Every spoken phrase lands here
+  // within a second of being recognised, so the worst a refresh, a crash or a
+  // swipe out of recents can cost is the sentence in progress.
+  //
+  // Deliberately NOT cleared when the recorder closes: closing without analyzing
+  // is the exact case this exists for. It is cleared in one place only — after
+  // the server has accepted the meeting.
+  const startedAtRef = useRef(recovered?.startedAt || Date.now())
+  useEffect(() => {
+    if (!transcript.trim()) return
+    saveMeetingDraft(uid, {
+      title, description, participants, speaker, lang,
+      transcript, seconds,
+      startedAt: startedAtRef.current,
+      savedAt: Date.now(),
+    })
+  }, [transcript, title, description, participants, speaker, lang, seconds, uid])
 
   const SRClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   const browserSupported = !!SRClass
@@ -801,6 +866,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     setBusy(true); setErr('')
     try {
       const r = await api.post('/meetings', { title: title || 'Live Meeting', description, meeting_date: date, transcript, participant_ids: participants })
+      // Only now is the meeting somewhere other than this device.
+      clearMeetingDraft(uid)
       onDone(r.id)
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -813,6 +880,14 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           <button className="btn btn-ghost" onClick={close}>✕</button>
         </div>
         <div className="card-pad grid" style={{ gap: 12 }}>
+          {showRecovered && recovered && (
+            <div className="rv-resumed">
+              <div style={{ minWidth: 0 }}>
+                <b>Your recording is back</b> — {draftLineCount(recovered)} lines, {draftDuration(recovered)}, from {draftAgo(recovered.savedAt)}. Analyze it to turn it into tasks.
+              </div>
+              <button className="btn btn-sm" onClick={() => setShowRecovered(false)}>Got it</button>
+            </div>
+          )}
           <div className="grid grid-3" style={{ gap: 10 }}>
             <div data-va="meetings.live.title" style={{ gridColumn: 'span 2' }}><MeetingTitleSelect value={title} onChange={setTitle} /></div>
             <div><label>Speaker label</label><input value={speaker} onChange={(e) => setSpeaker(e.target.value)} /></div>
