@@ -166,7 +166,7 @@ export default function Meetings() {
         <div className="md-pending section">
           <div className="md-pending-main">
             <div className="md-pending-title">
-              <Ic name="mic" size={15} /> Recorded but not analyzed yet
+              <Ic name="mic" size={15} /> Meeting in progress — not analyzed yet
             </div>
             <div className="md-pending-sub">
               “{pendingDraft.title || 'Live Meeting'}” — {draftLineCount(pendingDraft)} lines, {draftDuration(pendingDraft)}, saved {draftAgo(pendingDraft.savedAt)}.
@@ -174,7 +174,7 @@ export default function Meetings() {
             </div>
           </div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" onClick={() => setShowLive(true)}>Resume &amp; analyze</button>
+            <button className="btn btn-primary" onClick={() => setShowLive(true)}>Resume meeting</button>
             <button className="btn" onClick={discardDraft}>Discard</button>
           </div>
         </div>
@@ -485,14 +485,19 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // the server has accepted the meeting.
   const startedAtRef = useRef(recovered?.startedAt || Date.now())
   useEffect(() => {
-    if (!transcript.trim()) return
+    // `interim` is the phrase being spoken right now, not yet promoted to a final
+    // line. An interruption lands mid-sentence far more often than between them,
+    // so it is folded in rather than dropped — marked, because it is the one part
+    // the recogniser had not finished confirming.
+    const pending = interim.trim() ? [transcript.replace(/\s*$/, ''), `${speaker || 'Speaker'}: ${interim.trim()}`].filter(Boolean).join('\n') : transcript
+    if (!pending.trim()) return
     saveMeetingDraft(uid, {
       title, description, participants, speaker, lang,
-      transcript, seconds,
+      transcript: pending, seconds,
       startedAt: startedAtRef.current,
       savedAt: Date.now(),
     })
-  }, [transcript, title, description, participants, speaker, lang, seconds, uid])
+  }, [transcript, interim, title, description, participants, speaker, lang, seconds, uid])
 
   const SRClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   const browserSupported = !!SRClass
@@ -758,7 +763,10 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   }
 
   const start = () => {
-    setSeconds(0)
+    // Only zero the clock for a genuinely new recording. Resuming a meeting that
+    // was interrupted is a continuation of the same one, and restarting its timer
+    // would say the previous 40 minutes never happened.
+    if (!transcript.trim()) setSeconds(0)
     setPaused(false); pausedRef.current = false
     keepScreenAwake(true)
     beginCapture()
@@ -883,7 +891,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           {showRecovered && recovered && (
             <div className="rv-resumed">
               <div style={{ minWidth: 0 }}>
-                <b>Your recording is back</b> — {draftLineCount(recovered)} lines, {draftDuration(recovered)}, from {draftAgo(recovered.savedAt)}. Analyze it to turn it into tasks.
+                <b>Your recording is back</b> — {draftLineCount(recovered)} lines, {draftDuration(recovered)}, from {draftAgo(recovered.savedAt)}. Press Start recording to carry on, or analyze what you have.
               </div>
               <button className="btn btn-sm" onClick={() => setShowRecovered(false)}>Got it</button>
             </div>
