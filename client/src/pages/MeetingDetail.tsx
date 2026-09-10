@@ -3,8 +3,10 @@ import { useParams, Link } from 'react-router-dom'
 import { api, Suggestion } from '../api'
 import { PriorityBadge, StatusBadge, ConfidenceScore, Evidence, confidenceBand, Avatar, Ic, dueLabel, LANG_LABEL, defaultDueDate, AutoTextarea } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
+import { useAuth } from '../auth'
 import { confirmDialog } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
+import { ReviewEdit, loadReviewDraft, saveReviewDraft, clearReviewDraft, draftAge } from '../lib/reviewDraft'
 
 // A textarea that grows to fit its content — so a long task wraps and is fully
 // readable instead of scrolling word-by-word inside a one-line input.
@@ -25,8 +27,28 @@ export default function MeetingDetail() {
   const [restoringId, setRestoringId] = useState<string | null>(null)
   const [restoreErr, setRestoreErr] = useState('')
   const [loadErr, setLoadErr] = useState(false)
+  const { user } = useAuth()
   const load = () => { setLoadErr(false); return api.get('/meetings/' + id).then(setM).catch(() => setLoadErr(true)) }
   useEffect(() => { load() }, [id])
+
+  // Coming back after the app was killed mid-review. The edits are on disk, so
+  // reopen the review screen straight onto them instead of dropping the manager
+  // on the meeting page to work out for themselves that they were interrupted.
+  // Guarded by a ref because `load()` runs again after every assignment —
+  // without it, closing the screen would immediately reopen it.
+  const resumedRef = React.useRef(false)
+  useEffect(() => {
+    if (!m || resumedRef.current) return
+    if (!loadReviewDraft(user?.id || 'anon', m.id)) return
+    resumedRef.current = true
+    // Everything they had been editing has since been assigned or deleted by
+    // someone else, so there is no review left to come back to.
+    if (!(m.suggestions || []).some((x: Suggestion) => x.status === 'pending')) {
+      clearReviewDraft(user?.id || 'anon', m.id)
+      return
+    }
+    setReview(true)
+  }, [m])
 
   // Bring a rejected suggestion back into the pending queue, then open the review
   // screen so the manager can edit / reassign it right away.
@@ -137,11 +159,11 @@ export default function MeetingDetail() {
               <div className="card section">
                 <div className="card-head"><h3>Rejected Suggestions ({rejected.length})</h3></div>
                 <div className="card-pad grid" style={{ gap: 8 }}>
-                  {restoreErr && <div style={{ color: '#ef4444', fontSize: 12.5 }}>{restoreErr}</div>}
+                  {restoreErr && <div style={{ color: 'var(--danger-ink)', fontSize: 12.5 }}>{restoreErr}</div>}
                   {rejected.map((sg) => (
-                    <div key={sg.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
+                    <div key={sg.id} className="spread" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', background: 'var(--n-50)' }}>
                       <div>
-                        <div style={{ fontWeight: 600, textDecoration: 'line-through', color: '#9c9082' }}>{sg.title}</div>
+                        <div style={{ fontWeight: 600, textDecoration: 'line-through', color: 'var(--muted)' }}>{sg.title}</div>
                         <div className="muted" style={{ fontSize: 12 }}>
                           {sg.suggested_assignee_name || sg.suggested_assignee_raw || 'No owner'} · {dueLabel(sg)}
                         </div>
@@ -217,14 +239,90 @@ const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
 type RowStatus = 'pending' | 'busy' | 'assigned' | 'rejected' | 'merged'
 function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: any; pending: Suggestion[]; onClose: () => void; onChanged: () => void }) {
   type Row = Suggestion & { _status: RowStatus; _error: string; _showMerge: boolean; _mergeInto: string }
+  const { user } = useAuth()
+  const uid = user?.id || 'anon'
+
   // Pre-fill each due date from priority (matching the server default) when the
   // AI didn't capture a deadline, so the manager sees the date before assigning.
-  const [rows, setRows] = useState<Row[]>(pending.map((p) => ({
-    ...p, due_date: p.due_date || defaultDueDate(p.priority), _status: 'pending', _error: '', _showMerge: false, _mergeInto: '',
-  })))
+  const rowFields = (p: Suggestion): ReviewEdit => ({
+    title: p.title,
+    // The extractor rarely has a real description: rules.js builds title and
+    // description from the same sentence, and every LLM path falls back to
+    // `description || title` server-side. Echoing that copy into its own box
+    // just says the same thing twice, so an exact duplicate reads as empty.
+    // Nothing is lost — createTaskFromSuggestion falls back to the title again
+    // when the assigned task is created.
+    description: p.description && p.description !== p.title ? p.description : '',
+    suggested_assignee_id: p.suggested_assignee_id || '',
+    priority: p.priority,
+    due_date: p.due_date || defaultDueDate(p.priority),
+  })
+
+  // What the server said when this screen opened, kept for the whole session.
+  // The autosave below diffs against THIS rather than against the raw
+  // suggestion, so the due date we just filled in for the manager doesn't count
+  // as one of their edits — otherwise merely opening the review would register
+  // as an unfinished one, and the resume banner would nag about a screen nobody
+  // touched. A ref, not state: reloading the meeting in the background must not
+  // move the line the edits are measured from.
+  const baselineRef = React.useRef<Map<string, ReviewEdit> | null>(null)
+  if (!baselineRef.current) baselineRef.current = new Map(pending.map((p) => [p.id, rowFields(p)]))
+
+  // Edits this manager had made when the app was last killed or backgrounded.
+  const [saved] = useState(() => loadReviewDraft(uid, meeting.id))
+
+  const [rows, setRows] = useState<Row[]>(() => pending.map((p) => {
+    const e = saved?.edits[p.id]
+    return {
+      ...p,
+      ...(e || rowFields(p)),
+      suggested_assignee_id: (e ? e.suggested_assignee_id : p.suggested_assignee_id) || null,
+      _status: 'pending' as RowStatus, _error: '', _showMerge: false, _mergeInto: '',
+    }
+  }))
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkErr, setBulkErr] = useState('')
   const participants: any[] = meeting.participants || []
+
+  // Only count what actually came back: a suggestion someone else assigned or
+  // deleted while this manager was away is no longer in `pending`, and claiming
+  // to have restored an edit to it would be a lie.
+  const [restored] = useState(() => (saved ? Object.keys(saved.edits).filter((sid) => pending.some((p) => p.id === sid)).length : 0))
+  const [showRestored, setShowRestored] = useState(restored > 0)
+
+  // Write the manager's work to disk on every keystroke. Only rows still
+  // awaiting a decision are worth keeping — once a row is assigned, rejected or
+  // merged the server owns it, and a leftover local edit would reappear as a
+  // change to a task that has already gone out.
+  useEffect(() => {
+    const edits: Record<string, ReviewEdit> = {}
+    for (const r of rows) {
+      if (r._status !== 'pending') continue
+      const base = baselineRef.current!.get(r.id)
+      if (!base) continue
+      const cur: ReviewEdit = {
+        title: r.title,
+        description: r.description || '',
+        suggested_assignee_id: r.suggested_assignee_id || '',
+        priority: r.priority,
+        due_date: r.due_date || '',
+      }
+      const changed = (Object.keys(cur) as (keyof ReviewEdit)[]).some((k) => cur[k] !== base[k])
+      if (changed) edits[r.id] = cur
+    }
+    if (!Object.keys(edits).length) clearReviewDraft(uid, meeting.id)
+    else saveReviewDraft(uid, { meetingId: meeting.id, meetingTitle: meeting.title || 'Meeting', savedAt: Date.now(), edits, newTask: null })
+  }, [rows, uid, meeting.id, meeting.title])
+
+  // Throw away what was restored and go back to the AI's own wording. The
+  // autosave above notices there is nothing left to keep and drops the entry.
+  const discardRestored = () => {
+    setRows((rs) => rs.map((r) => {
+      const base = baselineRef.current!.get(r.id)
+      return base && r._status === 'pending' ? { ...r, ...base, suggested_assignee_id: base.suggested_assignee_id || null } : r
+    }))
+    setShowRestored(false)
+  }
 
   const set = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
 
@@ -235,7 +333,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
     set(i, { _status: 'busy', _error: '' })
     try {
       await api.patch(`/meetings/suggestions/${r.id}`, {
-        title: r.title, suggested_assignee_id: r.suggested_assignee_id,
+        title: r.title, description: r.description || '', suggested_assignee_id: r.suggested_assignee_id,
         priority: r.priority, due_date: r.due_date || null,
       })
       const res = await api.post(`/meetings/${meeting.id}/assign`, { ids: [r.id] })
@@ -294,7 +392,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
     try {
       for (const r of targets) {
         await api.patch(`/meetings/suggestions/${r.id}`, {
-          title: r.title, suggested_assignee_id: r.suggested_assignee_id,
+          title: r.title, description: r.description || '', suggested_assignee_id: r.suggested_assignee_id,
           priority: r.priority, due_date: r.due_date || null,
         })
       }
@@ -319,14 +417,26 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
       <div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Review and assign tasks" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 920, width: '94%' }}>
         <div className="card-head spread"><h3>Review &amp; Assign Tasks</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="card-pad grid" style={{ gap: 12, maxHeight: '70vh', overflow: 'auto' }}>
+          {/* Say so out loud. A manager who was pulled into a call mid-review comes
+              back expecting to start over, and silently restoring their edits would
+              leave them re-checking every row to work out what the AI said and what
+              they had already changed. */}
+          {showRestored && (
+            <div className="rv-resumed">
+              <div style={{ minWidth: 0 }}>
+                <b>Picked up where you left off</b> — {restored} unsaved {restored === 1 ? 'change' : 'changes'} from {draftAge(saved!.savedAt)}. Nothing has been assigned yet.
+              </div>
+              <button className="btn btn-sm" onClick={discardRestored}>Start over</button>
+            </div>
+          )}
           {rows.map((r, i) => {
             // Once a row is acted on, collapse it into a compact confirmation strip.
             if (r._status === 'assigned' || r._status === 'rejected' || r._status === 'merged') {
               const label = r._status === 'assigned' ? 'Assigned & notified' : r._status === 'rejected' ? 'Rejected' : 'Merged'
-              const color = r._status === 'assigned' ? '#10b981' : r._status === 'rejected' ? '#ef4444' : '#7a6f63'
+              const color = r._status === 'assigned' ? 'var(--success-ink)' : r._status === 'rejected' ? 'var(--danger-ink)' : 'var(--muted)'
               return (
-                <div key={r.id} className="spread" style={{ border: '1px solid #e7ddd1', borderRadius: 10, padding: '10px 12px', background: '#faf7f2' }}>
-                  <span style={{ fontWeight: 600, textDecoration: r._status === 'assigned' ? 'none' : 'line-through', color: r._status === 'assigned' ? 'inherit' : '#9c9082' }}>{r.title}</span>
+                <div key={r.id} className="spread" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', background: 'var(--n-50)' }}>
+                  <span style={{ fontWeight: 600, textDecoration: r._status === 'assigned' ? 'none' : 'line-through', color: r._status === 'assigned' ? 'inherit' : 'var(--muted)' }}>{r.title}</span>
                   <span className="row" style={{ gap: 10 }}>
                     <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
                     {(r._status === 'rejected' || r._status === 'merged') && (
@@ -338,11 +448,27 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
             }
             const busy = r._status === 'busy'
             return (
-              <div key={r.id} style={{ border: '1px solid ' + (r._error ? '#ef444466' : '#e7ddd1'), borderRadius: 10, padding: 12 }}>
+              <div key={r.id} style={{ border: '1px solid ' + (r._error ? 'var(--danger-border)' : 'var(--border)'), borderRadius: 10, padding: 12 }}>
                 <div className="grid" style={{ gap: 8 }}>
-                  <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-                    <AutoTextarea value={r.title} onChange={(e) => set(i, { title: e.target.value })} style={{ fontWeight: 600, flex: 1 }} />
-                    <div style={{ paddingTop: 10, flexShrink: 0 }}><ConfidenceScore score={r.confidence} /></div>
+                  {/* The title is the field being edited, so it gets the width. The
+                      confidence chip can't shrink (nowrap, ~190px), which on a phone
+                      left the title one word per line — so it moves above the title
+                      there rather than beside it. See .rv-title-row. */}
+                  <div className="rv-title-row">
+                    <div className="rv-title-main">
+                      <label>Task title</label>
+                      <AutoTextarea value={r.title} onChange={(e) => set(i, { title: e.target.value })} className="rv-title" />
+                    </div>
+                    <div className="rv-conf"><ConfidenceScore score={r.confidence} /></div>
+                  </div>
+                  <div>
+                    <label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+                    <AutoTextarea
+                      value={r.description || ''}
+                      onChange={(e) => set(i, { description: e.target.value })}
+                      placeholder="Optional — add any detail the title doesn't already carry."
+                      style={{ width: '100%' }}
+                    />
                   </div>
                   <div className="grid grid-3" style={{ gap: 8 }}>
                     <div>
@@ -380,10 +506,10 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
             )
           })}
         </div>
-        <div className="card-pad spread" style={{ borderTop: '1px solid #eee' }}>
+        <div className="card-pad spread" style={{ borderTop: '1px solid var(--border)' }}>
           <div className="muted" style={{ fontSize: 12.5 }}>
             {assignedCount} assigned · {remaining} left{noOwnerCount ? ` · ${noOwnerCount} need an owner` : ''}
-            {bulkErr && <span style={{ color: '#ef4444', marginLeft: 8 }}>{bulkErr}</span>}
+            {bulkErr && <span style={{ color: 'var(--danger-ink)', marginLeft: 8 }}>{bulkErr}</span>}
           </div>
           <div className="row">
             <button className="btn" onClick={onClose}>{remaining === 0 ? 'Close' : 'Done'}</button>
