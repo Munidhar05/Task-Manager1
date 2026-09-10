@@ -110,7 +110,31 @@ export default function Meetings() {
   // device — the server has never heard of it — so the list is the only place it
   // can be found again, and it has to be impossible to miss.
   const [pendingDraft, setPendingDraft] = useState<MeetingDraft | null>(() => loadMeetingDraft(user?.id || 'anon'))
-  const refreshDraft = () => setPendingDraft(loadMeetingDraft(user?.id || 'anon'))
+  const [serverDraftId, setServerDraftId] = useState<string | null>(null)
+  // Local first, then the server. The device copy is instant and survives a lost
+  // network; the server copy survives a wiped browser, a flat battery, or being
+  // picked up on a different machine. Whichever holds more of the conversation
+  // wins, because the only unrecoverable outcome is showing the shorter one.
+  const refreshDraft = async () => {
+    const local = loadMeetingDraft(user?.id || 'anon')
+    setPendingDraft(local)
+    try {
+      const remote = await api.get('/meetings/draft')
+      if (!remote) { setServerDraftId(null); return }
+      setServerDraftId(remote.id)
+      const remoteText = String(remote.raw_transcript || '')
+      if (!local || remoteText.length > local.transcript.length) {
+        setPendingDraft({
+          title: remote.title || '', description: '',
+          participants: remote.participant_ids || [],
+          speaker: user?.name || 'Speaker', lang: 'en-IN',
+          transcript: remoteText, seconds: remote.draft_seconds || 0,
+          startedAt: Date.parse(remote.created_at) || Date.now(),
+          savedAt: Date.now(),
+        })
+      }
+    } catch { /* offline — the device copy is still on screen */ }
+  }
   // The initialiser above runs once, before the user id is necessarily settled.
   // Re-read once the page is up so a recording can never be missed by a single
   // render's worth of timing.
@@ -126,6 +150,8 @@ export default function Meetings() {
     })
     if (!ok) return
     clearMeetingDraft(user?.id || 'anon')
+    if (serverDraftId) { try { await api.del('/meetings/draft/' + serverDraftId) } catch { /* it will be reused, not duplicated */ } }
+    setServerDraftId(null)
     refreshDraft()
   }
 
@@ -174,7 +200,7 @@ export default function Meetings() {
             </div>
             <div className="md-pending-sub">
               “{pendingDraft.title || 'Live Meeting'}” — {draftLineCount(pendingDraft)} lines, {draftDuration(pendingDraft)}, saved {draftAgo(pendingDraft.savedAt)}.
-              This recording is only on this device until you analyze it.
+              {serverDraftId ? ' Saved to your account — it will be here on any device.' : ' Saved on this device.'}
             </div>
           </div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
@@ -493,6 +519,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // know while the meeting you are recording is the only copy.
   const [savedAt, setSavedAt] = useState<number | null>(recovered?.savedAt || null)
   const [saveFailed, setSaveFailed] = useState(false)
+  // The server's copy of this recording. Created on the first press of record
+  // and updated on a timer, so the meeting outlives this browser entirely.
+  const draftIdRef = useRef<string | null>(null)
+  const [syncedAt, setSyncedAt] = useState<number | null>(null)
+  const lastSentRef = useRef('')
   useEffect(() => {
     // `interim` is the phrase being spoken right now, not yet promoted to a final
     // line. An interruption lands mid-sentence far more often than between them,
@@ -530,6 +561,57 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   }, [recording, paused])
 
   useEffect(() => onAgentTurn(setAgentTalking), [])
+
+  // Adopt a recording already on the server — the one left behind by the tab that
+  // was refreshed, or by another device. Its transcript wins if it holds more of
+  // the conversation than whatever this device kept.
+  useEffect(() => {
+    let dead = false
+    api.get('/meetings/draft').then((d) => {
+      if (dead || !d) return
+      draftIdRef.current = d.id
+      const remote = String(d.raw_transcript || '')
+      setTranscript((cur) => (remote.length > cur.length ? remote : cur))
+      setSeconds((cur) => Math.max(cur, d.draft_seconds || 0))
+      if (d.title) setTitle((cur) => cur || d.title)
+      if (d.participant_ids?.length) setParticipants((cur) => (cur.length ? cur : d.participant_ids))
+      setSyncedAt(Date.now())
+    }).catch(() => { /* offline; the device copy stands */ })
+    return () => { dead = true }
+  }, [])
+
+  // Push to the server on a timer rather than on every phrase: a meeting produces
+  // a line every few seconds and this must not turn into a request per word.
+  // Skipped when nothing changed, so a silent room costs nothing.
+  useEffect(() => {
+    if (!recording && !transcript.trim()) return
+    const tick = async () => {
+      const text = transcriptRef.current
+      if (!text.trim() || text === lastSentRef.current) return
+      try {
+        if (!draftIdRef.current) {
+          const d = await api.post('/meetings/draft', { title })
+          draftIdRef.current = d.id
+        }
+        await api.patch(`/meetings/draft/${draftIdRef.current}`, { transcript: text, title, seconds, participant_ids: participants })
+        lastSentRef.current = text
+        setSyncedAt(Date.now())
+      } catch { /* offline — localStorage already has it, and the next tick retries */ }
+    }
+    const h = setInterval(tick, 5000)
+    tick()
+    return () => clearInterval(h)
+  }, [recording, transcript, title, seconds, participants])
+
+  // A refresh mid-meeting is now survivable, but it still costs the few seconds
+  // since the last sync — and someone who hits it by accident deserves the chance
+  // to say no. Browsers show their own wording; the string only has to be non-empty.
+  useEffect(() => {
+    if (!recording && !transcript.trim()) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [recording, transcript])
 
   // stop & clean up on unmount
   useEffect(() => () => {
@@ -887,6 +969,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
       const r = await api.post('/meetings', { title: title || 'Live Meeting', description, meeting_date: date, transcript, participant_ids: participants })
       // Only now is the meeting somewhere other than this device.
       clearMeetingDraft(uid)
+      if (draftIdRef.current) { try { await api.del('/meetings/draft/' + draftIdRef.current) } catch { /* harmless leftover */ } }
       onDone(r.id)
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -980,9 +1063,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             <div className="spread">
               <label className="row" style={{ gap: 8 }}>
                 Live transcript (editable — fix any names before analyzing)
-                {saveFailed
-                  ? <span className="md-save md-save-bad">⚠ NOT being saved — this browser is blocking storage</span>
-                  : savedAt && <span className="md-save">✓ saved to this device</span>}
+                {syncedAt
+                  ? <span className="md-save">✓ saved to your account</span>
+                  : saveFailed
+                    ? <span className="md-save md-save-bad">⚠ NOT being saved — storage blocked and no connection</span>
+                    : savedAt && <span className="md-save">✓ saved to this device</span>}
               </label>{transcript && <button className="btn btn-sm btn-ghost" onClick={() => setTranscript('')}>Clear</button>}</div>
             <textarea rows={8} value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder={`Recognized speech appears here as "${speaker}: …" lines.`} style={{ fontFamily: 'monospace', fontSize: 12.5 }} />
             {interim && <div className="muted" style={{ fontStyle: 'italic', fontSize: 12, marginTop: 4 }}>… {interim}</div>}

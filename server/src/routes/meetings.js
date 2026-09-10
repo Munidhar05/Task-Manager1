@@ -163,9 +163,89 @@ r.get('/', (req, res) => {
     SELECT m.*,
       (SELECT COUNT(*) FROM tasks t WHERE t.meeting_id=m.id) AS task_count,
       (SELECT COUNT(*) FROM suggested_tasks s WHERE s.meeting_id=m.id AND s.status='pending') AS pending_count
-    FROM meetings m WHERE m.org_id=? ORDER BY m.meeting_date DESC, m.created_at DESC
+    FROM meetings m WHERE m.org_id=? AND m.status<>'recording'
+    ORDER BY m.meeting_date DESC, m.created_at DESC
   `).all(req.user.org_id)
   res.json(rows.map((m) => ({ ...m, detected_languages: JSON.parse(m.detected_languages || '[]'), summary: JSON.parse(m.summary_json || '{}') })))
+})
+
+// ---------------------------------------------------------------------------
+// A recording in progress.
+//
+// Until this existed, a live meeting was held in one browser tab and nowhere
+// else, so a refresh, a flat battery or a phone call could destroy the only
+// record of a conversation that had already happened. The client still writes to
+// localStorage first — that is instant and survives a lost network, which is the
+// normal state of a meeting room — and pushes here every few seconds so the
+// meeting also survives a wiped browser, a dead device, or being picked up on a
+// different one.
+//
+// It reuses the meetings table with status='recording'. Those rows are filtered
+// out of LIST above so a half-captured meeting can never be mistaken for a
+// finished one.
+
+// The caller's own recording, if they left one running.
+r.get('/draft', (req, res) => {
+  const m = db.prepare(`SELECT id, title, raw_transcript, draft_seconds, created_at
+    FROM meetings WHERE org_id=? AND uploaded_by=? AND status='recording'
+    ORDER BY created_at DESC LIMIT 1`).get(req.user.org_id, req.user.id)
+  if (!m) return res.json(null)
+  const participants = db.prepare('SELECT user_id FROM meeting_participants WHERE meeting_id=?').all(m.id).map((r) => r.user_id)
+  res.json({ ...m, participant_ids: participants })
+})
+
+// Start one. Created the moment recording begins, so there is never a window in
+// which spoken words exist only in a browser tab.
+r.post('/draft', requireRole('manager', 'admin'), (req, res) => {
+  const b = req.body || {}
+  // One live recording per person: reuse theirs rather than accumulating rows if
+  // a tab was closed and another opened.
+  const open = db.prepare(`SELECT id FROM meetings WHERE org_id=? AND uploaded_by=? AND status='recording'`).get(req.user.org_id, req.user.id)
+  if (open) return res.json({ id: open.id, resumed: true })
+  const mid = id('mtg')
+  db.prepare(`INSERT INTO meetings
+    (id, org_id, title, description, meeting_date, uploaded_by, source_type, raw_transcript,
+     detected_languages, status, summary_json, engine, draft_seconds, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    mid, req.user.org_id, (b.title || '').trim() || 'Live Meeting', '', (b.meeting_date || now()).slice(0, 10),
+    req.user.id, 'transcript', '', '[]', 'recording', '{}', 'pending', 0, now())
+  res.json({ id: mid, resumed: false })
+})
+
+// Push what has been heard so far. Called every few seconds, so it stays cheap:
+// no audit row, no notification, no AI.
+r.patch('/draft/:id', requireRole('manager', 'admin'), (req, res) => {
+  const m = db.prepare(`SELECT id FROM meetings WHERE id=? AND org_id=? AND uploaded_by=? AND status='recording'`)
+    .get(req.params.id, req.user.org_id, req.user.id)
+  if (!m) return res.status(404).json({ error: 'No such recording' })
+  const b = req.body || {}
+  const sets = ['raw_transcript=?'], args = [String(b.transcript || '')]
+  if ('title' in b) { sets.push('title=?'); args.push((b.title || '').trim() || 'Live Meeting') }
+  if ('seconds' in b) { sets.push('draft_seconds=?'); args.push(Math.max(0, Math.round(Number(b.seconds) || 0))) }
+  args.push(m.id)
+  db.prepare(`UPDATE meetings SET ${sets.join(', ')} WHERE id=?`).run(...args)
+  if (Array.isArray(b.participant_ids)) {
+    db.prepare('DELETE FROM meeting_participants WHERE meeting_id=?').run(m.id)
+    for (const uid of [...new Set(b.participant_ids)]) {
+      const u = db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(uid, req.user.org_id)
+      if (u) db.prepare('INSERT OR IGNORE INTO meeting_participants (meeting_id, user_id) VALUES (?,?)').run(m.id, uid)
+    }
+  }
+  res.json({ ok: true })
+})
+
+// Thrown away, or finished — the real meeting is created by POST /meetings, and
+// this placeholder goes with it.
+r.delete('/draft/:id', requireRole('manager', 'admin'), (req, res) => {
+  const m = db.prepare(`SELECT id, raw_transcript FROM meetings WHERE id=? AND org_id=? AND uploaded_by=? AND status='recording'`)
+    .get(req.params.id, req.user.org_id, req.user.id)
+  if (!m) return res.json({ ok: true }) // already gone; deleting twice is not an error
+  db.prepare('DELETE FROM meeting_participants WHERE meeting_id=?').run(m.id)
+  db.prepare('DELETE FROM meetings WHERE id=?').run(m.id)
+  // Audited, unlike the patches: this is the one draft operation that destroys
+  // something a person cannot get back by talking again.
+  audit(req.user.org_id, req.user.id, 'meeting.draft_discard', 'meeting', m.id, `${(m.raw_transcript || '').length} chars`)
+  res.json({ ok: true })
 })
 
 // Meetings whose AI suggestions nobody has finished reviewing. Its own endpoint

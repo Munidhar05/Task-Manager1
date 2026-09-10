@@ -673,6 +673,7 @@ export function initSchema() {
   ensureColumn('users', 'avatar_file', 'TEXT')             // uploaded profile photo (data/avatars)
   ensureColumn('chat_conversations', 'avatar_file', 'TEXT') // uploaded group photo
   ensureColumn('chat_messages', 'forwarded', 'INTEGER DEFAULT 0') // message was forwarded
+  ensureColumn('meetings', 'draft_seconds', 'INTEGER DEFAULT 0') // elapsed clock of an in-progress recording
 
   // Index on conversation_id — created here (not in the inline schema) so it runs
   // AFTER the column is ensured above; otherwise older DBs predating the column fail.
