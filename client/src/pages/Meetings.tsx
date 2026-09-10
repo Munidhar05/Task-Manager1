@@ -111,6 +111,10 @@ export default function Meetings() {
   // can be found again, and it has to be impossible to miss.
   const [pendingDraft, setPendingDraft] = useState<MeetingDraft | null>(() => loadMeetingDraft(user?.id || 'anon'))
   const refreshDraft = () => setPendingDraft(loadMeetingDraft(user?.id || 'anon'))
+  // The initialiser above runs once, before the user id is necessarily settled.
+  // Re-read once the page is up so a recording can never be missed by a single
+  // render's worth of timing.
+  useEffect(() => { refreshDraft() }, [user?.id])
   const discardDraft = async () => {
     const d = pendingDraft
     if (!d) return

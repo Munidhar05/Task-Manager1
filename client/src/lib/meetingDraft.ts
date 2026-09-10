@@ -35,9 +35,24 @@ export interface MeetingDraft {
 
 const storeKey = (userId: string) => `${KEY}_${userId || 'anon'}`
 
+// Falls back to ANY saved recording if this user's key has nothing.
+//
+// The key is per-user so a shared device cannot leak one person's meeting to the
+// next. But that means a draft written while the user id was known, and read back
+// a moment before it is known again, would look like no draft at all — and the
+// only copy of a meeting is far too costly a thing to lose to a naming mismatch.
+// So a miss on the exact key sweeps every draft key before giving up.
 export function loadMeetingDraft(userId: string): MeetingDraft | null {
   let raw: string | null = null
-  try { raw = localStorage.getItem(storeKey(userId)) } catch { return null } // storage off
+  try {
+    raw = localStorage.getItem(storeKey(userId))
+    if (!raw) {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k && k.startsWith(KEY)) { raw = localStorage.getItem(k); break }
+      }
+    }
+  } catch { return null } // storage off
   if (!raw) return null
   try {
     const d = JSON.parse(raw) as MeetingDraft
@@ -61,8 +76,18 @@ export function saveMeetingDraft(userId: string, d: MeetingDraft): boolean {
   }
 }
 
+// Clears this user's draft and any stray one the fallback above could resurrect,
+// so discarding or analyzing really does mean gone.
 export function clearMeetingDraft(userId: string) {
-  try { localStorage.removeItem(storeKey(userId)) } catch { /* storage off */ }
+  try {
+    localStorage.removeItem(storeKey(userId))
+    const stray: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith(KEY)) stray.push(k)
+    }
+    for (const k of stray) localStorage.removeItem(k)
+  } catch { /* storage off */ }
 }
 
 // Roughly how much was said, for the "you have an unanalyzed meeting" card. Lines
