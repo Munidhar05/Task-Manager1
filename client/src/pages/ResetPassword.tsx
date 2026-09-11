@@ -36,7 +36,7 @@ export default function ResetPassword() {
         <form className="login-card login-card--panda" onSubmit={submit}>
           <div className="brand" style={{ padding: 0, marginBottom: 14, marginTop: 26, justifyContent: 'space-between', width: '100%' }}>
             <div>
-              <div className="brand-name" style={{ color: '#0f172a' }}>Choose a new password</div>
+              <div className="brand-name" style={{ color: 'var(--text)' }}>Choose a new password</div>
               <div className="muted" style={{ fontSize: 12 }}>Pick something you'll remember</div>
             </div>
             <img src="/logo.png" alt="VoTask" className="brand-logo-img" />
