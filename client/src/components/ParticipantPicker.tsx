@@ -30,7 +30,7 @@ export default function ParticipantPicker({ value, onChange, autoSelectAll }: { 
   const remove = (id: string) => onChange(value.filter((x) => x !== id))
   const addAll = () => { onChange(users.map((u) => u.id)); setOpen(false) }
 
-  const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fbe9d6', color: '#7c3b10', borderRadius: 999, padding: '3px 6px 3px 4px', fontSize: 12.5, fontWeight: 600 }
+  const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: '#ffedd5', color: '#7c3b10', borderRadius: 999, padding: '3px 6px 3px 4px', fontSize: 12.5, fontWeight: 600 }
 
   return (
     <div>

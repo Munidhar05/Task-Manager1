@@ -40,7 +40,7 @@ export default function InviteTeam() {
         <div className="login-card login-card--panda">
           <div className="brand" style={{ padding: 0, marginBottom: 14, marginTop: 20, justifyContent: 'space-between', width: '100%' }}>
             <div>
-              <div className="brand-name" style={{ color: '#16191d' }}>Bring your team</div>
+              <div className="brand-name" style={{ color: '#0f172a' }}>Bring your team</div>
               <div className="muted" style={{ fontSize: 12 }}>{company ? `${company} is ready.` : 'Your workspace is ready.'} Invite the people you work with.</div>
             </div>
             <img src="/logo.png" alt="VoTask" className="brand-logo-img" />

@@ -215,7 +215,7 @@ export default function Meetings() {
             <div className="card-pad">
               <div className="spread">
                 <h3 style={{ fontSize: 15 }}>{m.title}</h3>
-                <span className="badge" style={{ background: '#fbe9d6', color: '#f2622e' }}>{m.engine}</span>
+                <span className="badge" style={{ background: '#ffedd5', color: '#ea580c' }}>{m.engine}</span>
               </div>
               <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{(m.meeting_date || '').slice(0, 10)}</div>
               <p className="muted" style={{ fontSize: 13, marginTop: 10, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -226,7 +226,7 @@ export default function Meetings() {
                   {(m.detected_languages || []).map((l: string) => <span key={l} className="lang-tag">{LANG_LABEL[l] || l}</span>)}
                 </span>
                 <strong style={{ fontSize: 13 }}>
-                  {m.pending_count ? <span style={{ color: '#f2622e' }}>{m.pending_count} pending review</span> : `${m.task_count} tasks`}
+                  {m.pending_count ? <span style={{ color: '#ea580c' }}>{m.pending_count} pending review</span> : `${m.task_count} tasks`}
                 </strong>
               </div>
               {/* An unfinished review is worth more than the pending count: it says

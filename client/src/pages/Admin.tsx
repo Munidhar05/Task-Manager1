@@ -230,7 +230,7 @@ function Overview() {
       <div className="grid grid-stats section">
         <Stat label="Users" value={d.totals.users} />
         <Stat label="Tasks" value={d.totals.tasks} accent="#3b82f6" />
-        <Stat label="Meetings" value={d.totals.meetings} accent="#f5a623" />
+        <Stat label="Meetings" value={d.totals.meetings} accent="#f59e0b" />
         <Stat label="Projects" value={d.totals.projects} accent="#10b981" />
       </div>
       <div className="grid grid-2">
@@ -425,7 +425,7 @@ function Audit() {
             <tr key={l.id}>
               <td className="cell-title muted" style={{ whiteSpace: 'nowrap' }}>{new Date(l.created_at).toLocaleString()}</td>
               <td data-label="Actor">{l.actor_name || '—'}</td>
-              <td data-label="Action"><Badge color="#f2622e" soft>{l.action}</Badge></td>
+              <td data-label="Action"><Badge color="#ea580c" soft>{l.action}</Badge></td>
               <td className="muted" data-label="Entity">{l.entity_type}</td>
               <td className="muted audit-detail" data-label="Detail" style={{ fontSize: 12 }}>{l.detail}</td>
             </tr>

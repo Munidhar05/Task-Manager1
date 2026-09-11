@@ -39,7 +39,7 @@ function paint(choice: ThemeChoice) {
   const mode = resolveTheme(choice)
   document.documentElement.setAttribute('data-theme', mode)
   const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.setAttribute('content', mode === 'dark' ? '#0f1216' : '#f2f4f7')
+  if (meta) meta.setAttribute('content', mode === 'dark' ? '#0f1216' : '#fcfaf7')
 }
 
 export function applyTheme(choice: ThemeChoice): void {

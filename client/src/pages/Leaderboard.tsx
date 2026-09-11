@@ -53,7 +53,13 @@ const Trophy = ({ size = 16, color = '#d4af37' }: { size?: number; color?: strin
 function DayBars({ history, w = 320, h = 54 }: { history: { day: string; points: number }[]; w?: number; h?: number }) {
   const max = Math.max(1, ...history.map((d) => d.points))
   const gap = 2
-  const bw = Math.max(2, (w - gap * (history.length - 1)) / history.length)
+  // The viewBox is DERIVED from the day count rather than fixed at `w`. The series
+  // is no longer always 30 days — with a longer history, dividing a fixed width
+  // between more columns hit the 2px floor and the bars ran off the right edge.
+  // Sizing the canvas to the data and letting preserveAspectRatio="none" stretch
+  // it to the card keeps every day visible and evenly spaced at any length.
+  const bw = 6
+  const vw = Math.max(w, history.length * (bw + gap) - gap)
   const [hot, setHot] = useState<number | null>(null)
 
   // A bar can be 2px wide and a zero day is a 1px line, so the painted mark is
@@ -63,7 +69,7 @@ function DayBars({ history, w = 320, h = 54 }: { history: { day: string; points:
   const barTop = (d: { points: number }) => h - (d.points ? Math.max(2, (d.points / max) * (h - 6)) : 1)
   // Percent, not pixels: preserveAspectRatio="none" stretches the x axis to the
   // card's width, so anything measured in viewBox units would drift as it resizes.
-  const centrePct = (i: number) => ((i * colW + bw / 2) / w) * 100
+  const centrePct = (i: number) => ((i * colW + bw / 2) / vw) * 100
 
   const fmtDay = (day: string) => {
     // Bare yyyy-mm-dd parses as UTC and lands on the previous evening in western
@@ -76,7 +82,7 @@ function DayBars({ history, w = 320, h = 54 }: { history: { day: string; points:
 
   return (
     <div className="lb-spark-wrap" onPointerLeave={() => setHot(null)}>
-      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" className="lb-spark"
+      <svg viewBox={`0 0 ${vw} ${h}`} width="100%" height={h} preserveAspectRatio="none" className="lb-spark"
         role="img" aria-label={`Points per day over the last ${history.length} days`}>
         {history.map((d, i) => (
           <rect key={d.day} className={'lb-bar' + (hot === i ? ' is-hot' : '')}
@@ -275,7 +281,7 @@ function RankCard({ row, rules, onOpen }: { row: any; rules: any[]; onOpen: () =
         </div>
       </div>
       <div className="lb-winscore">
-        <div className="lb-winscore-num" style={{ color: ranked ? '#f2622e' : '#94a3b8' }}>{row.score}</div>
+        <div className="lb-winscore-num" style={{ color: ranked ? '#ea580c' : '#94a3b8' }}>{row.score}</div>
         <div className="muted lb-winscore-lbl">{row.score === 1 ? 'point' : 'points'}</div>
       </div>
     </button>
@@ -319,7 +325,7 @@ function DetailModal({ userId, periodQuery, periodLabel, onClose }: { userId: st
                 <div className="muted" style={{ fontSize: 12.5, textTransform: 'capitalize' }}>{d.user.role}</div>
               </div>
               <div className="lb-modal-rating">
-                <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1, color: '#f2622e' }}>{d.points}</div>
+                <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1, color: '#ea580c' }}>{d.points}</div>
                 <div className="muted" style={{ fontSize: 11 }}>{periodLabel}</div>
               </div>
             </div>
@@ -330,10 +336,12 @@ function DetailModal({ userId, periodQuery, periodLabel, onClose }: { userId: st
               <div className="lb-stat"><div className="lb-stat-num">{d.breakdown?.completed?.count ?? 0}</div><div className="muted lb-stat-lbl">tasks completed</div></div>
             </div>
 
-            <div className="lb-section-lbl">Points per day (last 30 days)</div>
+            {/* The window is no longer fixed, so the label reports what was
+                actually returned rather than asserting 30 days. */}
+            <div className="lb-section-lbl">Points per day{d.history?.length ? ` (last ${d.history.length} days)` : ''}</div>
             {d.history?.some((h: any) => h.points > 0)
               ? <div className="lb-trajectory"><DayBars history={d.history} /></div>
-              : <div className="muted" style={{ fontSize: 12.5 }}>No points earned in the last 30 days.</div>}
+              : <div className="muted" style={{ fontSize: 12.5 }}>No points earned yet.</div>}
 
             <div className="lb-section-lbl">Where the points came from — {periodLabel}</div>
             <div className="lb-comps">

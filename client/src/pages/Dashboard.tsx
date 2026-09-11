@@ -135,7 +135,7 @@ function actMeta(a: any): { text: React.ReactNode; color: string; icon: React.Re
   switch (a.action) {
     case 'task.status': {
       const st: string = a.detail || ''
-      const color = (STATUS_COLORS as any)[st] || '#f2622e'
+      const color = (STATUS_COLORS as any)[st] || '#ea580c'
       return { color, icon: st === 'Done' ? ACT_ICONS.done : ACT_ICONS.status,
         text: <>{who} moved {named} to <b style={{ color }}>{st}</b></> }
     }
@@ -149,7 +149,7 @@ function actMeta(a: any): { text: React.ReactNode; color: string; icon: React.Re
       return { color: '#0ea5a3', icon: ACT_ICONS.split, text: <>{who} split out {named}</> }
     case 'task.create':
     default:
-      return { color: '#f2622e', icon: ACT_ICONS.create, text: <>{who} created {named}</> }
+      return { color: '#ea580c', icon: ACT_ICONS.create, text: <>{who} created {named}</> }
   }
 }
 
@@ -292,7 +292,7 @@ function EmployeeDash() {
     <>
       <AiSuggestBanner overdue={c.overdue} onGo={() => navigate('/tasks?view=overdue')} />
       <div className="emp-kpis section">
-        <Kpi value={c.assigned} label="Assigned" icon={KPI_ICONS.assigned} color="#f2622e" onClick={() => navigate('/tasks')} />
+        <Kpi value={c.assigned} label="Assigned" icon={KPI_ICONS.assigned} color="#ea580c" onClick={() => navigate('/tasks')} />
         <Kpi value={c.pending} label="Pending" icon={KPI_ICONS.pending} color="#3b82f6" onClick={() => navigate('/tasks?view=active')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
         <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" alert={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
@@ -328,7 +328,7 @@ function EmployeeDash() {
                   </span>
                   <strong>{s.count}</strong>
                 </div>
-                <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#f2622e'} />
+                <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#ea580c'} />
               </div>
             ))}
             {data.needs_confirmation > 0 && <div className="emp-confirm-note row" style={{ gap: 7 }}><Ic name="warning" size={14} /> {data.needs_confirmation} task(s) need ownership confirmation.</div>}
@@ -585,7 +585,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
       <UnreviewedBanner meetings={unreviewed.meetings} drafts={unreviewed.drafts} onGo={(id) => navigate('/meetings/' + id)} />
       <AiSuggestBanner overdue={c.overdue} onGo={() => navigate('/tasks?view=overdue')} />
       <div className="pbi-kpis">
-        <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#f2622e" onClick={() => navigate('/tasks')} />
+        <Kpi value={c.total} label="Total tasks" icon={KPI_ICONS.total} color="#ea580c" onClick={() => navigate('/tasks')} />
         <Kpi value={c.completed} label="Completed" icon={KPI_ICONS.completed} color="#10b981" onClick={() => navigate('/tasks?view=completed')} />
         <Kpi value={c.overdue} label="Overdue" icon={KPI_ICONS.overdue} color="#ef4444" alert={c.overdue > 0} onClick={() => navigate('/tasks?view=overdue')} />
         {/* Pending = everything not Done, the same meaning as the employee
@@ -629,7 +629,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                     {overloaded && <span style={{ color: 'var(--danger)', display: 'inline-flex' }} title="Overloaded"><Ic name="warning" size={12} /></span>}
                   </span>
                   <span className="hbar-track">
-                    <span className="hbar-fill" style={{ width: `${pct}%`, background: overloaded ? '#ef4444' : '#f2622e' }} />
+                    <span className="hbar-fill" style={{ width: `${pct}%`, background: overloaded ? '#ef4444' : '#ea580c' }} />
                   </span>
                   <span className="hbar-val">{w.open_count}</span>
                 </div>
@@ -697,7 +697,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                     </span>
                     <strong>{s.count}</strong>
                   </div>
-                  <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#f2622e'} />
+                  <Bar value={s.count} max={maxStatus} color={STATUS_COLORS[s.status] || '#ea580c'} />
                 </div>
               )
             })}
