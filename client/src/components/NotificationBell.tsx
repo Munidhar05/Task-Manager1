@@ -30,7 +30,7 @@ const BellIcon = ({ size = 33 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 40 40" fill="none" aria-hidden="true">
     <defs>
       <linearGradient id="nb-circ" x1="20" y1="2" x2="20" y2="38" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stopColor="#e8853c" />
+        <stop offset="0" stopColor="#f97316" />
         <stop offset=".5" stopColor="#ea580c" />
         <stop offset="1" stopColor="#a3450b" />
       </linearGradient>

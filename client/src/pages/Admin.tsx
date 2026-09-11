@@ -341,10 +341,10 @@ function ApiKeys() {
         {fresh && (
           <div style={{ border: '1px solid var(--primary)', borderRadius: 'var(--r-lg)', padding: 12, display: 'grid', gap: 8 }}>
             <div style={{ fontWeight: 700, fontSize: 12.5 }}>Copy this now — it cannot be shown again.</div>
-            <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f6f3ee)', padding: '8px 10px', borderRadius: 8 }}>{fresh}</code>
+            <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f8fafc)', padding: '8px 10px', borderRadius: 8 }}>{fresh}</code>
             {freshScope === 'mcp' && (<>
               <div style={{ fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>Connector URL — paste this into Claude</div>
-              <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f6f3ee)', padding: '8px 10px', borderRadius: 8 }}>{connectorUrl}</code>
+              <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f8fafc)', padding: '8px 10px', borderRadius: 8 }}>{connectorUrl}</code>
               <div className="muted" style={{ fontSize: 12 }}>
                 Customize &rarr; Connectors &rarr; + &rarr; Add custom connector. This key works ONLY here — it is
                 refused by the rest of the API, so the URL leaking does not hand over a general credential.
@@ -396,9 +396,9 @@ function ApiKeys() {
                   <td className="muted" style={{ fontSize: 12 }}>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
                   <td style={{ textAlign: 'right' }}>
                     {k.revoked_at
-                      ? <Badge color="#9c9082" soft>Revoked</Badge>
+                      ? <Badge color="#64748b" soft>Revoked</Badge>
                       : k.expires_at && k.expires_at <= new Date().toISOString()
-                        ? <Badge color="#9c9082" soft>Expired</Badge>
+                        ? <Badge color="#64748b" soft>Expired</Badge>
                         : <button className="btn btn-sm btn-danger" onClick={() => revoke(k)}>Revoke</button>}
                   </td>
                 </tr>

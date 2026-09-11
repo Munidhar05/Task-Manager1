@@ -36,7 +36,7 @@ export async function downloadManagerReport(range: ReportRange, orgName = 'Befac
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #eaddc7; }
   th { background: #f8e5c5; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   .overdue { color: #ef4444; font-weight: 600; }
-  .foot { margin-top: 30px; font-size: 11px; color: #9c9082; }
+  .foot { margin-top: 30px; font-size: 11px; color: #64748b; }
   @media print { body { margin: 14mm; } }
 </style></head><body>
   <h1>${esc(orgName)} — ${esc(range.label)} Report</h1>

@@ -4,18 +4,18 @@ import React, { useEffect, useState } from 'react'
 // also passed to SVG fills, gradient stops, and color-mix in inline styles where
 // var() isn't always resolvable. They intentionally match the semantic tokens.
 export const PRIORITY_COLORS: Record<string, string> = {
-  Critical: '#e2483a', High: '#d98a0b', Medium: '#2f6fd0', Low: '#a99a86',
+  Critical: '#f43f5e', High: '#f59e0b', Medium: '#3b82f6', Low: '#a99a86',
 }
 export const STATUS_COLORS: Record<string, string> = {
-  'To Do': '#7a6f63', 'In Progress': '#2f6fd0', 'Blocked': '#e2483a',
-  'In Review': '#8b5cf6', 'Done': '#0f9d6e', 'Reopened': '#d9660b',
+  'To Do': '#7a6f63', 'In Progress': '#3b82f6', 'Blocked': '#f43f5e',
+  'In Review': '#8b5cf6', 'Done': '#10b981', 'Reopened': '#d9660b',
 }
 export const LANG_LABEL: Record<string, string> = { en: 'English', hi: 'हिन्दी', te: 'తెలుగు' }
 
 // Task categories (business units / brands). Keep in sync with server/src/categories.js.
 // The empty-string option represents "Uncategorized" (stored as null on the task).
 export const CATEGORY_COLORS: Record<string, string> = {
-  'DCAL': '#2f6fd0', '91GI': '#8b5cf6', 'Global Shopper': '#0f9d6e', 'Rice': '#d98a0b', 'Taskmanager': '#e2483a',
+  'DCAL': '#3b82f6', '91GI': '#8b5cf6', 'Global Shopper': '#10b981', 'Rice': '#f59e0b', 'Taskmanager': '#f43f5e',
 }
 export const CATEGORY_OPTIONS = ['DCAL', '91GI', 'Global Shopper', 'Rice', 'Taskmanager']
 

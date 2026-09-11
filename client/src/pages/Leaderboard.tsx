@@ -29,8 +29,8 @@ const prettyDay = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString(un
 // One colour per rule, reused by the card chips and the detail bars so a rule is
 // recognisable at a glance. Concrete values (matches the ui.tsx convention).
 const RULE_COLORS: Record<string, string> = {
-  assigned: '#2f6fd0',
-  completed: '#0f9d6e',
+  assigned: '#3b82f6',
+  completed: '#10b981',
   commented: '#8b5cf6',
 }
 const ruleColor = (k: string) => RULE_COLORS[k] || '#64748b'
