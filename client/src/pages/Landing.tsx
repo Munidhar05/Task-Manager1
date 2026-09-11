@@ -13,6 +13,7 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { THEME_OPTIONS, ThemeChoice, getThemeChoice, applyTheme, resolveTheme } from '../lib/theme'
+import { COPY, LANDING_LANGS, LandingLang, getLandingLang, setLandingLang } from '../lib/landingCopy'
 
 const Wave = ({ className, delay }: { className: string; delay?: string }) => (
   <span className={`wave-bar ${className}`} style={delay ? { animationDelay: delay } : undefined} />
@@ -87,7 +88,53 @@ function ThemeSwitch() {
   )
 }
 
+// Language picker. Three languages, because that is the set the product supports
+// everywhere else — the extractor is capped to en/hi/te, so offering more here
+// would promise something the app cannot do.
+//
+// A plain <details> rather than a hand-built dropdown: it opens on click, closes
+// on Escape and on a click outside, and is keyboard reachable, all from the
+// browser. None of that is worth reimplementing for one control.
+function LanguagePicker({ lang, onPick }: { lang: LandingLang; onPick: (l: LandingLang) => void }) {
+  const current = LANDING_LANGS.find((l) => l.id === lang) || LANDING_LANGS[0]
+  return (
+    <details className="relative hidden sm:block group">
+      <summary className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-brand-600 px-2.5 py-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 shadow-sm cursor-pointer list-none marker:content-['']">
+        <svg className="w-4 h-4 text-slate-500 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+        </svg>
+        <span>{current.short}</span>
+        <svg className="w-3 h-3 transition-transform duration-200 group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path d="M19 9l-7 7-7-7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+        </svg>
+      </summary>
+      <div className="absolute right-0 mt-2 w-40 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-float overflow-hidden z-50">
+        {LANDING_LANGS.map((l) => (
+          <button
+            key={l.id}
+            type="button"
+            onClick={(e) => { onPick(l.id); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}
+            className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left transition-colors ${
+              l.id === lang
+                ? 'bg-brand-50 dark:bg-brand-900/40 text-brand-700 dark:text-brand-300 font-semibold'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            <span>{l.label}</span>
+            {l.id === lang && (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
+            )}
+          </button>
+        ))}
+      </div>
+    </details>
+  )
+}
+
 export default function Landing() {
+  const [lang, setLang] = useState<LandingLang>(getLandingLang())
+  const t = COPY[lang]
+  const pickLang = (l: LandingLang) => { setLandingLang(l); setLang(l) }
   return (
     <div className="lp-tw bg-[#FCFAF7] dark:bg-[#0f1216] text-slate-800 dark:text-slate-200 antialiased overflow-x-hidden font-sans selection:bg-brand-100 selection:text-brand-700">
       {/* ---------------------------------------------------------------- nav */}
@@ -100,23 +147,18 @@ export default function Landing() {
               <span className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">VoTask</span>
             </a>
             <nav className="hidden md:flex items-center space-x-8 text-sm font-semibold text-slate-600 dark:text-slate-400">
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#features">Product</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#how-it-works">Solutions</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#pricing">Pricing</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#resources">Resources</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#features">{t.navProduct}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#how-it-works">{t.navSolutions}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#pricing">{t.navPricing}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#resources">{t.navResources}</a>
             </nav>
           </div>
           <div className="flex items-center space-x-5">
-            <button aria-label="Language" className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-brand-600 px-2.5 py-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80 bg-white/70 dark:bg-slate-900/70 shadow-sm" type="button">
-              <svg className="w-4 h-4 text-slate-500 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-              </svg>
-              <span>EN</span>
-            </button>
+            <LanguagePicker lang={lang} onPick={pickLang} />
             <ThemeSwitch />
-            <Link className="text-sm font-semibold text-slate-700 dark:text-slate-300 hover:text-brand-600 px-2 py-1" to="/login">Sign in</Link>
+            <Link className="text-sm font-semibold text-slate-700 dark:text-slate-300 hover:text-brand-600 px-2 py-1" to="/login">{t.signIn}</Link>
             <Link className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-medium text-sm px-5 py-2.5 rounded-full shadow-md shadow-brand-600/20 hover:shadow-lg hover:shadow-brand-600/30 transition duration-150" to="/signup">
-              <span>Get Started</span>
+              <span>{t.getStarted}</span>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
             </Link>
           </div>
@@ -174,30 +216,30 @@ export default function Landing() {
                   <Wave className="w-1 h-3.5 bg-white dark:bg-slate-900 rounded-full" delay="0.3s" />
                   <Wave className="w-1 h-2 bg-white dark:bg-slate-900 rounded-full" delay="0.2s" />
                 </span>
-                <span className="tracking-wider">100% Voice-Driven Productivity</span>
+                <span className="tracking-wider">{t.heroBadge}</span>
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping ml-0.5" />
               </div>
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 leading-[1.12] mb-6">
-                Run Your Entire Workflow With{' '}
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 via-amber-500 to-amber-600">Just Your Voice</span>
+                {t.heroTitleA}{' '}
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 via-amber-500 to-amber-600">{t.heroTitleB}</span>
               </h1>
               <p className="text-lg text-slate-600 dark:text-slate-400 leading-relaxed max-w-xl mb-6">
-                Say <span className="font-semibold bg-amber-50/70 dark:bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-100/70 dark:border-amber-900/70 text-brand-800 dark:text-brand-300">&ldquo;Schedule follow-up&rdquo;</span>,{' '}
-                <span className="font-semibold bg-amber-50/70 dark:bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-100/70 dark:border-amber-900/70 text-brand-800 dark:text-brand-300">&ldquo;Assign review to Priya&rdquo;</span>, or speak
-                naturally in 50+ languages — <strong className="font-semibold text-slate-900 dark:text-slate-100">VoTask</strong> listens, transcribes, and executes your workflow in real time.
+                {t.heroSay} <span className="font-semibold bg-amber-50/70 dark:bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-100/70 dark:border-amber-900/70 text-brand-800 dark:text-brand-300">{t.heroQuote1}</span>{' '}
+                <span className="font-semibold bg-amber-50/70 dark:bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-100/70 dark:border-amber-900/70 text-brand-800 dark:text-brand-300">{t.heroQuote2}</span>{t.heroBodyMid}{' '}
+                <strong className="font-semibold text-slate-900 dark:text-slate-100">VoTask</strong> {t.heroBodyEnd}
               </p>
 
               <div className="w-full max-w-xl mb-8">
                 <div className="flex flex-wrap items-center gap-4 mb-4">
                   <Link className="inline-flex items-center justify-center gap-2.5 bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-semibold text-base px-7 py-3.5 rounded-full shadow-lg shadow-brand-600/25 hover:shadow-xl hover:shadow-brand-600/35 transition-all" to="/signup">
-                    <span>Try VoTask Free</span>
+                    <span>{t.tryFree}</span>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
                   </Link>
                   <button className="inline-flex items-center justify-center gap-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 text-slate-700 dark:text-slate-300 font-semibold text-base px-6 py-3.5 rounded-full border border-slate-200 dark:border-slate-700 shadow-sm transition-all" type="button">
                     <span className="w-7 h-7 rounded-full bg-orange-100 dark:bg-orange-950 flex items-center justify-center text-brand-600 dark:text-brand-400">
                       <svg className="w-3.5 h-3.5 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
                     </span>
-                    <span>Watch Demo</span>
+                    <span>{t.watchDemo}</span>
                   </button>
                 </div>
 
@@ -209,10 +251,10 @@ export default function Landing() {
                       </button>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-brand-600 dark:text-brand-400">Voice Prompt Simulator</span>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-brand-600 dark:text-brand-400">{t.simulator}</span>
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                         </div>
-                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">&ldquo;Create a task to review Q3 deck by Friday&rdquo;</p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{t.simulatorQuote}</p>
                       </div>
                     </div>
                     <div className="hidden sm:flex items-center gap-1 px-2 py-1 bg-amber-50/70 dark:bg-amber-950/70 rounded-lg border border-amber-100/70 dark:border-amber-900/70 shrink-0">
@@ -223,20 +265,20 @@ export default function Landing() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]">
-                    <span className="text-slate-500 dark:text-slate-500 font-medium">Try saying:</span>
-                    <span className="cursor-pointer px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900 hover:bg-brand-100 text-brand-700 dark:text-brand-300 font-medium border border-brand-200/80 dark:border-brand-800/80 transition-colors">🎙️ &ldquo;Summarize meeting&rdquo;</span>
-                    <span className="cursor-pointer px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900 hover:bg-brand-100 text-brand-700 dark:text-brand-300 font-medium border border-brand-200/80 dark:border-brand-800/80 transition-colors">⚡ &ldquo;Assign sprint tasks&rdquo;</span>
-                    <span className="cursor-pointer px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900 hover:bg-brand-100 text-brand-700 dark:text-brand-300 font-medium border border-brand-200/80 dark:border-brand-800/80 transition-colors">📤 &ldquo;Send recap to Slack&rdquo;</span>
+                    <span className="text-slate-500 dark:text-slate-500 font-medium">{t.trySaying}</span>
+                    <span className="cursor-pointer px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900 hover:bg-brand-100 text-brand-700 dark:text-brand-300 font-medium border border-brand-200/80 dark:border-brand-800/80 transition-colors">{`🎙️ ${t.chip1}`}</span>
+                    <span className="cursor-pointer px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900 hover:bg-brand-100 text-brand-700 dark:text-brand-300 font-medium border border-brand-200/80 dark:border-brand-800/80 transition-colors">{`⚡ ${t.chip2}`}</span>
+                    <span className="cursor-pointer px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900 hover:bg-brand-100 text-brand-700 dark:text-brand-300 font-medium border border-brand-200/80 dark:border-brand-800/80 transition-colors">{`📤 ${t.chip3}`}</span>
                   </div>
                 </div>
               </div>
 
               <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700/80 w-full max-w-md">
-                <p className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-3 tracking-wide">Available on</p>
+                <p className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-3 tracking-wide">{t.availableOn}</p>
                 <div className="flex flex-wrap items-center gap-5 text-xs font-semibold text-slate-700 dark:text-slate-300">
                   <div className="flex items-center gap-1.5">
                     <svg className="w-4 h-4 text-slate-500 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
-                    <span>Web App</span>
+                    <span>{t.webApp}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <svg className="w-4 h-4 text-slate-500 dark:text-slate-500" fill="currentColor" viewBox="0 0 24 24"><path d="M17.6 9.48l1.84-3.18a.4.4 0 10-.69-.4l-1.87 3.23a11.4 11.4 0 00-9.76 0L5.25 5.9a.4.4 0 10-.69.4L6.4 9.48A10.8 10.8 0 00.9 18.4h22.2a10.8 10.8 0 00-5.5-8.92zM7 15.2a.95.95 0 110-1.9.95.95 0 010 1.9zm10 0a.95.95 0 110-1.9.95.95 0 010 1.9z" /></svg>
@@ -257,7 +299,7 @@ export default function Landing() {
             {/* dashboard mockup */}
             <div className="lg:col-span-6 relative">
               <div className="hidden sm:block absolute -top-10 right-8 font-handwriting text-2xl text-slate-700 dark:text-slate-300 rotate-2 pointer-events-none z-20">
-                Your voice creates progress.
+                {t.noteProgress}
                 <svg className="w-10 h-8 text-amber-500 inline-block -rotate-12 ml-1" fill="none" stroke="currentColor" viewBox="0 0 50 30"><path d="M5 25 Q 25 5, 45 15 M38 8 L 47 15 L 42 22" strokeLinecap="round" strokeWidth="2" /></svg>
               </div>
 
@@ -426,7 +468,7 @@ export default function Landing() {
               </div>
 
               <div className="hidden sm:block absolute -bottom-10 right-2 font-handwriting text-2xl text-brand-600 dark:text-brand-400 rotate-[-4deg] pointer-events-none">
-                Meet • Transcribe • Plan • Do
+                {t.noteFlow}
               </div>
             </div>
           </div>
@@ -438,10 +480,10 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-8">
             {([
-              ['50+', 'Languages supported', 'bg-orange-100 dark:bg-orange-950 text-brand-600 dark:text-brand-400', 'M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129'],
-              ['10x', 'Faster follow-ups', 'bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400', 'M13 10V3L4 14h7v7l9-11h-7z'],
-              ['Teams love it', 'Startups to enterprises', 'bg-orange-100 dark:bg-orange-950 text-brand-600 dark:text-brand-400', 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4'],
-              ['100%', 'Your data stays yours', 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400', 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z'],
+              ['50+', t.mLangs, 'bg-orange-100 dark:bg-orange-950 text-brand-600 dark:text-brand-400', 'M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129'],
+              ['10x', t.mFaster, 'bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400', 'M13 10V3L4 14h7v7l9-11h-7z'],
+              [t.mTeams, t.mTeamsSub, 'bg-orange-100 dark:bg-orange-950 text-brand-600 dark:text-brand-400', 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4'],
+              ['100%', t.mData, 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400', 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z'],
             ] as [string, string, string, string][]).map(([value, label, tone, d]) => (
               <div key={label} className="flex items-center gap-3.5">
                 <div className={`w-11 h-11 rounded-xl ${tone} flex items-center justify-center shrink-0`}>
@@ -465,25 +507,25 @@ export default function Landing() {
               <div className="max-w-xl">
                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-100 dark:bg-brand-900 text-brand-800 dark:text-brand-300 text-xs font-bold uppercase tracking-wider mb-2.5">
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
-                  <span>Instant Voice Execution</span>
+                  <span>{t.vcBadge}</span>
                 </div>
-                <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-2">Speak your instructions. VoTask handles the rest.</h3>
-                <p className="text-sm text-slate-600 dark:text-slate-400">From capturing spontaneous thoughts to delegating team assignments, every spoken sentence instantly converts into structured, tracked output.</p>
+                <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-2">{t.vcTitle}</h3>
+                <p className="text-sm text-slate-600 dark:text-slate-400">{t.vcBody}</p>
               </div>
               <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-4 py-2 rounded-xl border border-orange-100 dark:border-orange-900 shadow-sm shrink-0">
                 <div className="w-2.5 h-2.5 rounded-full bg-brand-600 animate-ping" />
-                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Voice Engine v2.4 Active</span>
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">{t.vcEngine}</span>
               </div>
             </div>
             <div className="grid sm:grid-cols-3 gap-4 mt-6">
               {([
-                ['0.4s', '“Assign the mobile bug triage to Daniel with High priority.”', 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300', 'Created task in Jira for @Daniel'],
-                ['0.6s', '“Draft a 3-bullet summary of client feedback and ping Meera.”', 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300', 'Generated brief & drafted Slack DM'],
-                ['0.3s', '“Remind me tomorrow at 9 AM to review the Q2 budget deck.”', 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300', 'Calendar alert set for 9:00 AM'],
+                ['0.4s', t.vcQuote1, 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300', t.vcRes1],
+                ['0.6s', t.vcQuote2, 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300', t.vcRes2],
+                ['0.3s', t.vcQuote3, 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300', t.vcRes3],
               ] as [string, string, string, string][]).map(([ms, quote, tone, result]) => (
                 <div key={ms} className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-orange-100/90 dark:border-orange-900/90 hover:shadow-md transition">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-bold text-brand-700 dark:text-brand-300 uppercase tracking-wider">Voice In</span>
+                    <span className="text-[10px] font-bold text-brand-700 dark:text-brand-300 uppercase tracking-wider">{t.vcIn}</span>
                     <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">{ms}</span>
                   </div>
                   <p className="text-xs font-bold text-slate-900 dark:text-slate-100 italic mb-3">{quote}</p>
@@ -502,16 +544,16 @@ export default function Landing() {
       <section className="py-20 bg-[#FCFAF7] dark:bg-[#0f1216] relative" id="features">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-16">
-            <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-3">Key Features</div>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-3">Everything you need for productive meetings</h2>
-            <p className="text-base text-slate-600 dark:text-slate-400">A simple, powerful way to turn conversations into action.</p>
+            <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-3">{t.fBadge}</div>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-3">{t.fTitle}</h2>
+            <p className="text-base text-slate-600 dark:text-slate-400">{t.fSub}</p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {([
-              ['Voice-First Control', 'Just speak. VoTask listens, transcribes, and understands in real time.', 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z'],
-              ['Accurate Transcription', 'High-accuracy, multilingual transcription with intelligent speaker detection.', 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'],
-              ['AI Task Extraction', 'Automatically find key points, extract tasks, and prioritize action items.', 'M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z'],
-              ['Seamless Collaboration', 'Keep your team aligned with shared notes, tasks, and real-time updates.', 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z'],
+              [t.f1, t.f1b, 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z'],
+              [t.f2, t.f2b, 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'],
+              [t.f3, t.f3b, 'M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z'],
+              [t.f4, t.f4b, 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z'],
             ] as [string, string, string][]).map(([title, body, d]) => (
               <div key={title} className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-orange-100/90 dark:border-orange-900/90 shadow-card hover:shadow-xl hover:-translate-y-1 transition duration-200">
                 <div className="w-12 h-12 rounded-xl bg-brand-100 dark:bg-brand-900 text-brand-600 dark:text-brand-400 flex items-center justify-center mb-5">
@@ -529,16 +571,16 @@ export default function Landing() {
       <section className="py-20 bg-white dark:bg-slate-900 border-t border-orange-100/60 dark:border-orange-900/60 relative" id="how-it-works">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-16">
-            <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-3">How It Works</div>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-3">From conversation to completion</h2>
-            <p className="text-base text-slate-600 dark:text-slate-400">Turn meetings into progress in four simple steps.</p>
+            <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-3">{t.hBadge}</div>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-3">{t.hTitle}</h2>
+            <p className="text-base text-slate-600 dark:text-slate-400">{t.hSub}</p>
           </div>
           <div className="grid md:grid-cols-4 gap-6 relative">
             {([
-              ['Record or Upload', 'Capture your meeting from any device or platform.', 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z'],
-              ['AI Understands', 'Transcribe and identify key points & action items.', 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'],
-              ['Assign Tasks', 'Turn insights directly into assignable tasks.', 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z'],
-              ['Track Progress', 'Keep work moving forward with smart follow-ups.', 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'],
+              [t.h1, t.h1b, 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z'],
+              [t.h2, t.h2b, 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'],
+              [t.h3, t.h3b, 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z'],
+              [t.h4, t.h4b, 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'],
             ] as [string, string, string][]).map(([title, body, d], i) => (
               <div key={title} className="relative bg-[#FCFAF7] dark:bg-[#0f1216] border border-orange-100 dark:border-orange-900 rounded-2xl p-6 text-center flex flex-col items-center">
                 <div className="w-8 h-8 rounded-full bg-brand-600 text-white font-bold text-xs flex items-center justify-center mb-3">{i + 1}</div>
@@ -563,15 +605,15 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-12 gap-12 items-center">
             <div className="lg:col-span-5">
-              <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-4">Meetings That Deliver</div>
+              <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-4">{t.sBadge}</div>
               <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight leading-tight mb-4">
-                Clear conversations. Actionable <span className="text-brand-600 dark:text-brand-400">outcomes.</span>
+                {t.sTitleA} <span className="text-brand-600 dark:text-brand-400">{t.sTitleB}</span>
               </h2>
               <p className="text-base text-slate-600 dark:text-slate-400 leading-relaxed mb-8">
-                VoTask turns your meeting recordings into accurate transcripts and structured tasks, so nothing important gets lost.
+                {t.sBody}
               </p>
               <Link className="inline-flex items-center gap-2 bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-semibold text-sm px-6 py-3 rounded-full shadow-md shadow-brand-600/20 transition duration-150" to="/signup">
-                <span>Explore VoTask</span>
+                <span>{t.sCta}</span>
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
               </Link>
             </div>
@@ -581,7 +623,7 @@ export default function Landing() {
                   <div className="border-b md:border-b-0 md:border-r border-slate-100 dark:border-slate-800 md:pr-6 pb-6 md:pb-0">
                     <div className="flex items-center gap-2 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
                       <svg className="w-4 h-4 text-brand-600 dark:text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Meeting Transcript</h3>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">{t.sTranscript}</h3>
                     </div>
                     <div className="space-y-4 text-xs">
                       {([
@@ -605,7 +647,7 @@ export default function Landing() {
                   <div>
                     <div className="flex items-center gap-2 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
                       <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Extracted Tasks</h3>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">{t.sTasks}</h3>
                     </div>
                     <div className="space-y-2.5 text-xs">
                       {([
@@ -635,14 +677,14 @@ export default function Landing() {
       <section className="py-20 bg-white dark:bg-slate-900 border-t border-orange-100/60 dark:border-orange-900/60 relative">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-16">
-            <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-3">Loved by Teams Worldwide</div>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">Real users. Real progress.</h2>
+            <div className="inline-block px-3.5 py-1 rounded-full bg-brand-100 dark:bg-brand-900 border border-brand-200 dark:border-brand-800 text-brand-800 dark:text-brand-300 text-xs font-bold tracking-wide uppercase mb-3">{t.tBadge}</div>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">{t.tTitle}</h2>
           </div>
           <div className="grid md:grid-cols-3 gap-8">
             {([
-              ['“VoTask has completely changed how we run meetings. It saves us hours every week.”', 'Priya Sharma', 'Product Manager, NovaTech', 'PS', 'from-amber-400 to-brand-500'],
-              ['“The transcription accuracy is incredible, and the task extraction just works. It’s like having an extra team member.”', 'Lucas Meyer', 'CTO, Globex', 'LM', 'from-blue-400 to-indigo-500'],
-              ['“We’re more aligned, more productive, and spend less time on follow-ups. VoTask is a must-have for any growing team.”', 'Emily Chen', 'Operations Lead, BrightPath', 'EC', 'from-emerald-400 to-teal-500'],
+              [t.tQ1, 'Priya Sharma', t.tR1, 'PS', 'from-amber-400 to-brand-500'],
+              [t.tQ2, 'Lucas Meyer', t.tR2, 'LM', 'from-blue-400 to-indigo-500'],
+              [t.tQ3, 'Emily Chen', t.tR3, 'EC', 'from-emerald-400 to-teal-500'],
             ] as [string, string, string, string, string][]).map(([quote, name, role, initials, tone]) => (
               <div key={name} className="bg-[#FCFAF7] dark:bg-[#0f1216] border border-orange-100/80 dark:border-orange-900/80 rounded-2xl p-6 shadow-subtle hover:shadow-card transition flex flex-col justify-between">
                 <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed italic mb-6">{quote}</p>
@@ -667,13 +709,13 @@ export default function Landing() {
           ))}
         </div>
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative">
-          <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-3">Let&rsquo;s turn your meetings into progress.</h2>
-          <p className="text-base text-slate-600 dark:text-slate-400 mb-8 max-w-lg mx-auto">Join thousands of teams already doing more with VoTask.</p>
+          <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-3">{t.cTitle}</h2>
+          <p className="text-base text-slate-600 dark:text-slate-400 mb-8 max-w-lg mx-auto">{t.cSub}</p>
           <Link className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-semibold text-base px-8 py-3.5 rounded-full shadow-lg shadow-brand-600/25 hover:shadow-xl hover:shadow-brand-600/35 transition duration-150" to="/signup">
-            <span>Get Started Free</span>
+            <span>{t.cBtn}</span>
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
           </Link>
-          <div className="mt-6 font-handwriting text-2xl text-brand-600 dark:text-brand-400">A more productive tomorrow.</div>
+          <div className="mt-6 font-handwriting text-2xl text-brand-600 dark:text-brand-400">{t.cNote}</div>
         </div>
       </section>
 
@@ -686,11 +728,11 @@ export default function Landing() {
               <span className="text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">VoTask</span>
             </div>
             <div className="flex flex-wrap items-center gap-6 text-xs font-semibold">
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#features">Product</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#how-it-works">Solutions</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#pricing">Pricing</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#resources">Blog</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#resources">Resources</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#features">{t.navProduct}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#how-it-works">{t.navSolutions}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#pricing">{t.navPricing}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#resources">{t.fBlog}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition" href="#resources">{t.navResources}</a>
             </div>
             <div className="flex items-center gap-4 text-slate-400 dark:text-slate-500">
               <a aria-label="LinkedIn" className="text-slate-400 dark:text-slate-500 hover:text-brand-600 transition" href="#social">
@@ -705,11 +747,11 @@ export default function Landing() {
             </div>
           </div>
           <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-600 dark:text-slate-400">
-            <div>© 2025 VoTask. All rights reserved.</div>
+            <div>{t.fRights}</div>
             <div className="flex items-center gap-6">
-              <Link className="text-slate-600 dark:text-slate-400 hover:text-slate-700" to="/privacy">Privacy</Link>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-slate-700" href="#terms">Terms</a>
-              <a className="text-slate-600 dark:text-slate-400 hover:text-slate-700" href="#contact">Contact</a>
+              <Link className="text-slate-600 dark:text-slate-400 hover:text-slate-700" to="/privacy">{t.fPrivacy}</Link>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-slate-700" href="#terms">{t.fTerms}</a>
+              <a className="text-slate-600 dark:text-slate-400 hover:text-slate-700" href="#contact">{t.fContact}</a>
             </div>
           </div>
         </div>
