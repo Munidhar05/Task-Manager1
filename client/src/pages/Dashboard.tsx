@@ -141,7 +141,7 @@ function actMeta(a: any): { text: React.ReactNode; color: string; icon: React.Re
     }
     case 'task.approval':
       return a.detail === 'reject'
-        ? { color: '#ef4444', icon: ACT_ICONS.status, text: <>{who} sent {named} back</> }
+        ? { color: 'var(--danger-ink)', icon: ACT_ICONS.status, text: <>{who} sent {named} back</> }
         : { color: '#10b981', icon: ACT_ICONS.done, text: <>{who} approved {named}</> }
     case 'task.comment':
       return { color: '#8b5cf6', icon: ACT_ICONS.comment, text: <>{who} commented on {named}</> }
@@ -705,7 +705,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
         </div>
 
         <div className="pbi-card pbi-overdue">
-          <div className="pbi-head"><h3>Overdue tasks</h3>{data.overdue.length > 0 && <span className="badge" style={{ marginLeft: 'auto', background: '#fee2e2', color: '#ef4444' }}>{c.overdue}</span>}</div>
+          <div className="pbi-head"><h3>Overdue tasks</h3>{data.overdue.length > 0 && <span className="badge" style={{ marginLeft: 'auto', background: 'var(--danger-bg)', color: 'var(--danger-ink)' }}>{c.overdue}</span>}</div>
           <div className="pbi-scroll" style={{ padding: 0 }}>
             <table>
               <tbody>

@@ -94,7 +94,7 @@ export default function UserManagement() {
           {invites.map((inv) => (
             <div key={inv.id} className="row spread" style={{ padding: '5px 0', borderTop: '1px solid #f1f1f1' }}>
               <span style={{ fontSize: 13 }}>{inv.email} <span className="muted">· {inv.role}</span></span>
-              <button className="btn btn-sm" style={{ color: '#ef4444' }} onClick={() => revokeInvite(inv)}>Revoke</button>
+              <button className="btn btn-sm" style={{ color: 'var(--danger-ink)' }} onClick={() => revokeInvite(inv)}>Revoke</button>
             </div>
           ))}
         </div>
@@ -182,7 +182,7 @@ export function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; 
                 <div><label>Role</label><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roleOptions.map((r) => <option key={r}>{r}</option>)}</select></div>
                 <div><label>Department</label><select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}><option value="">—</option>{depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
               </div>
-              {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
+              {err && <div style={{ color: 'var(--danger-ink)', fontSize: 13 }}>{err}</div>}
               <div className="row" style={{ justifyContent: 'flex-end' }}>
                 <button className="btn" onClick={onClose}>Cancel</button>
                 <button className="btn btn-primary" onClick={send} disabled={busy || !f.email}>{busy ? <span className="spinner" /> : 'Send invite'}</button>
@@ -245,7 +245,7 @@ function UserForm({ user, depts, isAdmin, onClose, onDone }: { user: any | null;
             <div><label>Department</label><select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}><option value="">—</option>{depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           </div>
           <div><label>Password {isEdit && <span className="muted" style={{ fontWeight: 400 }}>(leave blank to keep current)</span>}</label><input type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
-          {err && <div style={{ color: '#ef4444', fontSize: 13 }} role="alert">{err}</div>}
+          {err && <div style={{ color: 'var(--danger-ink)', fontSize: 13 }} role="alert">{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
             <button className="btn btn-primary" onClick={save} disabled={busy || !f.name || !f.email || (!isEdit && !f.password)}>{busy ? <span className="spinner" /> : isEdit ? 'Save changes' : 'Create user'}</button>

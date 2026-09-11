@@ -3,12 +3,17 @@ import React, { useEffect, useState } from 'react'
 // Priority/status hues. Kept as concrete values (not CSS vars) because they're
 // also passed to SVG fills, gradient stops, and color-mix in inline styles where
 // var() isn't always resolvable. They intentionally match the semantic tokens.
+// These are rendered as TEXT on a 12% tint of themselves (see Badge, soft), so
+// each is the ink weight of its hue rather than the fill weight. A mid-weight
+// colour on its own pale tint is a narrow gap by construction — amber on amber
+// measured 3.1:1 at 12px, under AA. 'To Do' also drops a leftover warm grey from
+// the old palette.
 export const PRIORITY_COLORS: Record<string, string> = {
-  Critical: '#f43f5e', High: '#f59e0b', Medium: '#3b82f6', Low: '#a99a86',
+  Critical: 'var(--danger-ink)', High: 'var(--warning-ink)', Medium: 'var(--info-ink)', Low: 'var(--n-600)',
 }
 export const STATUS_COLORS: Record<string, string> = {
-  'To Do': '#7a6f63', 'In Progress': '#3b82f6', 'Blocked': '#f43f5e',
-  'In Review': '#8b5cf6', 'Done': '#10b981', 'Reopened': '#d9660b',
+  'To Do': 'var(--n-600)', 'In Progress': 'var(--info-ink)', 'Blocked': 'var(--danger-ink)',
+  'In Review': 'var(--violet-ink)', 'Done': 'var(--success-ink)', 'Reopened': 'var(--brand-ink)',
 }
 export const LANG_LABEL: Record<string, string> = { en: 'English', hi: 'हिन्दी', te: 'తెలుగు' }
 
@@ -91,7 +96,10 @@ const ICON_PATHS = {
 export function Badge({ children, color, soft }: { children: React.ReactNode; color: string; soft?: boolean }) {
   return (
     <span className="badge" style={soft
-      ? { background: color + '22', color, border: `1px solid ${color}55` }
+      // color-mix, not `color + '22'`: concatenation only works on a literal hex,
+      // which forced every badge colour to be hard-coded — and a hard-coded
+      // colour cannot follow the theme. These are tokens now.
+      ? { background: `color-mix(in srgb, ${color} 16%, transparent)`, color, border: `1px solid color-mix(in srgb, ${color} 36%, transparent)` }
       : { background: color, color: '#fff' }}>
       {children}
     </span>
@@ -99,7 +107,7 @@ export function Badge({ children, color, soft }: { children: React.ReactNode; co
 }
 
 export function PriorityBadge({ p }: { p: string }) {
-  return <Badge color={PRIORITY_COLORS[p] || '#64748b'} soft>{p}</Badge>
+  return <Badge color={PRIORITY_COLORS[p] || 'var(--n-600)'} soft>{p}</Badge>
 }
 export function StatusBadge({ s }: { s: string }) {
   return <Badge color={STATUS_COLORS[s] || '#64748b'} soft>{s}</Badge>
@@ -321,7 +329,7 @@ export function dueLabel(t: { due_date?: string | null; due_date_raw?: string | 
   if (t.due_date) {
     const today = new Date().toISOString().slice(0, 10)
     const overdue = t.due_date < today
-    return <span style={{ color: overdue ? '#ef4444' : 'inherit', fontWeight: overdue ? 600 : 400 }}>{t.due_date}{overdue ? <span className="due-overdue"> (overdue)</span> : ''}</span>
+    return <span style={{ color: overdue ? 'var(--danger-ink)' : 'inherit', fontWeight: overdue ? 600 : 400 }}>{t.due_date}{overdue ? <span className="due-overdue"> (overdue)</span> : ''}</span>
   }
   if (t.due_date_raw) return <span style={{ fontStyle: 'italic', color: 'var(--muted)' }}>“{t.due_date_raw}”</span>
   return <span style={{ color: 'var(--n-400)' }}>—</span>

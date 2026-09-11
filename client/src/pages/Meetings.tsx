@@ -215,7 +215,7 @@ export default function Meetings() {
             <div className="card-pad">
               <div className="spread">
                 <h3 style={{ fontSize: 15 }}>{m.title}</h3>
-                <span className="badge" style={{ background: '#ffedd5', color: '#ea580c' }}>{m.engine}</span>
+                <span className="badge" style={{ background: 'color-mix(in srgb, var(--primary) 14%, transparent)', color: 'var(--brand-ink)' }}>{m.engine}</span>
               </div>
               <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{(m.meeting_date || '').slice(0, 10)}</div>
               <p className="muted" style={{ fontSize: 13, marginTop: 10, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -226,7 +226,7 @@ export default function Meetings() {
                   {(m.detected_languages || []).map((l: string) => <span key={l} className="lang-tag">{LANG_LABEL[l] || l}</span>)}
                 </span>
                 <strong style={{ fontSize: 13 }}>
-                  {m.pending_count ? <span style={{ color: '#ea580c' }}>{m.pending_count} pending review</span> : `${m.task_count} tasks`}
+                  {m.pending_count ? <span style={{ color: 'var(--brand-ink)' }}>{m.pending_count} pending review</span> : `${m.task_count} tasks`}
                 </strong>
               </div>
               {/* An unfinished review is worth more than the pending count: it says
@@ -406,7 +406,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
             </div>
           )}
 
-          {err && <div style={{ color: '#ef4444', fontSize: 13 }} role="alert">{err}</div>}
+          {err && <div style={{ color: 'var(--danger-ink)', fontSize: 13 }} role="alert">{err}</div>}
           {/* Honest progress: a real bar while bytes are in transit, then a clear
               "server is working" line — so a slow upload never looks hung. */}
           {busy && mode === 'audio' && (
@@ -1073,7 +1073,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             {interim && <div className="muted" style={{ fontStyle: 'italic', fontSize: 12, marginTop: 4 }}>… {interim}</div>}
           </div>
 
-          {err && <div style={{ color: '#ef4444', fontSize: 13 }}>{err}</div>}
+          {err && <div style={{ color: 'var(--danger-ink)', fontSize: 13 }}>{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={close}>Cancel</button>
             <button data-va="meetings.live.finish" className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}</button>
