@@ -98,6 +98,24 @@
       :where(.lp-tw) :where(svg) { display: block; }
       :where(.lp-tw) :where(img) { max-width: 100%; height: auto; }
 
+      /* The mock is a single light design, and the app's dark theme leaks into
+         it. styles.css carries `:root[data-theme="dark"] input { background:
+         var(--surface) }` — specificity (0,1,1), which outranks Tailwind's
+         `bg-white` (0,1,0) — so the dashboard mockup's search bar rendered
+         black whenever the app resolved to dark.
+
+         The landing page is pinned light instead of being given a second
+         palette: it is a marketing page drawn in one set of colours, and a
+         half-translated dark version would look worse than either. color-scheme
+         matters as much as the colours — without it the browser still paints
+         native checkboxes and scrollbars dark inside a light page. */
+      .lp-tw { color-scheme: light; }
+      :root[data-theme="dark"] .lp-tw :where(input, textarea, select) {
+        background: #ffffff;
+        color: #334155;
+        border-color: #e2e8f0;
+      }
+
       /* The soundwave bars that animate through the hero and the badges. */
       .lp-tw .wave-bar { animation: lp-soundwave 1.2s ease-in-out infinite alternate; }
       @keyframes lp-soundwave {
