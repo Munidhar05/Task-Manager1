@@ -4,6 +4,10 @@
 import { db } from './db.js'
 import { sendDailyDigests } from './digest.js'
 import { purgeDeletedTask } from './routes/tasks.js'
+import {
+  sendDailyTaskMail, sendNewCriticalAlerts, sendDeadlineWarnings,
+  seedAlertBaseline, zonedNow, dailyHour, deadlineHour, tz, toOwnersEnabled, testRecipient,
+} from './taskMail.js'
 
 const SEND_HOUR = Number(process.env.DIGEST_HOUR || 8) // local server time, 0-23
 
@@ -40,9 +44,34 @@ async function tick() {
     setMeta('trash_last_purged', todayStr)
     try { purgeExpiredTasks() } catch (e) { console.error('[scheduler] purge sweep failed:', e.message) }
   }
+
+  // --- Per-owner task mail (src/taskMail.js) ---------------------------------
+  // Its own clock: these hours are read in TASK_MAIL_TZ, not the server's local
+  // time, so "10 am" means 10 am to the people receiving the mail. Its own marker
+  // row too, so it neither waits on the digest above nor re-sends when that throws.
+  // Whether any of this reaches real owners is decided inside taskMail.js by
+  // TASK_MAIL_TO_OWNERS — never here.
+  const z = zonedNow(now)
+  if (z.hour === dailyHour() && getMeta('task_mail_last_sent') !== z.date) {
+    setMeta('task_mail_last_sent', z.date)
+    try { await sendDailyTaskMail() } catch (e) { console.error('[scheduler] daily task mail failed:', e.message) }
+  }
+
+  // Event-driven alerts, checked every minute rather than on the hour: "as soon
+  // as a critical task is set" means within a minute of it happening. Both
+  // de-duplicate against critical_alerts_sent, so a tick that finds nothing new
+  // is two cheap indexed reads.
+  try { await sendNewCriticalAlerts() } catch (e) { console.error('[scheduler] critical alert failed:', e.message) }
+  try { await sendDeadlineWarnings() } catch (e) { console.error('[scheduler] deadline warning failed:', e.message) }
 }
 
 export function startScheduler() {
   console.log(`  Daily task digest scheduled for ${String(SEND_HOUR).padStart(2, '0')}:00 (local time)`)
+  seedAlertBaseline()
+  const target = toOwnersEnabled()
+    ? 'LIVE → individual owners'
+    : `TEST ONLY → ${testRecipient() || 'nobody (TASK_MAIL_TEST_TO unset)'}`
+  console.log(`  Per-owner task mail: daily ${String(dailyHour()).padStart(2, '0')}:00 ${tz()}, ` +
+    `critical-assigned within a minute, deadline warning at ${String((deadlineHour() + 23) % 24).padStart(2, '0')}:00 — ${target}`)
   setInterval(tick, 60 * 1000) // check every minute
 }

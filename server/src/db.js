@@ -238,6 +238,22 @@ export function initSchema() {
     value TEXT
   );
 
+  -- Send-once ledger for the per-owner critical task emails (src/taskMail.js).
+  -- Those two alerts are found by polling rather than by a hook in the task
+  -- routes, so "have I already told them about this one?" has to be written down.
+  -- due_date is part of the key, not a detail: it is the deadline the warning was
+  -- about, so moving a task's date deliberately re-arms its 1-hour warning. It is
+  -- NOT NULL with a '' default because SQLite permits NULLs in a PRIMARY KEY and
+  -- would then stop de-duplicating the rows that matter most.
+  CREATE TABLE IF NOT EXISTS critical_alerts_sent (
+    task_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    kind TEXT NOT NULL,                         -- assigned | deadline
+    due_date TEXT NOT NULL DEFAULT '',
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, owner_id, kind, due_date)
+  );
+
   -- Voice-agent learning log: one row per /assistant/command turn — what was said,
   -- what the agent decided, and (reported back by the client afterwards) what became
   -- of it. outcome is the LABEL that makes this a training set, not just telemetry:
