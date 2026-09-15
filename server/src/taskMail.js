@@ -120,7 +120,7 @@ function groupByOwner(rows) {
 // that employee's own task, and this mail is read by nobody but them.
 export function openTasksByOwner({ criticalOnly = false } = {}) {
   return groupByOwner(db.prepare(
-    `SELECT t.id, t.title, t.status, t.due_date, t.priority, t.assigned_at, t.created_at, ${OWNER_COLS}
+    `SELECT t.id, t.title, t.description, t.status, t.due_date, t.priority, t.assigned_at, t.created_at, ${OWNER_COLS}
        FROM tasks t JOIN users u ON u.id = t.assignee_id
       WHERE t.parent_task_id IS NULL AND t.status IN ${OPEN}
         ${criticalOnly ? "AND t.priority = 'Critical'" : ''}
@@ -189,24 +189,52 @@ function dueLabel(t, todayStr) {
   return `due ${t.due_date}${isOverdue(t, todayStr) ? ' — OVERDUE' : ''}`
 }
 
+// Critical rows carry their description and a link straight to the task. Only
+// critical: a title is enough to recognise ordinary work, but the one item
+// someone is meant to act on today shouldn't make them open the app and hunt for
+// it to find out what it actually asks for.
+const isCritical = (t) => t.priority === 'Critical'
+
+// Long enough to carry the ask, short enough that sixteen of them stay skimmable.
+const DESC_MAX = 300
+function shortDescription(t) {
+  const d = String(t.description || '').replace(/\s+/g, ' ').trim()
+  if (!d) return ''
+  return d.length > DESC_MAX ? `${d.slice(0, DESC_MAX - 1).trimEnd()}…` : d
+}
+
+// Tasks.tsx reads ?task= on mount and opens that task, so this lands on the item
+// itself rather than the list. No new route needed — the client already does it.
+const taskUrl = (t) => `${appUrl()}/tasks?task=${encodeURIComponent(t.id)}`
+
 // showPriority off where a heading above the list already states it — repeating
 // "[Critical]" under a CRITICAL heading is noise the eye has to step over.
 function taskLinesText(tasks, todayStr, { showPriority = true } = {}) {
-  return tasks.flatMap((t) => [
-    `  • ${showPriority ? `[${t.priority}] ` : ''}${t.title}`,
-    `      ${t.status} · ${dueLabel(t, todayStr)}`,
-  ])
+  return tasks.flatMap((t) => {
+    const lines = [
+      `  • ${showPriority ? `[${t.priority}] ` : ''}${t.title}`,
+      `      ${t.status} · ${dueLabel(t, todayStr)}`,
+    ]
+    if (!isCritical(t)) return lines
+    const desc = shortDescription(t)
+    if (desc) lines.push(`      ${desc}`)
+    lines.push(`      Open this task in VoTask: ${taskUrl(t)}`)
+    return lines
+  })
 }
 
 function taskRowsHtml(tasks, todayStr, { showPriority = true } = {}) {
   return tasks.map((t) => {
-    const crit = t.priority === 'Critical'
+    const crit = isCritical(t)
     const due = t.due_date
       ? `${esc(t.due_date)}${isOverdue(t, todayStr) ? ' <b style="color:#b91c1c">· OVERDUE</b>' : ''}`
       : '<span style="color:#999">no due date</span>'
+    const desc = crit ? shortDescription(t) : ''
     return `<tr><td style="padding:9px 0;border-bottom:1px solid #eee">
       <div style="font-weight:600">${crit ? '<span style="color:#b91c1c">⚠ </span>' : ''}${esc(t.title)}</div>
       <div style="color:#666;font-size:13px">${showPriority ? `${esc(t.priority)} · ` : ''}${esc(t.status)} · ${due}</div>
+      ${desc ? `<div style="color:#444;font-size:13px;line-height:1.45;margin-top:6px">${esc(desc)}</div>` : ''}
+      ${crit ? `<div style="margin-top:9px"><a href="${taskUrl(t)}" style="display:inline-block;background:#b91c1c;color:#fff;padding:7px 14px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600">Open this task in VoTask</a></div>` : ''}
     </td></tr>`
   }).join('')
 }
@@ -308,7 +336,10 @@ export function buildAssignedMail(owner, task, others, todayStr, banner) {
   const text = []
   if (banner) text.push(banner, '')
   text.push(`${owner.name},`, '', opener, '')
-  text.push(`  • ${task.title}`, `      ${task.status} · ${deadline}`, '')
+  text.push(`  • ${task.title}`, `      ${task.status} · ${deadline}`)
+  const assignedDesc = shortDescription(task)
+  if (assignedDesc) text.push(`      ${assignedDesc}`)
+  text.push(`      Open this task in VoTask: ${taskUrl(task)}`, '')
   if (others.length) {
     text.push(`And these are the rest of your critical tasks as well (${others.length}):`, '')
     text.push(...taskLinesText(others, todayStr, { showPriority: false }), '')
@@ -334,8 +365,11 @@ export function buildDeadlineMail(owner, task, todayStr, banner) {
   if (banner) text.push(banner, '')
   text.push(`${owner.name},`, '')
   text.push('Within 1 hour, there is a deadline for your critical task.', '')
-  text.push(`  • ${task.title}`, `      ${task.status} · due ${task.due_date} at ${String(deadlineHour()).padStart(2, '0')}:00`, '')
-  text.push(`Open it here: ${appUrl()}/tasks`, '', '— VoTask')
+  text.push(`  • ${task.title}`, `      ${task.status} · due ${task.due_date} at ${String(deadlineHour()).padStart(2, '0')}:00`)
+  const deadlineDesc = shortDescription(task)
+  if (deadlineDesc) text.push(`      ${deadlineDesc}`)
+  text.push(`      Open this task in VoTask: ${taskUrl(task)}`, '')
+  text.push('— VoTask')
 
   const html = shell(
     `<h2 style="color:#b91c1c">1 hour to your deadline</h2>
