@@ -332,4 +332,6 @@ r.post('/verify-password', authRequired, (req, res) => {
 })
 
 export default r
-export { publicUser }
+// sendVerificationEmail is shared with users.js, where changing your own email
+// resets email_verified and re-confirms the new address through this same flow.
+export { publicUser, sendVerificationEmail }
