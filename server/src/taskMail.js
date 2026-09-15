@@ -107,6 +107,17 @@ export function openTasksByOwner({ criticalOnly = false } = {}) {
   ).all())
 }
 
+// Everyone in the organization who has an address, whether or not they own
+// anything open — someone with a clear plate still gets told so. The address is
+// read here, at send time, and never cached anywhere: change a person's email in
+// the app and the next mail follows it, with nothing to re-sync.
+export function allRecipients() {
+  const open = new Map(openTasksByOwner().map((g) => [g.id, g.tasks]))
+  return db.prepare("SELECT id, name, email FROM users WHERE email IS NOT NULL AND TRIM(email) != '' ORDER BY name")
+    .all()
+    .map((u) => ({ id: u.id, name: u.name, email: u.email, tasks: open.get(u.id) || [] }))
+}
+
 export function countUnassignedCritical() {
   return db.prepare(
     `SELECT COUNT(*) c FROM tasks WHERE priority = 'Critical' AND parent_task_id IS NULL
@@ -185,6 +196,7 @@ export function buildDailyMail(owner, tasks, todayStr, banner) {
   const text = []
   if (banner) text.push(banner, '')
   text.push(`Good morning ${owner.name},`, '')
+  if (!tasks.length) text.push('Nothing open on your plate today. 🎉', '')
   if (crit.length) {
     text.push(`CRITICAL — ${crit.length} task${crit.length === 1 ? '' : 's'} needing attention first:`, '')
     text.push(...taskLinesText(crit, todayStr), '')
@@ -201,16 +213,16 @@ export function buildDailyMail(owner, tasks, todayStr, banner) {
     (crit.length
       ? `<h3 style="color:#b91c1c;margin-bottom:4px">Critical — ${crit.length}</h3>
          <table style="width:100%;border-collapse:collapse">${taskRowsHtml(crit, todayStr)}</table>`
-      : '<p style="color:#666">Nothing critical on your plate today.</p>') +
+      : `<p style="color:#666">${tasks.length ? 'Nothing critical on your plate today.' : 'Nothing open on your plate today. 🎉'}</p>`) +
     (rest.length
       ? `<h3 style="margin-bottom:4px">${crit.length ? 'Other open tasks' : 'Open tasks'} — ${rest.length}</h3>
          <table style="width:100%;border-collapse:collapse">${taskRowsHtml(rest, todayStr)}</table>`
       : ''),
     banner, `Daily task mail · ${todayStr}`)
 
-  const summary = crit.length
-    ? `${crit.length} critical${rest.length ? `, ${rest.length} other` : ''}`
-    : `${rest.length} open`
+  const summary = !tasks.length
+    ? 'nothing open'
+    : (crit.length ? `${crit.length} critical${rest.length ? `, ${rest.length} other` : ''}` : `${rest.length} open`)
   return { subject: `Your tasks for ${todayStr} — ${summary}`, text: text.join('\n'), html }
 }
 
@@ -284,11 +296,12 @@ async function deliver(owner, build, { overrideTo }) {
 const modeOf = (overrideTo) =>
   overrideTo ? 'test' : (toOwnersEnabled() ? 'owners' : (testRecipient() ? 'test' : 'off'))
 
-// 1. The daily list, one mail per owner who has anything open.
+// 1. The daily list — to every address in the organization, not just the people
+// who happen to own something open today.
 export async function sendDailyTaskMail({ overrideTo = null } = {}) {
   const todayStr = zonedNow().date
   let sent = 0, skipped = 0
-  const groups = openTasksByOwner()
+  const groups = allRecipients()
   for (const owner of groups) {
     const ok = await deliver(owner, (b) => buildDailyMail(owner, owner.tasks, todayStr, b), { overrideTo })
     ok ? sent++ : skipped++
@@ -347,7 +360,7 @@ export async function sendDeadlineWarnings({ overrideTo = null } = {}) {
 // is one per owner plus the critical alerts — read the count before asking for it.
 export async function sendTestBundle(to, { full = false } = {}) {
   const todayStr = zonedNow().date
-  const daily = openTasksByOwner()
+  const daily = allRecipients()
   const crit = openTasksByOwner({ criticalOnly: true })
   // For the sample, pick the most informative example of each rather than the
   // first: an owner who actually HAS critical work, so the reviewer sees the
