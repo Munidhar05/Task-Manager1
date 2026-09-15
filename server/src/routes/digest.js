@@ -2,9 +2,9 @@ import { Router } from 'express'
 import { authRequired, requireRole } from '../auth.js'
 import { sendDailyDigests } from '../digest.js'
 import {
-  sendDailyTaskMail, sendNewCriticalAlerts, sendDeadlineWarnings, sendTestBundle, runCatchUp,
-  openTasksByOwner, countUnassignedCritical,
-  dailyHour, deadlineHour, tz, toOwnersEnabled, testRecipient,
+  sendDailyTaskMail, sendCriticalDigest, sendNewCriticalAlerts, sendDeadlineWarnings,
+  sendTestBundle, runCatchUp, openTasksByOwner, countUnassignedCritical,
+  dailyAt, criticalAt, deadlineHour, tz, toOwnersEnabled, testRecipient,
 } from '../taskMail.js'
 import { mailerMode } from '../mailer.js'
 import { cliqEnabled } from '../cliq.js'
@@ -42,7 +42,8 @@ r.get('/task-mail/status', requireRole('manager', 'admin'), (req, res) => {
   const groups = openTasksByOwner()
   res.json({
     tz: tz(),
-    dailyHour: dailyHour(),
+    dailyAt: dailyAt(),
+    criticalAt: criticalAt(),
     deadlineHour: deadlineHour(),
     toOwners: toOwnersEnabled(),
     mode: toOwnersEnabled() ? 'owners (live)' : (testRecipient() ? 'test' : 'off'),
@@ -89,8 +90,11 @@ r.post('/task-mail/catch-up', requireRole('manager', 'admin'), async (req, res) 
 // only rehearses until TASK_MAIL_TO_OWNERS=true.
 r.post('/task-mail/send-now', requireRole('manager', 'admin'), async (req, res) => {
   const which = String(req.body?.kind || 'daily')
-  const run = { daily: sendDailyTaskMail, assigned: sendNewCriticalAlerts, deadline: sendDeadlineWarnings }[which]
-  if (!run) return res.status(400).json({ error: "kind must be one of: daily, assigned, deadline" })
+  const run = {
+    daily: sendDailyTaskMail, critical: sendCriticalDigest,
+    assigned: sendNewCriticalAlerts, deadline: sendDeadlineWarnings,
+  }[which]
+  if (!run) return res.status(400).json({ error: 'kind must be one of: daily, critical, assigned, deadline' })
   try {
     res.json(await run())
   } catch (e) {
