@@ -23,7 +23,14 @@
       (function () {
         try {
           var c = localStorage.getItem('appTheme') || 'system'
-          var dark = c === 'dark' || (c === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          // Mirrors isLandingView() in lib/theme.ts: the signed-out landing page
+          // defaults to light whatever the OS says. It has to be decided HERE as
+          // well as there — resolving it only in React would paint the dark
+          // palette first and snap to light on mount, which is the exact flash
+          // this script exists to prevent.
+          var p = location.pathname
+          var landing = (p === '/' || p === '/welcome') && !localStorage.getItem('smarttask_token')
+          var dark = c === 'dark' || (c === 'system' && !landing && window.matchMedia('(prefers-color-scheme: dark)').matches)
           document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
           var m = document.querySelector('meta[name="theme-color"]')
           if (m) m.setAttribute('content', dark ? '#0f1216' : '#fcfaf7')

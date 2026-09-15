@@ -12,7 +12,7 @@
 //     page can be walked through rather than only looked at
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { THEME_OPTIONS, ThemeChoice, getThemeChoice, applyTheme, resolveTheme } from '../lib/theme'
+import { THEME_OPTIONS, ThemeChoice, getThemeChoice, applyTheme, resolveTheme, repaintTheme } from '../lib/theme'
 import { COPY, LANDING_LANGS, LandingLang, getLandingLang, setLandingLang } from '../lib/landingCopy'
 
 const Wave = ({ className, delay }: { className: string; delay?: string }) => (
@@ -38,7 +38,14 @@ function ThemeSwitch() {
   const [choice, setChoice] = useState<ThemeChoice>(getThemeChoice())
 
   useEffect(() => {
-    const sync = () => document.documentElement.classList.toggle('dark', resolveTheme() === 'dark')
+    const sync = () => {
+      // Repaint first: arriving here through a client-side navigation (a logout,
+      // or a link back to "/") never re-runs initTheme, so data-theme can still
+      // be carrying whatever the previous route resolved to. Only then mirror the
+      // result onto Tailwind's `dark` class.
+      repaintTheme()
+      document.documentElement.classList.toggle('dark', resolveTheme() === 'dark')
+    }
     sync()
     // 'system' is a standing instruction, not a snapshot: if the OS flips while
     // the page is open, the page has to follow it without a reload.
