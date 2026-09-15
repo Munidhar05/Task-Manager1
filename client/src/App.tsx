@@ -135,6 +135,22 @@ function Layout({ children }: { children: React.ReactNode }) {
   const visibleNav = NAV.filter((n) => (n as any).platformOnly
     ? !!user.platform_admin
     : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly))
+  // The bottom bar shows only three of these, so WHICH three matters far more than
+  // the order does in the sidebar, where everything is visible at once. A manager
+  // on a phone is there to run a meeting, not to read a dashboard, so the two trade
+  // places: Meetings comes up into the thumb row and Dashboard takes its slot
+  // further down the drawer. The sidebar keeps the original order either way.
+  //
+  // Employees need no special case and get none. /meetings is manager-only, so it
+  // was already filtered out above, the swap finds nothing to do, and their bar
+  // keeps Dashboard exactly where it was — which is the whole point, since the
+  // screen they would be sent to is one they cannot use.
+  const bottomNav = [...visibleNav]
+  const dashAt = bottomNav.findIndex((n) => n.to === '/')
+  const meetAt = bottomNav.findIndex((n) => n.to === '/meetings')
+  if (dashAt !== -1 && meetAt !== -1) {
+    [bottomNav[dashAt], bottomNav[meetAt]] = [bottomNav[meetAt], bottomNav[dashAt]]
+  }
   // One bottom-nav tab (shared by the slots on either side of the center mic).
   const renderBottomTab = (n: typeof NAV[number]) => (
     <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
@@ -293,7 +309,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           floating AI voice mic, one more tab, then "More" (opens the full drawer).
           The center mic opens the global VoiceAssistant via an 'open-voice' event. */}
       <nav className="bottom-nav" aria-label="Primary">
-        {visibleNav.slice(0, 2).map(renderBottomTab)}
+        {bottomNav.slice(0, 2).map(renderBottomTab)}
         <button
           className="bn-mic"
           onClick={() => window.dispatchEvent(new Event('open-voice'))}
@@ -320,7 +336,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </span>
           <span className="bn-mic-label">AI</span>
         </button>
-        {visibleNav.slice(2, 3).map(renderBottomTab)}
+        {bottomNav.slice(2, 3).map(renderBottomTab)}
         <button className="bn-item" onClick={() => setOpen(true)} aria-label="More menu">
           <span className="bn-ic">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
