@@ -190,7 +190,8 @@ export function buildDailyMail(owner, tasks, todayStr, banner) {
     text.push(...taskLinesText(crit, todayStr), '')
   }
   if (rest.length) {
-    text.push(`Your other open tasks (${rest.length}):`, '')
+    // "other" only reads correctly when something came before it.
+    text.push(crit.length ? `Your other open tasks (${rest.length}):` : `Your open tasks (${rest.length}):`, '')
     text.push(...taskLinesText(rest, todayStr), '')
   }
   text.push(`Open them here: ${appUrl()}/tasks`, '', '— VoTask')
@@ -202,7 +203,7 @@ export function buildDailyMail(owner, tasks, todayStr, banner) {
          <table style="width:100%;border-collapse:collapse">${taskRowsHtml(crit, todayStr)}</table>`
       : '<p style="color:#666">Nothing critical on your plate today.</p>') +
     (rest.length
-      ? `<h3 style="margin-bottom:4px">Other open tasks — ${rest.length}</h3>
+      ? `<h3 style="margin-bottom:4px">${crit.length ? 'Other open tasks' : 'Open tasks'} — ${rest.length}</h3>
          <table style="width:100%;border-collapse:collapse">${taskRowsHtml(rest, todayStr)}</table>`
       : ''),
     banner, `Daily task mail · ${todayStr}`)
@@ -348,9 +349,14 @@ export async function sendTestBundle(to, { full = false } = {}) {
   const todayStr = zonedNow().date
   const daily = openTasksByOwner()
   const crit = openTasksByOwner({ criticalOnly: true })
-  // For the sample, pick the fullest example of each so the layout is worth looking
-  // at: the owner with the most open tasks, and a critical task that has a deadline.
-  const dailyPick = full ? daily : daily.slice().sort((a, b) => b.tasks.length - a.tasks.length).slice(0, 1)
+  // For the sample, pick the most informative example of each rather than the
+  // first: an owner who actually HAS critical work, so the reviewer sees the
+  // critical-on-top layout instead of a plain list, and a critical task carrying
+  // a deadline, so the warning has a date in it. Falls back to sheer task count.
+  const criticalCount = (g) => g.tasks.filter((t) => t.priority === 'Critical').length
+  const dailyPick = full ? daily : daily.slice()
+    .sort((a, b) => (criticalCount(b) - criticalCount(a)) || (b.tasks.length - a.tasks.length))
+    .slice(0, 1)
   const critPick = full ? crit : crit.filter((g) => g.tasks.some((t) => t.due_date)).slice(0, 1)
   const critFallback = critPick.length ? critPick : crit.slice(0, 1)
 
