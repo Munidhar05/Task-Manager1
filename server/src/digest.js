@@ -1,7 +1,12 @@
-// Daily task digest. Primary channel: a Zoho Cliq team summary (one message per org).
-// Also sends per-person email when SMTP is configured. Both fall back to console preview.
+// Daily team digest: a Zoho Cliq summary, one message per org, listing every
+// member's open work. Falls back to a console preview when no webhook is set.
+//
+// It used to also email each person their own task list. That job moved to
+// taskMail.js, which does it better — at 10:00 in the reader's own timezone,
+// broken out by priority band, and reaching people with nothing open too. Both
+// running meant two near-identical emails a day for everyone, so this one is now
+// the team channel only.
 import { db } from './db.js'
-import { sendMail, mailerMode } from './mailer.js'
 import { postToCliq, cliqEnabled } from './cliq.js'
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -34,20 +39,7 @@ export function buildTeamSummary(orgId) {
   return lines.join('\n')
 }
 
-// Per-person email body (used only when SMTP is configured).
-export function buildDigest(user) {
-  const mine = db.prepare(
-    `SELECT * FROM tasks WHERE assignee_id=? AND parent_task_id IS NULL AND status IN ${OPEN} ORDER BY due_date IS NULL, due_date`
-  ).all(user.id)
-  if (user.role === 'employee' && mine.length === 0) return null
-  const lines = [`Good morning ${user.name},`, '']
-  lines.push(mine.length ? `You have ${mine.length} open task(s):` : 'You have no open tasks today. 🎉')
-  mine.forEach((t) => lines.push(fmtTask(t)))
-  lines.push('', '— VoTask')
-  return { subject: `Your tasks for ${today()} — ${mine.length} open`, text: lines.join('\n') }
-}
-
-// Run the digest: post a Cliq summary per org, plus emails if SMTP is set.
+// Run the digest: post a Cliq summary per org.
 export async function sendDailyDigests() {
   const orgs = db.prepare('SELECT DISTINCT org_id FROM users').all().map((r) => r.org_id)
   let cliqMode = 'off', cliqMessages = 0
@@ -55,17 +47,7 @@ export async function sendDailyDigests() {
     const r = await postToCliq(buildTeamSummary(org))
     cliqMode = r.mode; cliqMessages++
   }
-
-  let emails = 0
-  if (mailerMode() === 'smtp') {
-    const users = db.prepare("SELECT * FROM users WHERE email IS NOT NULL AND email != ''").all()
-    for (const u of users) {
-      const d = buildDigest(u)
-      if (d) { await sendMail({ to: u.email, subject: d.subject, text: d.text }); emails++ }
-    }
-  }
-
-  const summary = { cliq: cliqEnabled() ? cliqMode : 'preview', cliqMessages, emails, emailMode: mailerMode() }
-  console.log(`[digest] ${today()} → cliq:${summary.cliq} (${cliqMessages} msg), emails:${emails}`)
+  const summary = { cliq: cliqEnabled() ? cliqMode : 'preview', cliqMessages }
+  console.log(`[digest] ${today()} → cliq:${summary.cliq} (${cliqMessages} msg)`)
   return summary
 }
