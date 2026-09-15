@@ -55,43 +55,33 @@ function ThemeSwitch() {
   }, [choice])
 
   const index = THEME_OPTIONS.findIndex((t) => t.id === choice)
+  const current = THEME_OPTIONS[index] ?? THEME_OPTIONS[0]
+  // Light → Dark → System → Light, the order THEME_OPTIONS already declares, so
+  // the cycle and the settings panel can never disagree about what comes next.
+  const next = THEME_OPTIONS[(index + 1) % THEME_OPTIONS.length]
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Theme"
-      className="relative flex items-center gap-0 p-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700"
+    /* One button that cycles, not three sitting side by side. The segmented pill
+       cost three tap targets' worth of width in a header that also carries a
+       language picker, Sign in and Get Started — on a phone that pushed the
+       wordmark and the CTA off their own edges. Cycling spends a tap to reach the
+       third state and buys back two thirds of the width, which is the right trade
+       for a control most people touch once.
+
+       The icon shown is the CURRENT theme, and the title says what the next tap
+       does — otherwise a cycling control leaves you guessing which way it turns. */
+    <button
+      type="button"
+      aria-label={`Theme: ${current.label}. Switch to ${next.label}`}
+      title={`${current.label} — ${current.hint}. Tap for ${next.label}.`}
+      onClick={() => { applyTheme(next.id); setChoice(next.id) }}
+      className="relative w-9 h-9 rounded-full flex items-center justify-center bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-brand-600 dark:hover:text-brand-400 transition-colors duration-200"
     >
-      {/* The pill. Transform rather than left/width so it is composited on the
-          GPU and never reflows the row it sits in. The easing is Apple's own
-          curve: a fast start that settles, instead of a symmetrical ease. */}
-      <span
-        aria-hidden="true"
-        className="absolute top-1 left-1 w-7 h-7 rounded-full bg-white dark:bg-slate-900 shadow-sm ring-1 ring-black/5 dark:ring-white/10"
-        style={{
-          transform: `translateX(${index * 28}px)`,
-          transition: 'transform 420ms cubic-bezier(0.32, 0.72, 0, 1)',
-        }}
-      />
-      {THEME_OPTIONS.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          role="radio"
-          aria-checked={choice === t.id}
-          title={`${t.label} — ${t.hint}`}
-          onClick={() => { applyTheme(t.id); setChoice(t.id) }}
-          className={`relative z-10 w-7 h-7 rounded-full flex items-center justify-center transition-colors duration-200 ${
-            choice === t.id ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'
-          }`}
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-            {THEME_ICONS[t.id]}
-          </svg>
-          <span className="sr-only">{t.label}</span>
-        </button>
-      ))}
-    </div>
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+        {THEME_ICONS[current.id]}
+      </svg>
+      <span className="sr-only">{current.label}</span>
+    </button>
   )
 }
 
@@ -146,8 +136,14 @@ export default function Landing() {
     <div className="lp-tw bg-[#FCFAF7] dark:bg-[#0f1216] text-slate-800 dark:text-slate-200 antialiased overflow-x-hidden font-sans selection:bg-brand-100 selection:text-brand-700">
       {/* ---------------------------------------------------------------- nav */}
       <header className="sticky top-0 z-50 bg-[#FCFAF7]/90 dark:bg-[#0f1216]/90 backdrop-blur-md border-b border-orange-100/60 dark:border-orange-900/60">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
-          <div className="flex items-center space-x-10">
+        {/* Phone first: a shorter bar, tighter gutters, and a gap that only opens
+            up once there is room for it. At 20px between four controls the
+            wordmark and the Get Started pill were both being pushed past their
+            own edges. min-w-0 lets the left half shrink instead of forcing the
+            row wider than the screen — without it a flex child refuses to go
+            below its content width, which is what actually caused the overflow. */}
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-2">
+          <div className="flex items-center space-x-10 min-w-0">
             <a className="flex items-center gap-2.5 group text-slate-900 dark:text-slate-100" href="#top">
               {/* The real mark, kept as-is. */}
               <img src="/logo.png" alt="" className="w-9 h-9 rounded-xl object-contain bg-white dark:bg-slate-900 shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform duration-200" />
@@ -160,13 +156,19 @@ export default function Landing() {
               <a className="text-slate-600 dark:text-slate-400 hover:text-brand-600 transition-colors" href="#resources">{t.navResources}</a>
             </nav>
           </div>
-          <div className="flex items-center space-x-5">
+          <div className="flex items-center gap-2 sm:gap-5 shrink-0">
             <LanguagePicker lang={lang} onPick={pickLang} />
             <ThemeSwitch />
-            <Link className="text-sm font-semibold text-slate-700 dark:text-slate-300 hover:text-brand-600 px-2 py-1" to="/login">{t.signIn}</Link>
-            <Link className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-medium text-sm px-5 py-2.5 rounded-full shadow-md shadow-brand-600/20 hover:shadow-lg hover:shadow-brand-600/30 transition duration-150" to="/signup">
+            {/* "Sign in" is the one thing here with a home elsewhere — Get Started
+                leads to the same signup flow, and the login page carries its own
+                link back. So it steps aside on a phone rather than squeezing the
+                two controls that have nowhere else to appear. */}
+            <Link className="hidden sm:inline text-sm font-semibold text-slate-700 dark:text-slate-300 hover:text-brand-600 px-2 py-1" to="/login">{t.signIn}</Link>
+            <Link className="inline-flex items-center justify-center gap-2 whitespace-nowrap bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-medium text-sm px-4 sm:px-5 py-2 sm:py-2.5 rounded-full shadow-md shadow-brand-600/20 hover:shadow-lg hover:shadow-brand-600/30 transition duration-150" to="/signup">
               <span>{t.getStarted}</span>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
+              {/* The arrow is decoration, and on a phone it is decoration that costs
+                  the label its last characters. */}
+              <svg className="hidden sm:block w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
             </Link>
           </div>
         </div>
@@ -242,12 +244,21 @@ export default function Landing() {
                     <span>{t.tryFree}</span>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
                   </Link>
-                  <button className="inline-flex items-center justify-center gap-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 text-slate-700 dark:text-slate-300 font-semibold text-base px-6 py-3.5 rounded-full border border-slate-200 dark:border-slate-700 shadow-sm transition-all" type="button">
+                  {/* The second hero action. It used to be "Watch Demo" — a button
+                      with no onClick behind it, so the whole thing was a painted
+                      placeholder. Joining with a workspace code is the real second
+                      path onto the product: Try Free is for the person starting a
+                      company, this is for the person whose company already exists
+                      and who was handed an 8-character code. */}
+                  <Link className="inline-flex items-center justify-center gap-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 text-slate-700 dark:text-slate-300 font-semibold text-base px-6 py-3.5 rounded-full border border-slate-200 dark:border-slate-700 shadow-sm transition-all" to="/join">
                     <span className="w-7 h-7 rounded-full bg-orange-100 dark:bg-orange-950 flex items-center justify-center text-brand-600 dark:text-brand-400">
-                      <svg className="w-3.5 h-3.5 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                      {/* A key, for a code that unlocks a workspace you already belong to. */}
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                        <circle cx="8" cy="15" r="4" /><path d="m10.85 12.15 8.15-8.15M18 5l2 2M15 8l2 2" />
+                      </svg>
                     </span>
-                    <span>{t.watchDemo}</span>
-                  </button>
+                    <span>{t.joinCode}</span>
+                  </Link>
                 </div>
 
                 <div className="bg-white dark:bg-slate-900 rounded-2xl p-3 sm:p-3.5 border border-orange-200/90 dark:border-orange-900/90 shadow-card flex flex-col gap-2.5">
