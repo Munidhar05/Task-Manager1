@@ -5,8 +5,9 @@ import { db } from './db.js'
 import { sendDailyDigests } from './digest.js'
 import { purgeDeletedTask } from './routes/tasks.js'
 import {
-  sendDailyTaskMail, sendNewCriticalAlerts, sendDeadlineWarnings,
-  seedAlertBaseline, zonedNow, dailyHour, deadlineHour, tz, toOwnersEnabled, testRecipient,
+  sendDailyTaskMail, sendCriticalDigest, sendNewCriticalAlerts, sendDeadlineWarnings,
+  seedAlertBaseline, zonedNow, slotDue, dailyAt, criticalAt, deadlineHour, tz,
+  toOwnersEnabled, testRecipient,
 } from './taskMail.js'
 
 const SEND_HOUR = Number(process.env.DIGEST_HOUR || 8) // local server time, 0-23
@@ -51,10 +52,21 @@ async function tick() {
   // row too, so it neither waits on the digest above nor re-sends when that throws.
   // Whether any of this reaches real owners is decided inside taskMail.js by
   // TASK_MAIL_TO_OWNERS — never here.
+  // Both daily slots fire on "the time has come round and today's hasn't gone
+  // yet", not on an exact minute match. The tick drifts, so an equality test can
+  // step straight over a minute and lose the day; past-due also means a service
+  // that was redeploying or asleep at 13:30 still sends when it wakes — late,
+  // which beats never. The marker row is what stops it repeating.
   const z = zonedNow(now)
-  if (z.hour === dailyHour() && getMeta('task_mail_last_sent') !== z.date) {
+  if (slotDue(z, dailyAt()) && getMeta('task_mail_last_sent') !== z.date) {
     setMeta('task_mail_last_sent', z.date)
     try { await sendDailyTaskMail() } catch (e) { console.error('[scheduler] daily task mail failed:', e.message) }
+  }
+
+  // The 13:30 pass: critical work only, to the people who own some.
+  if (slotDue(z, criticalAt()) && getMeta('task_mail_critical_last_sent') !== z.date) {
+    setMeta('task_mail_critical_last_sent', z.date)
+    try { await sendCriticalDigest() } catch (e) { console.error('[scheduler] critical digest failed:', e.message) }
   }
 
   // Event-driven alerts, checked every minute rather than on the hour: "as soon
@@ -71,7 +83,8 @@ export function startScheduler() {
   const target = toOwnersEnabled()
     ? 'LIVE → individual owners'
     : `TEST ONLY → ${testRecipient() || 'nobody (TASK_MAIL_TEST_TO unset)'}`
-  console.log(`  Per-owner task mail: daily ${String(dailyHour()).padStart(2, '0')}:00 ${tz()}, ` +
+  const hhmm = (at) => `${String(at.hour).padStart(2, '0')}:${String(at.minute).padStart(2, '0')}`
+  console.log(`  Per-owner task mail (${tz()}): summary ${hhmm(dailyAt())}, critical-only ${hhmm(criticalAt())}, ` +
     `critical-assigned within a minute, deadline warning at ${String((deadlineHour() + 23) % 24).padStart(2, '0')}:00 — ${target}`)
   setInterval(tick, 60 * 1000) // check every minute
 }

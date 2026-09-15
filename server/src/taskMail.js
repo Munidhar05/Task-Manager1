@@ -32,6 +32,27 @@ const PRIORITY_ORDER = "CASE priority WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 
 
 export const tz = () => process.env.TASK_MAIL_TZ || 'Asia/Kolkata'
 export const dailyHour = () => Number(process.env.TASK_MAIL_DAILY_HOUR || 10)
+
+// Daily slots are wall-clock "HH:MM", not bare hours: the critical pass runs at
+// 13:30, which an hour-only scheduler simply cannot express.
+function parseAt(value, fallback) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim())
+  if (!m) return fallback
+  const hour = Number(m[1]), minute = Number(m[2])
+  return hour <= 23 && minute <= 59 ? { hour, minute } : fallback
+}
+// TASK_MAIL_DAILY_AT wins when set; TASK_MAIL_DAILY_HOUR still works, because it
+// is already configured on the live service and silently ignoring it would move
+// the send time without anyone touching the setting.
+export const dailyAt = () => parseAt(process.env.TASK_MAIL_DAILY_AT, { hour: dailyHour(), minute: 0 })
+export const criticalAt = () => parseAt(process.env.TASK_MAIL_CRITICAL_AT, { hour: 13, minute: 30 })
+
+// Has this slot already come round today? Deliberately "at or past", never "equal
+// to": the scheduler ticks about every 60s and drifts, so an exact match can skip
+// a minute entirely and lose the day's send. Past-due also means a service that
+// was asleep or redeploying at 13:30 still sends when it comes back, late rather
+// than never — paired with the once-a-day marker, which stops it repeating.
+export const slotDue = (z, at) => z.hour > at.hour || (z.hour === at.hour && z.minute >= at.minute)
 // due_date is a DATE with no time of day, so "the deadline" needs an hour to mean
 // anything. 18:00 = end of the working day; the one-hour warning then goes at 17:00.
 export const deadlineHour = () => Number(process.env.TASK_MAIL_DEADLINE_HOUR || 18)
@@ -254,6 +275,29 @@ export function buildDailyMail(owner, tasks, todayStr, banner) {
   return { subject, text: text.join('\n'), html }
 }
 
+// 1b. The 13:30 pass: critical work only. Goes to the people who own some, not
+// to the whole organization — everyone already had the 10:00 summary, and a
+// second daily mail saying "nothing critical" is the kind of thing people build
+// an inbox filter for, which costs you the one alert that mattered.
+export function buildCriticalDigestMail(owner, tasks, todayStr, banner) {
+  const overdue = tasks.filter((t) => isOverdue(t, todayStr))
+  const tail = overdue.length ? `, ${overdue.length} overdue` : ''
+  const text = []
+  if (banner) text.push(banner, '')
+  text.push(`${owner.name},`, '')
+  text.push(`Your critical tasks as of ${todayStr} — ${tasks.length} open${tail}.`, '')
+  text.push(...taskLinesText(tasks, todayStr, { showPriority: false }), '')
+  text.push(`Open them here: ${appUrl()}/tasks`, '', '— VoTask')
+
+  const html = shell(
+    `<h2 style="color:#b91c1c">Your critical tasks</h2>
+     <p><b>${tasks.length}</b> open${overdue.length ? ` · <b style="color:#b91c1c">${overdue.length} overdue</b>` : ''} as of ${esc(todayStr)}.</p>
+     <table style="width:100%;border-collapse:collapse">${taskRowsHtml(tasks, todayStr, { showPriority: false })}</table>`,
+    banner, `Daily critical-task check · ${todayStr}`)
+
+  return { subject: `⚠️ Critical tasks — ${tasks.length} open${tail}`, text: text.join('\n'), html }
+}
+
 // 2. A critical task has just been pointed at this person.
 export function buildAssignedMail(owner, task, others, todayStr, banner) {
   const at = clockLabel(task.assigned_at || task.created_at)
@@ -336,6 +380,24 @@ export async function sendDailyTaskMail({ overrideTo = null } = {}) {
   }
   const summary = { kind: 'daily', date: todayStr, mode: modeOf(overrideTo), owners: groups.length, sent, skipped, emailMode: mailerMode() }
   console.log(`[task-mail] daily ${todayStr} → mode:${summary.mode} owners:${groups.length} sent:${sent}${skipped ? ` skipped:${skipped}` : ''}`)
+  return summary
+}
+
+// The 13:30 run: one mail per owner who has critical work open.
+export async function sendCriticalDigest({ overrideTo = null } = {}) {
+  const todayStr = zonedNow().date
+  const groups = openTasksByOwner({ criticalOnly: true })
+  let sent = 0, skipped = 0
+  for (const owner of groups) {
+    const ok = await deliver(owner, (b) => buildCriticalDigestMail(owner, owner.tasks, todayStr, b), { overrideTo })
+    ok ? sent++ : skipped++
+  }
+  const summary = {
+    kind: 'critical-digest', date: todayStr, mode: modeOf(overrideTo),
+    owners: groups.length, tasks: groups.reduce((n, g) => n + g.tasks.length, 0),
+    sent, skipped, unassigned: countUnassignedCritical(), emailMode: mailerMode(),
+  }
+  console.log(`[task-mail] critical-digest ${todayStr} → mode:${summary.mode} owners:${groups.length} sent:${sent}`)
   return summary
 }
 
@@ -423,19 +485,25 @@ export async function runCatchUp({ overrideTo = null, force = false } = {}) {
     }
   }
 
+  let criticalDigest = 0
+  for (const owner of criticalOwners) {
+    if (await deliver(owner, (b) => buildCriticalDigestMail(owner, owner.tasks, todayStr, b), { overrideTo })) criticalDigest++
+  }
+
   if (!overrideTo) {
-    setMeta.run('task_mail_baseline', '1')      // nothing here is "new" tomorrow
-    setMeta.run('task_mail_last_sent', todayStr) // today's 10:00 summary is done
+    setMeta.run('task_mail_baseline', '1')               // nothing here is "new" tomorrow
+    setMeta.run('task_mail_last_sent', todayStr)          // today's 10:00 summary is done
+    setMeta.run('task_mail_critical_last_sent', todayStr) // and today's 13:30 pass
     setMeta.run(KEY, now())
   }
   const result = {
     kind: 'catch-up', date: todayStr, mode: modeOf(overrideTo),
     recipients: recipients.length, summarySent: summary, assignedSent: assigned,
-    deadlineSent: deadline, unreachable: noEmail,
+    deadlineSent: deadline, criticalDigestSent: criticalDigest, unreachable: noEmail,
     criticalOwners: criticalOwners.length, unassignedCritical: countUnassignedCritical(),
     emailMode: mailerMode(),
   }
-  console.log(`[task-mail] CATCH-UP ${todayStr} → mode:${result.mode} summary:${summary} assigned:${assigned} deadline:${deadline}`)
+  console.log(`[task-mail] CATCH-UP ${todayStr} → mode:${result.mode} summary:${summary} critical-digest:${criticalDigest} assigned:${assigned} deadline:${deadline}`)
   return result
 }
 
