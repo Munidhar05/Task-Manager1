@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
 import { authRequired, requireRole, hashPassword, verifyPassword, verifyToken } from '../auth.js'
 import { id, now, audit, orgAllowedDomains, emailDomainAllowed } from '../util.js'
-import { publicUser } from './auth.js'
+import { publicUser, sendVerificationEmail } from './auth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const AVATAR_DIR = path.join(__dirname, '..', '..', 'data', 'avatars')
@@ -56,9 +56,10 @@ r.post('/me/avatar', avatarUpload.single('file'), (req, res) => {
 // language, and password. Changing the password requires the current one. This is
 // separate from the admin-only PATCH /:id below, and must be declared before it so
 // "/me" isn't captured as an :id.
-r.patch('/me', (req, res) => {
+r.patch('/me', async (req, res) => {
   const b = req.body || {}
   const sets = [], args = []
+  let addressToVerify = null
   if ('name' in b) {
     const name = String(b.name || '').trim()
     if (!name) return res.status(400).json({ error: 'Name cannot be empty.' })
@@ -76,6 +77,33 @@ r.patch('/me', (req, res) => {
     for (const k of ['tasks', 'approvals', 'comments', 'chat', 'deadlines']) prefs[k] = want[k] !== false
     sets.push('notif_prefs=?'); args.push(JSON.stringify(prefs))
   }
+
+  // Changing your own email moves where you log in and where a password reset
+  // lands, so it is gated on the current password exactly as a password change
+  // is — otherwise a borrowed session could walk an account over to an inbox its
+  // owner does not control. The new address lands UNVERIFIED with a fresh
+  // confirmation on its way: the point of the address is that mail reaches it,
+  // and nothing has proved that yet. The same domain and uniqueness rules the
+  // manager-side route applies are applied here, so self-service can't be used
+  // to get around a restriction an admin set.
+  if ('email' in b) {
+    const email = String(b.email || '').toLowerCase().trim()
+    if (!VALID_EMAIL.test(email)) return res.status(400).json({ error: 'Please enter a valid email address.' })
+    if (email !== String(req.user.email || '').toLowerCase().trim()) {
+      const me = db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.user.id)
+      if (!verifyPassword(String(b.current_password || ''), me.password_hash)) {
+        return res.status(400).json({ error: 'Enter your current password to change your email address.' })
+      }
+      const domErr = domainError(req.user.org_id, email)
+      if (domErr) return res.status(400).json({ error: domErr })
+      if (db.prepare('SELECT id FROM users WHERE email=? AND id!=?').get(email, req.user.id)) {
+        return res.status(409).json({ error: 'Someone else already uses that email address.' })
+      }
+      sets.push('email=?'); args.push(email)
+      sets.push('email_verified=?'); args.push(0)
+      addressToVerify = email
+    }
+  }
   if (b.new_password) {
     if (String(b.new_password).length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters.' })
     const me = db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.user.id)
@@ -90,6 +118,13 @@ r.patch('/me', (req, res) => {
   const changed = Object.keys(b).filter((k) => k !== 'current_password' && k !== 'new_password')
   if (b.new_password) changed.push('password')
   audit(req.user.org_id, req.user.id, 'user.self_update', 'user', req.user.id, changed.join(', '))
+  // Best effort: the address has already changed and the client shows a "verify
+  // your email" banner with a resend button, so a mail failure here must not fail
+  // the request and strand the user between two addresses.
+  if (addressToVerify) {
+    try { await sendVerificationEmail({ id: req.user.id, email: addressToVerify }) }
+    catch (e) { console.warn('[users] verification mail failed:', e.message) }
+  }
   res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)))
 })
 
