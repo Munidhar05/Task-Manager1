@@ -371,6 +371,67 @@ export async function sendDeadlineWarnings({ overrideTo = null } = {}) {
   return { kind: 'deadline', mode: modeOf(overrideTo), sent }
 }
 
+// One-time launch catch-up: everything this feature would ever send, sent once,
+// now, so day one isn't silent.
+//
+// Each of the three triggers has a good reason to send nothing on the day it is
+// switched on. The summary fires at 10:00 and deploying after that misses it.
+// The critical alert is suppressed by seedAlertBaseline, which exists precisely
+// so launch doesn't announce work assigned weeks ago as though it were new. The
+// deadline warning only fires inside the hour before a due date. Correct for
+// every ordinary day, and wrong for the first one — hence this.
+//
+// It writes down everything it sends, including the baseline marker, so the
+// scheduler's next tick doesn't repeat any of it, and today's summary is marked
+// done so the 10:00 tick can't send a second one. Guarded by app_meta so a
+// redeploy, a retry, or a double-clicked button cannot run it twice; `force`
+// is the deliberate override.
+export async function runCatchUp({ overrideTo = null, force = false } = {}) {
+  const KEY = 'task_mail_catchup_done'
+  const prior = db.prepare('SELECT value FROM app_meta WHERE key=?').get(KEY)
+  if (prior && !force) {
+    return { kind: 'catch-up', skipped: true, reason: 'already run', ranAt: prior.value }
+  }
+  const todayStr = zonedNow().date
+  const setMeta = db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)')
+  let summary = 0, assigned = 0, deadline = 0, noEmail = 0
+
+  const recipients = allRecipients()
+  for (const r of recipients) {
+    if (await deliver(r, (b) => buildDailyMail(r, r.tasks, todayStr, b), { overrideTo })) summary++
+    else noEmail++
+  }
+
+  const criticalOwners = openTasksByOwner({ criticalOnly: true })
+  for (const owner of criticalOwners) {
+    for (const task of owner.tasks) {
+      const others = owner.tasks.filter((t) => t.id !== task.id)
+      if (await deliver(owner, (b) => buildAssignedMail(owner, task, others, todayStr, b), { overrideTo })) assigned++
+      markSent.run(task.id, owner.id, 'assigned', '', now())
+      // A task with no due date has no deadline to warn about; nothing to send.
+      if (task.due_date) {
+        if (await deliver(owner, (b) => buildDeadlineMail(owner, task, todayStr, b), { overrideTo })) deadline++
+        markSent.run(task.id, owner.id, 'deadline', task.due_date, now())
+      }
+    }
+  }
+
+  if (!overrideTo) {
+    setMeta.run('task_mail_baseline', '1')      // nothing here is "new" tomorrow
+    setMeta.run('task_mail_last_sent', todayStr) // today's 10:00 summary is done
+    setMeta.run(KEY, now())
+  }
+  const result = {
+    kind: 'catch-up', date: todayStr, mode: modeOf(overrideTo),
+    recipients: recipients.length, summarySent: summary, assignedSent: assigned,
+    deadlineSent: deadline, unreachable: noEmail,
+    criticalOwners: criticalOwners.length, unassignedCritical: countUnassignedCritical(),
+    emailMode: mailerMode(),
+  }
+  console.log(`[task-mail] CATCH-UP ${todayStr} → mode:${result.mode} summary:${summary} assigned:${assigned} deadline:${deadline}`)
+  return result
+}
+
 // A rehearsal to one inbox, ignoring both the gate and the send-once bookkeeping
 // — this is the "show me what these look like" button, so it must produce mail
 // even when everything has already been alerted today.

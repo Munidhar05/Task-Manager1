@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { authRequired, requireRole } from '../auth.js'
 import { sendDailyDigests } from '../digest.js'
 import {
-  sendDailyTaskMail, sendNewCriticalAlerts, sendDeadlineWarnings, sendTestBundle,
+  sendDailyTaskMail, sendNewCriticalAlerts, sendDeadlineWarnings, sendTestBundle, runCatchUp,
   openTasksByOwner, countUnassignedCritical,
   dailyHour, deadlineHour, tz, toOwnersEnabled, testRecipient,
 } from '../taskMail.js'
@@ -67,6 +67,19 @@ r.post('/task-mail/test', requireRole('manager', 'admin'), async (req, res) => {
   }
   try {
     res.json(await sendTestBundle(to, { full: req.body?.full === true }))
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Launch day only: send all three kinds once, right now, so the first day isn't
+// silent. Respects the gate like everything else, refuses to run twice unless
+// { force: true }, and accepts { to } to rehearse the whole catch-up to one inbox.
+r.post('/task-mail/catch-up', requireRole('manager', 'admin'), async (req, res) => {
+  const to = String(req.body?.to || '').trim()
+  if (to && !EMAIL_RE.test(to)) return res.status(400).json({ error: 'to must be a valid email address' })
+  try {
+    res.json(await runCatchUp({ overrideTo: to || null, force: req.body?.force === true }))
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
