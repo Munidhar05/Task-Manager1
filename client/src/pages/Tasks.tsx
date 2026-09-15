@@ -680,7 +680,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
             onChange={(e) => { e.stopPropagation(); changePriority(t.id, e.target.value) }}
             style={{ width: 'auto', padding: '4px 8px', fontSize: 12.5, fontWeight: 700, color: PRIORITY_COLORS[t.priority], borderColor: (PRIORITY_COLORS[t.priority] || '#cbd5e1') + '88' }}
           >
-            {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p} value={p} style={{ color: '#16191d' }}>{p}</option>)}
+            {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p} value={p} style={{ color: '#0f172a' }}>{p}</option>)}
           </select>
         ) : <PriorityBadge p={t.priority} />}
       </td>
@@ -848,7 +848,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       {effectiveView === 'list' && tasks.length > 0 && (
         <div className="task-stats">
           {([
-            { key: 'overdue' as const, label: 'Overdue', color: '#ef4444', icon: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /></> },
+            { key: 'overdue' as const, label: 'Overdue', color: 'var(--danger-ink)', icon: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /></> },
             { key: 'today' as const, label: 'Due today', color: '#3b82f6', icon: <><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M16 2v4M8 2v4M3 10h18" /></> },
             { key: 'completed' as const, label: 'Completed', color: '#10b981', icon: <><circle cx="12" cy="12" r="9" /><path d="m8.5 12 2.5 2.5L16 9" /></> },
           ]).map((s) => {

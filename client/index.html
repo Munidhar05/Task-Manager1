@@ -12,7 +12,7 @@
     <link rel="apple-touch-icon" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VoTask — AI Execution Platform</title>
-    <meta name="theme-color" content="#f2f4f7" />
+    <meta name="theme-color" content="#fcfaf7" />
     <!-- Theme before first paint. This has to be inline and synchronous: by the
          time the module bundle runs, the light palette has already been painted,
          and a white flash on the way into a dark app is worse than no dark mode.
@@ -23,13 +23,107 @@
       (function () {
         try {
           var c = localStorage.getItem('appTheme') || 'system'
-          var dark = c === 'dark' || (c === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          // Mirrors isLandingView() in lib/theme.ts: the signed-out landing page
+          // defaults to light whatever the OS says. It has to be decided HERE as
+          // well as there — resolving it only in React would paint the dark
+          // palette first and snap to light on mount, which is the exact flash
+          // this script exists to prevent.
+          var p = location.pathname
+          var landing = (p === '/' || p === '/welcome') && !localStorage.getItem('smarttask_token')
+          var dark = c === 'dark' || (c === 'system' && !landing && window.matchMedia('(prefers-color-scheme: dark)').matches)
           document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
           var m = document.querySelector('meta[name="theme-color"]')
-          if (m) m.setAttribute('content', dark ? '#0f1216' : '#f2f4f7')
+          if (m) m.setAttribute('content', dark ? '#0f1216' : '#fcfaf7')
         } catch (e) {}
       })()
     </script>
+
+    <!-- ===================== LANDING PREVIEW ONLY =====================
+         Tailwind's play CDN plus the two fonts the mock uses, so the landing
+         page can be tried exactly as designed. This whole block is throwaway:
+         the app itself uses one hand-written styles.css and no Tailwind, per
+         CLAUDE.md. Delete these three tags to remove it.
+
+         preflight is OFF deliberately. It is a global CSS reset, and letting it
+         run would strip the margins and borders every OTHER screen relies on —
+         clicking "Sign in" would land on a broken login page. The landing page
+         gets its own scoped copy of the few reset rules it actually needs,
+         under .lp-tw, so the rest of the app is untouched.        -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Caveat:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script>
+      tailwind.config = {
+        corePlugins: { preflight: false },
+        // Class-based, not media-based: the landing page has to follow the
+        // app's own Light/Dark/System choice, not the OS directly, or picking
+        // "Light" in the app would leave this page dark anyway.
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+              handwriting: ['"Caveat"', 'cursive'],
+            },
+            colors: {
+              brand: {
+                50: '#fff7ed', 100: '#ffedd5', 200: '#fed7aa', 300: '#fdba74', 400: '#fb923c',
+                500: '#f97316', 600: '#ea580c', 700: '#c2410c', 800: '#9a3412', 900: '#7c2d12',
+              },
+            },
+            boxShadow: {
+              subtle: '0 2px 10px rgba(0, 0, 0, 0.03)',
+              card: '0 10px 30px -5px rgba(234, 88, 12, 0.05), 0 4px 18px rgba(0, 0, 0, 0.04)',
+              float: '0 20px 40px -10px rgba(234, 88, 12, 0.12), 0 10px 20px -5px rgba(0,0,0,0.06)',
+              app: '0 25px 60px -15px rgba(180, 83, 9, 0.15), 0 10px 25px -5px rgba(0, 0, 0, 0.05)',
+            },
+          },
+        },
+      }
+    </script>
+    <style>
+      /* The parts of Tailwind preflight the mock depends on, scoped to the
+         landing page.
+
+         Every selector is wrapped in :where(), which contributes ZERO
+         specificity. Without that, `.lp-tw h1` (0,1,1) outranks Tailwind's
+         `.text-6xl` (0,1,0) and the reset wins — the hero headline renders at
+         body size. A reset must always lose to a utility. */
+      :where(.lp-tw), :where(.lp-tw) :where(*, ::before, ::after) {
+        box-sizing: border-box;
+        border-width: 0;
+        border-style: solid;
+        border-color: #e5e7eb;
+      }
+      /* `border` in Tailwind only sets a WIDTH — without border-style above,
+         every bordered card renders with no border at all. */
+      :where(.lp-tw) :where(h1, h2, h3, h4, p, figure) { margin: 0; }
+      :where(.lp-tw) :where(h1, h2, h3, h4) { font-size: inherit; font-weight: inherit; }
+      :where(.lp-tw) :where(a) { color: inherit; text-decoration: inherit; }
+      :where(.lp-tw) :where(button, input) { font: inherit; color: inherit; margin: 0; padding: 0; }
+      :where(.lp-tw) :where(button) { background: none; cursor: pointer; }
+      :where(.lp-tw) :where(svg) { display: block; }
+      :where(.lp-tw) :where(img) { max-width: 100%; height: auto; }
+
+      /* The landing page now has both palettes, so it follows the app's theme
+         rather than being pinned. color-scheme has to move with it — without it
+         the browser paints native checkboxes and scrollbars for the wrong
+         palette inside an otherwise correct page. */
+      .lp-tw { color-scheme: light; }
+      .dark .lp-tw { color-scheme: dark; }
+
+      /* The soundwave bars that animate through the hero and the badges. */
+      .lp-tw .wave-bar { animation: lp-soundwave 1.2s ease-in-out infinite alternate; }
+      @keyframes lp-soundwave {
+        0% { transform: scaleY(0.25); }
+        100% { transform: scaleY(1); }
+      }
+    </style>
+    <!-- =================== END LANDING PREVIEW ONLY =================== -->
   </head>
   <body>
     <div id="root"></div>
