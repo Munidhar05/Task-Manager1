@@ -161,11 +161,16 @@ function dueLabel(t, todayStr) {
   return `due ${t.due_date}${isOverdue(t, todayStr) ? ' — OVERDUE' : ''}`
 }
 
-function taskLinesText(tasks, todayStr) {
-  return tasks.flatMap((t) => [`  • [${t.priority}] ${t.title}`, `      ${t.status} · ${dueLabel(t, todayStr)}`])
+// showPriority off where a heading above the list already states it — repeating
+// "[Critical]" under a CRITICAL heading is noise the eye has to step over.
+function taskLinesText(tasks, todayStr, { showPriority = true } = {}) {
+  return tasks.flatMap((t) => [
+    `  • ${showPriority ? `[${t.priority}] ` : ''}${t.title}`,
+    `      ${t.status} · ${dueLabel(t, todayStr)}`,
+  ])
 }
 
-function taskRowsHtml(tasks, todayStr) {
+function taskRowsHtml(tasks, todayStr, { showPriority = true } = {}) {
   return tasks.map((t) => {
     const crit = t.priority === 'Critical'
     const due = t.due_date
@@ -173,7 +178,7 @@ function taskRowsHtml(tasks, todayStr) {
       : '<span style="color:#999">no due date</span>'
     return `<tr><td style="padding:9px 0;border-bottom:1px solid #eee">
       <div style="font-weight:600">${crit ? '<span style="color:#b91c1c">⚠ </span>' : ''}${esc(t.title)}</div>
-      <div style="color:#666;font-size:13px">${esc(t.priority)} · ${esc(t.status)} · ${due}</div>
+      <div style="color:#666;font-size:13px">${showPriority ? `${esc(t.priority)} · ` : ''}${esc(t.status)} · ${due}</div>
     </td></tr>`
   }).join('')
 }
@@ -189,41 +194,57 @@ function shell(inner, banner, footer) {
   </div>`
 }
 
-// 1. The 10am list: everything open, critical pulled to the top.
+// 1. The 10am summary: every open task this person owns, broken out by priority
+// with Critical first. A section appears only when it has something in it — a
+// standing "LOW — none" teaches the reader to skim past headings — and somebody
+// with an empty plate is told so rather than sent a mail with nothing in it.
+const BANDS = [
+  { key: 'Critical', label: 'CRITICAL', colour: '#b91c1c' },
+  { key: 'High', label: 'HIGH', colour: '#c2410c' },
+  { key: 'Medium', label: 'MEDIUM', colour: '#a16207' },
+  { key: 'Low', label: 'LOW', colour: '#4b5563' },
+]
+const NO_TASKS = 'No task as of now.'
+
 export function buildDailyMail(owner, tasks, todayStr, banner) {
-  const crit = tasks.filter((t) => t.priority === 'Critical')
-  const rest = tasks.filter((t) => t.priority !== 'Critical')
+  // Anything with an unrecognised priority rides along in the Low band rather
+  // than vanishing: the summary's job is to be complete.
+  const known = new Set(BANDS.map((b) => b.key))
+  const bands = BANDS.map((b) => ({
+    ...b,
+    items: tasks.filter((t) => (b.key === 'Low' ? t.priority === 'Low' || !known.has(t.priority) : t.priority === b.key)),
+  }))
+  const counts = Object.fromEntries(bands.map((b) => [b.key, b.items.length]))
+
   const text = []
   if (banner) text.push(banner, '')
   text.push(`Good morning ${owner.name},`, '')
-  if (!tasks.length) text.push('Nothing open on your plate today. 🎉', '')
-  if (crit.length) {
-    text.push(`CRITICAL — ${crit.length} task${crit.length === 1 ? '' : 's'} needing attention first:`, '')
-    text.push(...taskLinesText(crit, todayStr), '')
-  }
-  if (rest.length) {
-    // "other" only reads correctly when something came before it.
-    text.push(crit.length ? `Your other open tasks (${rest.length}):` : `Your open tasks (${rest.length}):`, '')
-    text.push(...taskLinesText(rest, todayStr), '')
+  if (!tasks.length) {
+    text.push(NO_TASKS, '')
+  } else {
+    text.push(`Your task summary for ${todayStr} — ${tasks.length} open in total.`, '')
+    for (const b of bands) {
+      if (!b.items.length) continue
+      text.push(`${b.label} (${b.items.length})`)
+      text.push(...taskLinesText(b.items, todayStr, { showPriority: false }), '')
+    }
   }
   text.push(`Open them here: ${appUrl()}/tasks`, '', '— VoTask')
 
   const html = shell(
     `<h2 style="color:#c2410c">Your tasks for ${esc(todayStr)}</h2>` +
-    (crit.length
-      ? `<h3 style="color:#b91c1c;margin-bottom:4px">Critical — ${crit.length}</h3>
-         <table style="width:100%;border-collapse:collapse">${taskRowsHtml(crit, todayStr)}</table>`
-      : `<p style="color:#666">${tasks.length ? 'Nothing critical on your plate today.' : 'Nothing open on your plate today. 🎉'}</p>`) +
-    (rest.length
-      ? `<h3 style="margin-bottom:4px">${crit.length ? 'Other open tasks' : 'Open tasks'} — ${rest.length}</h3>
-         <table style="width:100%;border-collapse:collapse">${taskRowsHtml(rest, todayStr)}</table>`
-      : ''),
-    banner, `Daily task mail · ${todayStr}`)
+    (tasks.length
+      ? `<p style="color:#666">${tasks.length} open in total.</p>` + bands.filter((b) => b.items.length).map((b) =>
+          `<h3 style="color:${b.colour};margin-bottom:4px">${b.label} — ${b.items.length}</h3>
+           <table style="width:100%;border-collapse:collapse">${taskRowsHtml(b.items, todayStr, { showPriority: false })}</table>`).join('')
+      : `<p style="color:#666">${NO_TASKS}</p>`),
+    banner, `Daily task summary · ${todayStr}`)
 
-  const summary = !tasks.length
-    ? 'nothing open'
-    : (crit.length ? `${crit.length} critical${rest.length ? `, ${rest.length} other` : ''}` : `${rest.length} open`)
-  return { subject: `Your tasks for ${todayStr} — ${summary}`, text: text.join('\n'), html }
+  // Subject carries the shape of the day, so the list is readable unopened.
+  const subject = tasks.length
+    ? `Your tasks for ${todayStr} — ${BANDS.filter((b) => counts[b.key]).map((b) => `${counts[b.key]} ${b.key.toLowerCase()}`).join(', ')}`
+    : `Your tasks for ${todayStr} — no task as of now`
+  return { subject, text: text.join('\n'), html }
 }
 
 // 2. A critical task has just been pointed at this person.
@@ -239,7 +260,7 @@ export function buildAssignedMail(owner, task, others, todayStr, banner) {
   text.push(`  • ${task.title}`, `      ${task.status} · ${deadline}`, '')
   if (others.length) {
     text.push(`And these are the rest of your critical tasks as well (${others.length}):`, '')
-    text.push(...taskLinesText(others, todayStr), '')
+    text.push(...taskLinesText(others, todayStr, { showPriority: false }), '')
   }
   text.push(`Open them here: ${appUrl()}/tasks`, '', '— VoTask')
 
