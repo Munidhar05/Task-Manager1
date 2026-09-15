@@ -680,7 +680,15 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
             onChange={(e) => { e.stopPropagation(); changePriority(t.id, e.target.value) }}
             style={{ width: 'auto', padding: '4px 8px', fontSize: 12.5, fontWeight: 700, color: PRIORITY_COLORS[t.priority], borderColor: (PRIORITY_COLORS[t.priority] || '#cbd5e1') + '88' }}
           >
-            {['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p} value={p} style={{ color: '#16191d' }}>{p}</option>)}
+            {/* Each option carries its OWN priority colour, not the select's. Without a
+                colour here they inherit the select's, so every choice renders in the
+                colour of the one already picked; with the fixed near-black that used to
+                be here they were near-black on the dark popup surface, invisible until
+                the hover highlight swept over them. The -ink tokens are built for this:
+                dark and saturated on light, light on dark, legible on both. */}
+            {['Critical', 'High', 'Medium', 'Low'].map((p) => (
+              <option key={p} value={p} style={{ color: PRIORITY_COLORS[p], background: 'var(--surface)' }}>{p}</option>
+            ))}
           </select>
         ) : <PriorityBadge p={t.priority} />}
       </td>
