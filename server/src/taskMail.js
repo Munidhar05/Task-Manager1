@@ -132,10 +132,17 @@ export function countUnassignedCritical() {
 // bypassed by the next one added. The cost is needing to remember what has
 // already gone out, which is what critical_alerts_sent is for.
 
-const alreadySent = db.prepare('SELECT 1 FROM critical_alerts_sent WHERE task_id=? AND owner_id=? AND kind=? AND due_date=?')
-const markSent = db.prepare(
-  `INSERT OR IGNORE INTO critical_alerts_sent (task_id, owner_id, kind, due_date, sent_at) VALUES (?,?,?,?,?)`
-)
+// Prepared on first use, never at module load. better-sqlite3 validates SQL
+// against the live schema when it prepares, and ESM hoists every import in
+// index.js above the initSchema() call in its body — so a statement prepared out
+// here runs before the table exists and takes the whole process down on the
+// first boot against any database that hasn't been migrated yet. Which is
+// exactly what a fresh deploy is.
+let _alreadySent, _markSent
+const alreadySent = () => (_alreadySent ||= db.prepare(
+  'SELECT 1 FROM critical_alerts_sent WHERE task_id=? AND owner_id=? AND kind=? AND due_date=?'))
+const markSent = () => (_markSent ||= db.prepare(
+  'INSERT OR IGNORE INTO critical_alerts_sent (task_id, owner_id, kind, due_date, sent_at) VALUES (?,?,?,?,?)'))
 
 // First boot after this feature ships, every critical task in the database looks
 // brand new. Record them as already-alerted so the rollout doesn't fire a burst
@@ -145,7 +152,7 @@ export function seedAlertBaseline() {
   if (seen) return 0
   let n = 0
   for (const g of openTasksByOwner({ criticalOnly: true })) {
-    for (const t of g.tasks) { markSent.run(t.id, g.id, 'assigned', '', now()); n++ }
+    for (const t of g.tasks) { markSent().run(t.id, g.id, 'assigned', '', now()); n++ }
   }
   db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run('task_mail_baseline', '1')
   if (n) console.log(`  [task-mail] baseline: ${n} existing critical task(s) marked as already announced`)
@@ -338,12 +345,12 @@ export async function sendNewCriticalAlerts({ overrideTo = null } = {}) {
   let sent = 0
   for (const owner of openTasksByOwner({ criticalOnly: true })) {
     for (const task of owner.tasks) {
-      if (alreadySent.get(task.id, owner.id, 'assigned', '')) continue
+      if (alreadySent().get(task.id, owner.id, 'assigned', '')) continue
       const others = owner.tasks.filter((t) => t.id !== task.id)
       const ok = await deliver(owner, (b) => buildAssignedMail(owner, task, others, todayStr, b), { overrideTo })
       // Marked either way: a bounced address must not re-fire this alert every
       // minute for the life of the task.
-      markSent.run(task.id, owner.id, 'assigned', '', now())
+      markSent().run(task.id, owner.id, 'assigned', '', now())
       if (ok) sent++
     }
   }
@@ -361,9 +368,9 @@ export async function sendDeadlineWarnings({ overrideTo = null } = {}) {
       const slot = warningSlot(task.due_date)
       if (slot.date !== nowZ.date || slot.hour !== nowZ.hour) continue
       // Keyed on due_date, so moving the deadline re-arms the warning.
-      if (alreadySent.get(task.id, owner.id, 'deadline', task.due_date)) continue
+      if (alreadySent().get(task.id, owner.id, 'deadline', task.due_date)) continue
       const ok = await deliver(owner, (b) => buildDeadlineMail(owner, task, nowZ.date, b), { overrideTo })
-      markSent.run(task.id, owner.id, 'deadline', task.due_date, now())
+      markSent().run(task.id, owner.id, 'deadline', task.due_date, now())
       if (ok) sent++
     }
   }
@@ -407,11 +414,11 @@ export async function runCatchUp({ overrideTo = null, force = false } = {}) {
     for (const task of owner.tasks) {
       const others = owner.tasks.filter((t) => t.id !== task.id)
       if (await deliver(owner, (b) => buildAssignedMail(owner, task, others, todayStr, b), { overrideTo })) assigned++
-      markSent.run(task.id, owner.id, 'assigned', '', now())
+      markSent().run(task.id, owner.id, 'assigned', '', now())
       // A task with no due date has no deadline to warn about; nothing to send.
       if (task.due_date) {
         if (await deliver(owner, (b) => buildDeadlineMail(owner, task, todayStr, b), { overrideTo })) deadline++
-        markSent.run(task.id, owner.id, 'deadline', task.due_date, now())
+        markSent().run(task.id, owner.id, 'deadline', task.due_date, now())
       }
     }
   }
