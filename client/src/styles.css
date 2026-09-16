@@ -3115,3 +3115,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .acct-switch-plus { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
   background: color-mix(in srgb, var(--primary) 12%, var(--surface)); color: var(--primary); flex-shrink: 0; }
 .acct-switch-add { border-style: dashed; }
+
+
+/* Priority picker in a task row. appearance:none because the native caret is
+   drawn by the UA in its own colour and size — at 12.5px, tinted red, it was
+   invisible enough that the control read as a badge and the priority looked
+   fixed. The caret below replaces it and inherits the priority colour. */
+.prio-pick { position: relative; display: inline-flex; align-items: center; }
+.prio-pick-sel {
+  appearance: none; -webkit-appearance: none;
+  width: auto; padding: 4px 25px 4px 9px;
+  font-size: 12.5px; font-weight: 700; border-radius: 8px;
+}
+/* Not a hole in the button: clicking the arrow has to open the menu, the way it
+   does on every other dropdown anyone has used. */
+.prio-pick-caret { position: absolute; right: 7px; pointer-events: none; opacity: .9; }
