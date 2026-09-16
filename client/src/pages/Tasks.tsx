@@ -674,11 +674,19 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       </td>
       <td data-label="Priority">
         {isManager ? (
+          /* Wrapped so the caret can be drawn by us rather than by the browser.
+             The native one is painted in the UA's own colour at the UA's own
+             size — on a 12.5px control tinted red it read as no arrow at all, so
+             the cell looked like a badge and nobody could tell the priority was
+             editable. The caret inherits `color` from this span, which means it
+             tracks the priority like the label and border already do. */
+          <span className="prio-pick" style={{ color: PRIORITY_COLORS[t.priority] }}>
           <select
+            className="prio-pick-sel"
             value={t.priority}
             onClick={(e) => e.stopPropagation()}
             onChange={(e) => { e.stopPropagation(); changePriority(t.id, e.target.value) }}
-            style={{ width: 'auto', padding: '4px 8px', fontSize: 12.5, fontWeight: 700, color: PRIORITY_COLORS[t.priority], borderColor: (PRIORITY_COLORS[t.priority] || '#cbd5e1') + '88' }}
+            style={{ color: PRIORITY_COLORS[t.priority], borderColor: (PRIORITY_COLORS[t.priority] || '#cbd5e1') + '88' }}
           >
             {/* Each option carries its OWN priority colour, not the select's. Without a
                 colour here they inherit the select's, so every choice renders in the
@@ -690,6 +698,13 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
               <option key={p} value={p} style={{ color: PRIORITY_COLORS[p], background: 'var(--surface)' }}>{p}</option>
             ))}
           </select>
+            {/* pointer-events off so the caret is part of the button, not a hole
+                in it — clicking the arrow must open the menu, as it would on any
+                other dropdown. */}
+            <svg className="prio-pick-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </span>
         ) : <PriorityBadge p={t.priority} />}
       </td>
       <td data-label="Status">
