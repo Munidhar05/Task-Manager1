@@ -186,6 +186,28 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 /* ---- buttons ---- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--n-300); background: var(--n-50); color: var(--n-700); font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
 .btn:hover { background: var(--n-100); border-color: var(--n-400); color: var(--text); }
+
+/* Secondary buttons and the toolbar's filter dropdowns wear a warm orange tint
+   rather than the neutral ramp. On the dark theme --n-50 sits a shade off the
+   page itself, so a row of them read as empty slots cut out of the background
+   instead of things you could press. Mixed against --surface rather than set to
+   a flat orange, so the same rule works on both themes: pale on light, warm and
+   clearly lifted on dark, and never the solid fill of .btn-primary, which has to
+   stay the one obviously-primary action in the row. */
+.btn:not(.btn-primary):not(.btn-danger),
+.toolbar select,
+.toolbar-filters select {
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+  color: color-mix(in srgb, var(--primary) 55%, var(--text));
+}
+.btn:not(.btn-primary):not(.btn-danger):hover,
+.toolbar select:hover,
+.toolbar-filters select:hover {
+  background: color-mix(in srgb, var(--primary) 20%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--border));
+  color: color-mix(in srgb, var(--primary) 78%, var(--text));
+}
 .btn:active { transform: translateY(1px); }
 .btn-primary { background: linear-gradient(135deg, #d2480a, #c2410c); color: #fff; border-color: #c2410c; box-shadow: 0 2px 7px rgba(234,88,12,.28); }
 .btn-primary:hover { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); border-color: var(--primary-dark); box-shadow: 0 5px 14px rgba(242,98,46,.36); transform: translateY(-1px); }
