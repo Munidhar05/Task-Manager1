@@ -15,6 +15,7 @@ import FeedbackButton from './components/FeedbackButton'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
+import CallCenter from './components/CallCenter'
 import QuickInvite from './components/QuickInvite'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
@@ -369,6 +370,10 @@ function Layout({ children }: { children: React.ReactNode }) {
       {showInvite && <QuickInvite onClose={() => setShowInvite(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
       <VoiceAssistant />
+      {/* Calls live here rather than in the Chats page: a ring has to reach you
+          wherever you are, and an answered call has to survive walking over to
+          Tasks while you talk. */}
+      <CallCenter />
     </div>
   )
 }

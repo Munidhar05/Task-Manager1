@@ -380,6 +380,103 @@ export function initSchema() {
     FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
   );
 
+  -- @mentions inside a chat message. Stored as rows rather than parsed back out
+  -- of the body on read: the body keeps the plain "@Reddeppa" the sender typed,
+  -- and two people can share a first name, so the id captured at send time is
+  -- the only record of WHICH teammate was meant. Drives the mention highlight,
+  -- the mention notification, and the assignee VoTask pre-fills when a message
+  -- becomes a task.
+  CREATE TABLE IF NOT EXISTS chat_mentions (
+    message_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, user_id),
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_mentions_user ON chat_mentions(user_id, created_at);
+
+  -- Audio / video calls. The media itself never touches this server — it is
+  -- peer-to-peer WebRTC, negotiated over the chat WebSocket. What lives here is
+  -- the call's LEDGER: who rang whom, when it was answered, how long it ran. That
+  -- is what puts a "Video call · 4m" line in the thread and what lets the app
+  -- turn a call into tasks afterwards.
+  CREATE TABLE IF NOT EXISTS chat_calls (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    started_by TEXT NOT NULL,
+    kind TEXT NOT NULL,                  -- audio | video
+    status TEXT NOT NULL,                -- ringing | active | ended | missed | declined
+    started_at TEXT NOT NULL,
+    answered_at TEXT,
+    ended_at TEXT,
+    FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_calls_convo ON chat_calls(conversation_id, started_at);
+
+  -- Live transcript of a call, one row per utterance, contributed by each
+  -- participant's OWN browser as they speak.
+  --
+  -- This is how a call becomes tasks without any speech-provider key: the Web
+  -- Speech API can only hear the microphone of the device it runs on, so instead
+  -- of one machine trying (and failing) to transcribe everybody, every machine
+  -- transcribes its owner and the server stitches the pieces back together in
+  -- time order. It is not a workaround — the result is BETTER than transcribing
+  -- one mixed audio file, because every line arrives already attributed to the
+  -- person who said it, which is exactly what task extraction needs.
+  CREATE TABLE IF NOT EXISTS chat_call_segments (
+    id TEXT PRIMARY KEY,
+    call_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (call_id) REFERENCES chat_calls(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_call_segments ON chat_call_segments(call_id, created_at);
+
+  -- Who actually joined a call, so a group call can report "3 joined" rather than
+  -- "everyone was invited". left_at NULL = still in.
+  CREATE TABLE IF NOT EXISTS chat_call_participants (
+    call_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    joined_at TEXT,
+    left_at TEXT,
+    PRIMARY KEY (call_id, user_id),
+    FOREIGN KEY (call_id) REFERENCES chat_calls(id) ON DELETE CASCADE
+  );
+
+  -- "Remind me about this message at 4pm." Per-user, so two people can set their
+  -- own reminder on the same message without seeing each other's.
+  CREATE TABLE IF NOT EXISTS chat_reminders (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    message_id TEXT,
+    conversation_id TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    remind_at TEXT NOT NULL,
+    sent INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_reminders_due ON chat_reminders(sent, remind_at);
+
+  -- A message written now and delivered later. It is NOT a chat_messages row
+  -- until it sends — otherwise it would show in the thread, count as unread and
+  -- be searchable before anyone was meant to see it.
+  CREATE TABLE IF NOT EXISTS chat_scheduled (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    mentions TEXT DEFAULT '',            -- comma-separated user ids, resolved at send time
+    send_at TEXT NOT NULL,
+    sent INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_scheduled_due ON chat_scheduled(sent, send_at);
+
   -- AI Assistant chat history. One row per conversation thread; messages is a
   -- JSON array of {role, text, tasks?}. Scoped to the owning user so threads
   -- follow the manager across devices/browsers.
@@ -688,7 +785,30 @@ export function initSchema() {
   ensureColumn('users', 'last_seen', 'TEXT')               // updated when a user's last socket disconnects
   ensureColumn('users', 'avatar_file', 'TEXT')             // uploaded profile photo (data/avatars)
   ensureColumn('chat_conversations', 'avatar_file', 'TEXT') // uploaded group photo
+  // 'private' (default, invite-only) or 'public' (any colleague can find it and
+  // join). Existing groups stay private on purpose: silently opening rooms people
+  // created under an invite-only assumption would be a disclosure, not a feature.
+  ensureColumn('chat_conversations', 'visibility', "TEXT DEFAULT 'private'")
   ensureColumn('chat_messages', 'forwarded', 'INTEGER DEFAULT 0') // message was forwarded
+  // Pinning a MESSAGE (to the thread header) is a different thing from pinning a
+  // CONVERSATION (to the top of your own list, chat_participants.pinned): a pinned
+  // message is shared by everyone in the thread, which is why it lives here and
+  // not per-participant.
+  ensureColumn('chat_messages', 'pinned_at', 'TEXT')
+  ensureColumn('chat_messages', 'pinned_by', 'TEXT')
+  ensureColumn('chat_messages', 'call_id', 'TEXT')   // the call this line reports on
+  // Cached transcription of a voice note. Cached rather than recomputed because
+  // transcription is a paid call per request, and everyone in the thread would
+  // otherwise pay for the same thirty seconds of audio.
+  ensureColumn('chat_messages', 'transcript', 'TEXT')
+  // Mute with an expiry ("for 8 hours"). The old boolean stays the source of
+  // truth for "muted forever"; this column is what makes a timed mute wear off.
+  ensureColumn('chat_participants', 'muted_until', 'TEXT')
+  // Custom status + do-not-disturb, both Cliq staples. dnd_until is a timestamp
+  // rather than a flag so "DND for 2 hours" ends by itself.
+  ensureColumn('users', 'status_text', "TEXT DEFAULT ''")
+  ensureColumn('users', 'status_emoji', "TEXT DEFAULT ''")
+  ensureColumn('users', 'dnd_until', 'TEXT')
   ensureColumn('meetings', 'draft_seconds', 'INTEGER DEFAULT 0') // elapsed clock of an in-progress recording
 
   // Index on conversation_id — created here (not in the inline schema) so it runs

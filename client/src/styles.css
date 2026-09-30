@@ -1719,6 +1719,24 @@ tbody tr:hover { background: var(--n-50); }
   .chat-layout .chat-pane { display: none; }
   .chat-layout.chat-open .chat-history { display: none; }
   .chat-layout.chat-open .chat-pane { display: flex; flex-direction: column; }
+
+  /* ...and with the thread open, everything anchored to the tab bar stands down.
+     Every floating element on a phone is positioned off that 80px bar, so hiding
+     the bar alone would leave the feedback tab and the toasts hovering in the gap
+     it left. `chat-thread-open` is set on <body> by the Chats page.
+
+     The tab bar is not lost: the thread has its own back arrow (.chat-list-btn),
+     which returns to the conversation list and brings the bar back with it. */
+  body.chat-thread-open .bottom-nav,
+  body.chat-thread-open .fbtn { display: none; }
+  body.chat-thread-open .content { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body.chat-thread-open .toast-host,
+  body.chat-thread-open .verify-pop { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  body.chat-thread-open .va-root,
+  body.chat-thread-open .va-dock { bottom: calc(140px + env(safe-area-inset-bottom, 0px)); }
+  /* Reclaim the bar's height for the thread itself — otherwise the composer just
+     floats above empty space instead of sitting at the bottom of the screen. */
+  body.chat-thread-open .chat { height: calc(100dvh - 125px - env(safe-area-inset-bottom, 0px)); }
 }
 
 .chat { display: flex; flex-direction: column; height: calc(100dvh - 160px); }
@@ -1737,12 +1755,373 @@ tbody tr:hover { background: var(--n-50); }
 .chat-contact-preview { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .chat-unread-badge { flex-shrink: 0; background: var(--primary); color: #fff; border-radius: 10px; font-size: 10px; font-weight: 700; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 5px; }
 .chat-peer-head { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+/* The name column takes the slack and truncates; the action icons never shrink.
+   Without this the four header actions squeeze the name into a 40px column and
+   "last seen 9m ago" wraps down four lines. */
+.chat-peer-who { flex: 1; min-width: 0; }
+.chat-peer-who > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-peer-actions { flex-shrink: 0; }
 
 /* unread badge on the sidebar Chats nav item */
 .nav-badge { margin-left: auto; background: #ef4444; color: #fff; border-radius: 10px; font-size: 10.5px; font-weight: 700; min-width: 18px; height: 18px; display: inline-grid; place-items: center; padding: 0 5px; }
 
 /* attach (+) button in the composer */
 .attach-btn { font-size: 22px; line-height: 1; padding: 0 12px; font-weight: 400; flex-shrink: 0; }
+
+/* "turn this line into a task" button, next to attach */
+.task-btn { padding: 0 10px; flex-shrink: 0; color: var(--muted); display: flex; align-items: center; }
+.task-btn:hover:not(:disabled) { color: var(--primary); background: var(--bg); }
+.task-btn:disabled { opacity: .4; }
+/* ...and its per-message twin in the hover toolbar */
+.msg-tool-btn.task-tool:hover { color: var(--primary); }
+
+/* @mentions: the composer picker, the chip in a bubble, the accent on a message
+   that named me. The picker anchors to the composer, so that gets a position. */
+.chat-input { position: relative; }
+/* Above the verify-email card and the voice dock (1300 / 1200), which both park
+   right over the composer on a phone, but under the confirm dialog (1320). The
+   picker is transient and explicitly invoked — while it's open it has to win. */
+.mention-pop { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 1305; min-width: 232px; max-width: 320px; max-height: 250px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; box-shadow: var(--shadow-lg); padding: 5px; display: flex; flex-direction: column; gap: 2px; }
+.mention-opt { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: transparent; padding: 7px 9px; border-radius: 8px; cursor: pointer; color: var(--text); font-size: 13.5px; }
+.mention-opt.active, .mention-opt:hover { background: var(--bg); }
+.mention-opt-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mention-all { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--primary); color: #fff; flex-shrink: 0; }
+.mention-chip { font-weight: 600; color: var(--primary); background: rgba(242,98,46,.1); border-radius: 5px; padding: 0 3px; }
+.mention-chip.me { background: rgba(242,98,46,.22); }
+/* In my own (orange) bubble the chip has to lift off the fill, not sink into it. */
+.bubble.user .mention-chip { color: #fff; background: rgba(255,255,255,.25); }
+.bubble.mentions-me { border-left: 3px solid var(--primary); }
+.mention-row { display: flex; align-items: center; gap: 8px; }
+
+/* ---- Calls (audio / video / screen share) ------------------------------------
+   The ringer and the call stage sit above everything, confirm dialogs included:
+   a call is the one thing in this app that another person is waiting on. */
+.call-ringer {
+  position: fixed; inset: 0; z-index: 1500; display: grid; place-items: center;
+  background: rgba(16,24,40,.55); backdrop-filter: blur(3px); padding: 16px;
+  animation: overlay-fade .16s ease;
+}
+.call-ring-card {
+  background: var(--surface); border-radius: 18px; box-shadow: var(--shadow-lg);
+  padding: 26px 28px; display: grid; justify-items: center; gap: 6px; width: 100%; max-width: 320px;
+}
+.call-ring-who { font-size: 18px; font-weight: 700; margin-top: 8px; text-align: center; }
+.call-ring-sub { font-size: 12.5px; color: var(--muted); text-align: center; text-transform: capitalize; }
+.call-ring-actions { display: flex; gap: 26px; margin-top: 18px; }
+
+.call-btn {
+  width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); display: grid; place-items: center;
+  cursor: pointer; transition: transform .12s, background .12s, color .12s;
+}
+.call-btn:hover { transform: translateY(-1px); background: var(--bg); }
+.call-btn.accept { background: #16a34a; border-color: #16a34a; color: #fff; }
+.call-btn.decline { background: #ef4444; border-color: #ef4444; color: #fff; }
+.call-btn.off { background: #ef4444; border-color: #ef4444; color: #fff; }
+.call-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* The answer button pulses so the eye lands on it before the decline. */
+.call-ring-actions .call-btn.accept { animation: call-pulse 1.5s ease-in-out infinite; }
+@keyframes call-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(22,163,74,.5); } 50% { box-shadow: 0 0 0 12px rgba(22,163,74,0); } }
+@media (prefers-reduced-motion: reduce) { .call-ring-actions .call-btn.accept { animation: none; } }
+
+.call-stage {
+  position: fixed; right: 20px; bottom: 20px; z-index: 1400; width: 380px; max-width: calc(100vw - 32px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow-lg); overflow: hidden; display: flex; flex-direction: column;
+}
+.call-stage.mini { width: 250px; }
+/* Full screen. A video call trapped in a 380px corner panel is unusable for
+   anything with detail in it — a shared screen most of all. */
+.call-stage.max {
+  inset: 12px; width: auto; height: auto; max-width: none; border-radius: 16px;
+}
+.call-stage.max .call-grid {
+  flex: 1; min-height: 0; align-content: center;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+.call-stage.max .call-tile { aspect-ratio: 16 / 9; }
+.call-stage.max .call-tile-name { font-size: 12.5px; padding: 3px 8px; }
+.call-stage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 12px 9px; border-bottom: 1px solid var(--border); }
+.call-stage-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-stage-sub { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.call-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; background: #0b1220; min-height: 150px; }
+.call-grid.audio { grid-template-columns: 1fr; background: var(--bg); }
+.call-tile { position: relative; border-radius: 10px; overflow: hidden; background: #111827; aspect-ratio: 4 / 3; }
+.call-tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Your own preview is mirrored, the way every video tool does it — an unmirrored
+   view of yourself reads as wrong even though it is what others see. */
+.call-tile.self video { transform: scaleX(-1); }
+/* ...but a SHARED SCREEN is not a selfie. Mirroring it puts the left half of your
+   desktop on the right, which is what made shared screens unreadable. The flip is
+   only ever right for a camera pointed at your own face. */
+.call-tile.self.sharing video { transform: none; }
+.call-tile-name {
+  position: absolute; left: 6px; bottom: 5px; font-size: 10.5px; font-weight: 600; color: #fff;
+  background: rgba(0,0,0,.45); padding: 2px 6px; border-radius: 6px; max-width: calc(100% - 12px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.call-grid.audio .call-tile { aspect-ratio: auto; background: transparent; display: grid; place-items: center; padding: 14px 0; }
+.call-grid.audio .call-tile-name { position: static; color: var(--text); background: transparent; margin-top: 8px; font-size: 13px; }
+.call-audio-face { display: grid; place-items: center; }
+.call-waiting { grid-column: 1 / -1; display: grid; place-items: center; padding: 22px 0; }
+.call-grid:not(.audio) .call-waiting { color: #cbd5e1; }
+
+.call-controls { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px; }
+.call-btn.recording { background: #dc2626; border-color: #dc2626; color: #fff; animation: rec-pulse 1.6s ease-in-out infinite; }
+@keyframes rec-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.5); } 50% { box-shadow: 0 0 0 9px rgba(220,38,38,0); } }
+@media (prefers-reduced-motion: reduce) { .call-btn.recording { animation: none; } }
+/* Everyone in the call sees this, not just the person who pressed record. */
+.rec-badge { display: inline-flex; align-items: center; gap: 4px; margin-left: 7px; color: #dc2626; font-weight: 800; font-size: 10px; letter-spacing: .04em; }
+.rec-dot { width: 7px; height: 7px; border-radius: 50%; background: #dc2626; animation: rec-blink 1.2s steps(2, start) infinite; }
+@keyframes rec-blink { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } }
+
+.call-processing {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px; z-index: 1450;
+  display: flex; align-items: center; gap: 12px; padding: 13px 18px; max-width: calc(100vw - 32px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 13px; box-shadow: var(--shadow-lg);
+}
+
+/* The line a finished call leaves in the thread — centred, not a bubble from
+   either side, because it is a record of what happened rather than something
+   anyone said. */
+.call-line {
+  display: inline-flex; align-items: center; gap: 8px; margin: 2px auto; padding: 5px 12px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg);
+  font-size: 12.5px; color: var(--muted);
+}
+.call-line-back { border: 0; background: transparent; color: var(--primary); font-weight: 600; font-size: 12.5px; cursor: pointer; padding: 0; }
+.call-line-back:hover { text-decoration: underline; }
+
+/* ---- Jump to date ------------------------------------------------------------ */
+.jump-wrap { position: relative; }
+.jump-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: 232px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+  box-shadow: var(--shadow-lg); padding: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.jump-head { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; font-weight: 700; }
+.jump-pick input { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; }
+.jump-list { max-height: 230px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.jump-day {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 0; background: transparent; padding: 7px 8px; border-radius: 7px; cursor: pointer;
+  font-size: 12.5px; color: var(--text); text-align: left;
+}
+.jump-day:hover { background: var(--bg); }
+.jump-count { font-size: 10.5px; color: var(--muted); background: var(--bg); border-radius: 99px; padding: 1px 6px; }
+.jump-day:hover .jump-count { background: var(--surface); }
+
+/* A jumped-to message flashes, so the scroll has a visible destination. */
+.msg-wrap.flash .bubble { animation: msg-flash 1.8s ease; }
+@keyframes msg-flash {
+  0%, 60% { box-shadow: 0 0 0 3px rgba(242,98,46,.45); }
+  100% { box-shadow: 0 1px 2px rgba(16,24,40,.07); }
+}
+@media (prefers-reduced-motion: reduce) { .msg-wrap.flash .bubble { animation: none; outline: 2px solid var(--primary); } }
+
+/* ---- Pinned messages --------------------------------------------------------- */
+.pin-bar { display: flex; align-items: center; gap: 4px; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.pin-bar-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; border: 0; background: transparent;
+  cursor: pointer; color: var(--text); font-size: 12.5px; text-align: left; padding: 3px 4px; border-radius: 7px;
+}
+.pin-bar-main:hover { background: var(--bg); }
+.pin-bar-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-bar-count { font-size: 10.5px; font-weight: 700; color: var(--primary); background: rgba(242,98,46,.12); border-radius: 99px; padding: 1px 6px; }
+.pin-list { border-bottom: 1px solid var(--border); max-height: 190px; overflow-y: auto; }
+.pin-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; }
+.pin-row-main { flex: 1; min-width: 0; border: 0; background: transparent; cursor: pointer; text-align: left; padding: 6px; border-radius: 7px; }
+.pin-row-main:hover { background: var(--bg); }
+.pin-row-who { display: block; font-size: 11px; font-weight: 700; color: var(--primary); }
+.pin-row-text { display: block; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Reminders / scheduled / status ------------------------------------------ */
+.remind-quote {
+  background: var(--bg); border-left: 3px solid var(--primary); border-radius: 0 8px 8px 0;
+  padding: 8px 10px; font-size: 12.5px; color: var(--muted); margin-bottom: 12px;
+  max-height: 72px; overflow: hidden;
+}
+.remind-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.status-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.status-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; margin: 8px 0 2px;
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
+  cursor: pointer; font-size: 12.5px; color: var(--text); text-align: left;
+}
+.status-row:hover { background: var(--bg); }
+.status-row-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-dot-lg { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; flex-shrink: 0; }
+.status-dot-lg[data-dnd="1"] { background: #ef4444; }
+
+/* ---- Emoji picker ------------------------------------------------------------ */
+.emoji-wrap { position: relative; }
+.emoji-btn { padding: 0 10px; flex-shrink: 0; color: var(--muted); display: flex; align-items: center; }
+.emoji-btn:hover:not(:disabled) { color: var(--primary); background: var(--bg); }
+.emoji-pop {
+  position: absolute; bottom: calc(100% + 8px); z-index: 1310; width: 292px; max-width: calc(100vw - 24px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-lg); padding: 8px; display: flex; flex-direction: column; gap: 7px;
+}
+.emoji-pop.left { left: 0; }
+.emoji-pop.right { right: 0; }
+.emoji-search { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; }
+.emoji-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+.emoji-tabs button {
+  flex: 1; border: 0; background: transparent; cursor: pointer; font-size: 16px; line-height: 1;
+  padding: 5px 0; border-radius: 7px; opacity: .55;
+}
+.emoji-tabs button:hover { background: var(--bg); opacity: .85; }
+.emoji-tabs button.active { opacity: 1; background: var(--bg); box-shadow: inset 0 -2px 0 var(--primary); }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px; max-height: 214px; overflow-y: auto; }
+.emoji-grid button {
+  border: 0; background: transparent; cursor: pointer; font-size: 19px; line-height: 1;
+  padding: 5px 0; border-radius: 7px;
+}
+.emoji-grid button:hover { background: var(--bg); transform: scale(1.18); }
+.emoji-head { grid-column: 1 / -1; font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 6px 2px 2px; }
+/* The "+" that opens the full set from the six quick reactions. */
+.react-more { font-size: 15px !important; color: var(--muted); font-weight: 600; }
+
+/* ---- Voice notes -------------------------------------------------------------- */
+.voice-btn { padding: 0 10px; flex-shrink: 0; color: var(--muted); display: flex; align-items: center; }
+.voice-btn:hover:not(:disabled) { color: var(--primary); background: var(--bg); }
+.voice-note { display: flex; flex-direction: column; gap: 6px; min-width: 210px; }
+.voice-note audio.vp-audio { display: none; }   /* our own controls drive it */
+
+/* WhatsApp-shaped voice note: play, waveform, remaining time, speed. Nothing
+   here offers to save the file — that stays in the message's own menu. */
+.vp { display: flex; align-items: center; gap: 9px; min-width: 210px; }
+.vp-play {
+  width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; border: 0; cursor: pointer;
+  display: grid; place-items: center; background: var(--primary); color: #fff;
+}
+.vp-play:hover:not(:disabled) { filter: brightness(1.07); }
+.vp-play:disabled { opacity: .5; cursor: default; }
+.vp.mine .vp-play { background: rgba(255,255,255,.9); color: var(--primary); }
+
+.vp-wave { flex: 1; min-width: 70px; height: 26px; display: flex; align-items: center; gap: 2px; cursor: pointer; }
+.vp-bar { flex: 1; min-width: 2px; border-radius: 2px; background: currentColor; opacity: .3; transition: opacity .12s; }
+.vp-bar.on { opacity: .95; }
+.vp.mine .vp-bar { background: #fff; }
+
+.vp-time { font-size: 11px; font-variant-numeric: tabular-nums; opacity: .8; flex-shrink: 0; min-width: 30px; text-align: right; }
+.vp-rate {
+  flex-shrink: 0; border: 1px solid currentColor; background: transparent; color: inherit;
+  border-radius: 999px; padding: 1px 6px; font-size: 10.5px; font-weight: 700; cursor: pointer; opacity: .75;
+}
+.vp-rate:hover:not(:disabled) { opacity: 1; }
+.vp-rate:disabled { opacity: .4; cursor: default; }
+.voice-transcribe {
+  display: inline-flex; align-items: center; gap: 5px; align-self: flex-start;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 999px; padding: 3px 10px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.voice-transcribe:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.voice-transcribe:disabled { opacity: .6; }
+/* Inside my own orange bubble the chip has to lift off the fill, not sink in. */
+.bubble.user .voice-transcribe { background: rgba(255,255,255,.2); border-color: rgba(255,255,255,.35); color: #fff; }
+.voice-text { font-size: 12.5px; line-height: 1.4; border-left: 2px solid var(--primary); padding-left: 8px; opacity: .95; }
+.bubble.user .voice-text { border-left-color: rgba(255,255,255,.7); }
+
+.voice-recording { flex: 1; display: flex; align-items: center; gap: 9px; min-width: 0; padding: 0 4px; }
+.voice-rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #dc2626; flex-shrink: 0; animation: rec-blink 1.2s steps(2, start) infinite; }
+.voice-rec-time { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; }
+.voice-recording .btn { flex-shrink: 0; }
+
+/* The composer is a textarea so Shift+Enter can make a new line and ``` code
+   blocks are typable. It grows with the content (JS sets the height) and the
+   row stays bottom-aligned so the buttons don't drift as it does. */
+.chat-input { align-items: flex-end; }
+.composer-input {
+  flex: 1; min-width: 0; resize: none; overflow-y: auto; max-height: 132px;
+  font: inherit; line-height: 1.4; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text);
+}
+.composer-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(242,98,46,.12); }
+
+/* ---- Message formatting ------------------------------------------------------ */
+.msg-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; background: rgba(100,116,139,.16); padding: 1px 5px; border-radius: 5px; }
+.bubble.user .msg-code { background: rgba(255,255,255,.22); }
+.msg-pre {
+  margin: 5px 0 2px; padding: 9px 11px; border-radius: 9px; overflow-x: auto;
+  background: rgba(15,23,42,.9); color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45;
+}
+.msg-pre code { white-space: pre; }
+.msg-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; word-break: break-word; }
+.bubble.ai .msg-link { color: var(--primary); }
+
+/* ---- Slash commands ----------------------------------------------------------- */
+.slash-pop .mention-opt { align-items: baseline; gap: 8px; }
+.slash-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; font-size: 12.5px; color: var(--primary); white-space: nowrap; }
+.slash-help { font-size: 11.5px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Channel visibility picker ------------------------------------------------ */
+.vis-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+.vis-pick button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 9px;
+  padding: 8px 10px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text);
+}
+.vis-pick button span { font-weight: 500; font-size: 11px; color: var(--muted); }
+.vis-pick button.active { border-color: var(--primary); background: rgba(242,98,46,.07); }
+.vis-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; }
+
+/* ---- Shared files ------------------------------------------------------------- */
+.files-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-bottom: 10px; }
+.files-thumb { border: 0; padding: 0; background: var(--bg); border-radius: 8px; overflow: hidden; cursor: pointer; aspect-ratio: 1; }
+.files-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.files-thumb:hover img { opacity: .85; }
+
+/* ---- Workload chips ----------------------------------------------------------
+   Deliberately quiet when there is nothing to say: a chip on every name trains
+   people to stop seeing it, and then it cannot do its job on the day it matters. */
+.load-chip {
+  display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+  font-size: 10.5px; font-weight: 700; line-height: 1;
+  padding: 2px 7px; border-radius: 999px;
+  background: rgba(100,116,139,.13); color: var(--muted);
+}
+.load-chip.late { background: rgba(239,68,68,.13); color: #dc2626; }
+.chat-peer-sub { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.chat-peer-sub > *:not(.load-chip) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-opt .load-chip { margin-left: auto; }
+
+/* ---- Global message search --------------------------------------------------- */
+.search-all {
+  display: flex; align-items: center; gap: 7px; width: 100%; margin: 8px 0 4px; padding: 7px 9px;
+  border: 1px dashed var(--border); border-radius: 9px; background: transparent; cursor: pointer;
+  font-size: 12px; color: var(--muted); text-align: left;
+}
+.search-all:hover:not(:disabled) { border-style: solid; color: var(--primary); }
+.hit-row {
+  display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border);
+  background: transparent; cursor: pointer; padding: 9px 8px;
+}
+.hit-row:hover { background: var(--bg); }
+.hit-meta { font-size: 11px; font-weight: 700; color: var(--primary); }
+.hit-body { font-size: 12.5px; color: var(--text); margin: 2px 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.hit-when { font-size: 10.5px; color: var(--muted); }
+
+/* The voice pill's default corner is exactly where the Chats composer keeps Send
+   and "Send later", and a fixed element parked there swallows both clicks. Lift
+   it while a thread is open. A dock the user has DRAGGED carries an inline
+   position (useDraggable) which wins over this — they chose that spot, so it
+   stays where they put it. */
+/* Scoped to wide screens on purpose: the phone layer above sets its own value
+   for this, and it comes EARLIER in the file, so an unscoped rule here would
+   quietly beat it at equal specificity. */
+@media (min-width: 721px) { body.chat-thread-open .va-dock { bottom: 98px; } }
+
+.sched-btn { padding: 0 10px; flex-shrink: 0; color: var(--muted); display: flex; align-items: center; }
+.sched-btn:hover:not(:disabled) { color: var(--primary); background: var(--bg); }
+.sched-btn:disabled { opacity: .4; }
+
+/* inline explanation inside a modal (e.g. why the Group tab is read-only) */
+.notice-inline { background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
 
 .group-avatar { display: grid; place-items: center; color: #fff; font-weight: 700; border-radius: 50%; flex-shrink: 0; }
 
@@ -2413,6 +2792,30 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
   .chat-input > input { flex: 1; min-width: 0; }
   .attach-btn { width: 42px; height: 42px; padding: 0; border-radius: 50%; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 22px; }
   .attach-btn:hover:not(:disabled) { background: var(--bg); }
+  /* Same circular target as attach — the composer row is thumb-width on a phone. */
+  .task-btn { width: 42px; height: 42px; padding: 0; border-radius: 50%; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; }
+  .mention-pop { min-width: 0; left: 0; right: 0; max-width: none; }
+  .chat-peer-actions .btn-sm { padding: 5px 6px; }
+  .emoji-btn, .voice-btn { width: 42px; height: 42px; padding: 0; border-radius: 50%; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; }
+  /* The picker is wider than a phone's composer button, so pin it to the row
+     rather than to the button it hangs off. */
+  .emoji-pop { left: 0; right: 0; width: auto; max-width: none; }
+  .emoji-grid { grid-template-columns: repeat(7, 1fr); }
+  .voice-note { min-width: 0; }
+  /* 32px is fine under a mouse, small under a thumb. The waveform is tappable
+     too (it seeks), but the play button is the one people aim for. */
+  .vp-play { width: 38px; height: 38px; }
+  .vp { gap: 8px; min-width: 190px; }
+  .chat-peer-head { gap: 7px; }
+
+  /* A call on a phone is a bottom sheet, not a floating window — and it clears
+     the tab bar, which is still there unless a chat thread is open. */
+  .call-stage { left: 10px; right: 10px; width: auto; max-width: none; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
+  body.chat-thread-open .call-stage { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+  .call-stage.mini { width: auto; }
+  .call-grid { min-height: 120px; }
+  .sched-btn { width: 42px; height: 42px; padding: 0; border-radius: 50%; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; }
+  .jump-pop { right: -40px; width: 220px; }
   .chat-input .btn-primary { flex-shrink: 0; padding: 0 18px; height: 42px; }
 
   /* modals: full-width, and button groups wrap instead of overflowing sideways */

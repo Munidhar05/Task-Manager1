@@ -377,4 +377,4 @@ function buildSummary({ segments, tasks, decisions, blockers, risks, followups, 
   }
 }
 
-export { detectLanguages }
+export { detectLanguages, detectPriority }
