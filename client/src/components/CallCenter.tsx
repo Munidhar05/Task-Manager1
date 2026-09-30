@@ -62,6 +62,11 @@ export default function CallCenter() {
   const [recording, setRecording] = useState(false)
   const [recordedBy, setRecordedBy] = useState<string | null>(null)
   const [processing, setProcessing] = useState(false)
+  // Surfaced live, because the alternative is what happened: speech capture
+  // dies quietly and you only learn at the end of the call that there is
+  // nothing to make tasks from.
+  const [heardCount, setHeardCount] = useState(0)
+  const [speechDead, setSpeechDead] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
@@ -96,6 +101,11 @@ export default function CallCenter() {
   // it is spoken. Everyone in the call runs one of these; the server puts the
   // halves back together in time order.
   const speechRef = useRef<LiveSpeech | null>(null)
+  // Identifies THIS tab, not this user. A person can be on the call from a
+  // second device, or from a reloaded page, and their peers need to tell the
+  // new connection from the dead one they are still holding.
+  const sessionIdRef = useRef(Math.random().toString(36).slice(2) + Date.now().toString(36))
+  const peerSessionRef = useRef<Map<string, string>>(new Map())
   // Mirrors of state that late-running callbacks (hang-up, the socket handler)
   // must read as of NOW, not as of the render that created them.
   const peersRef = useRef<Record<string, Peer>>({})
@@ -111,6 +121,7 @@ export default function CallCenter() {
     pcsRef.current.clear()
     pendingIce.current.clear()
     negRef.current.clear()
+    peerSessionRef.current.clear()
     for (const s of [localRef.current, screenRef.current]) s?.getTracks().forEach((t) => { try { t.stop() } catch {} })
     localRef.current = null
     screenRef.current = null
@@ -142,14 +153,22 @@ export default function CallCenter() {
     cleanup()
     if (id && !silent) { try { await api.post(`/chat/call/${id}/end`) } catch {} }
     if (wasRecording) await callToTasks(blob, names, id)
+    // Leaving was deliberate, so do not walk back in — but a call started
+    // after this one should still be rejoinable.
+    rejoinedRef.current = false
   }
 
   // Release the mic and camera if the tab goes away mid-call — otherwise the
   // device stays held and the OS keeps showing the "in use" indicator.
   useEffect(() => {
-    const bye = () => { for (const s of [localRef.current, screenRef.current]) s?.getTracks().forEach((t) => t.stop()) }
+    const stopAll = () => { for (const s of [localRef.current, screenRef.current]) s?.getTracks().forEach((t) => t.stop()) }
+    // `pagehide` fires when a phone merely BACKGROUNDS the tab, not only when it
+    // is destroyed. Tearing the media down there is what dropped calls the
+    // moment you switched apps. Only release the devices when the page is
+    // actually being discarded (persisted === false means no bfcache).
+    const bye = (e: PageTransitionEvent) => { if (!e.persisted) stopAll() }
     window.addEventListener('pagehide', bye)
-    return () => { window.removeEventListener('pagehide', bye); bye() }
+    return () => { window.removeEventListener('pagehide', bye); stopAll() }
   }, [])
 
   // ---- recording: mix every voice into one track --------------------------
@@ -181,13 +200,26 @@ export default function CallCenter() {
 
   // Called on EVERY participant once recording starts — not just the recorder.
   const startMySpeech = () => {
-    if (speechRef.current || !speechSupported()) return
+    if (speechRef.current || !speechSupported()) {
+      if (!speechSupported()) setSpeechDead('this browser cannot do speech recognition')
+      return
+    }
     const callId = callIdRef.current
-    speechRef.current = startLiveSpeech((text) => {
-      const id = callIdRef.current
-      if (!id || id !== callId) return
-      api.post(`/chat/call/${id}/segment`, { text }).catch(() => {})
-    })
+    setHeardCount(0); setSpeechDead(null)
+    speechRef.current = startLiveSpeech(
+      (text) => {
+        const id = callIdRef.current
+        if (!id || id !== callId) return
+        setHeardCount((n) => n + 1)
+        api.post(`/chat/call/${id}/segment`, { text }).catch(() => {})
+      },
+      undefined,
+      (st) => {
+        // Only a genuinely fatal state is worth interrupting a call for.
+        if (st.kind === 'dead') { setSpeechDead(st.reason); toast.error(`Speech capture stopped: ${st.reason}. The call is still recording as audio.`) }
+      },
+    )
+    if (!speechRef.current) setSpeechDead('speech recognition would not start')
   }
   const stopMySpeech = () => { speechRef.current?.stop(); speechRef.current = null }
 
@@ -293,10 +325,12 @@ export default function CallCenter() {
       // user's disk either: it goes into the conversation as an ordinary audio
       // message, where it plays inline for everyone who was on the call. Saving
       // it is then a choice, from that message's own ⋯ menu.
-      const needsKey = /provider|NO_PROVIDER|speech/i.test(e.message || '')
+      const needsKey = /provider|NO_PROVIDER|speech|NO_SPEECH|Nothing was captured/i.test(e.message || '')
       const kept = await keepRecordingInChat(blob, convIdRef.current)
       const why = needsKey
-        ? 'The call could not be transcribed — no speech was captured and the server has no speech provider.'
+        ? (speechDead
+            ? `No words were captured (${speechDead}), and the server has no speech provider, so there was nothing to turn into tasks.`
+            : 'No words were captured from this call, and the server has no speech provider, so there was nothing to turn into tasks.')
         : 'Could not turn the call into tasks: ' + e.message
       toast.error(kept ? `${why} The recording is in the chat so you can play it back.` : why)
     } finally { setProcessing(false) }
@@ -318,11 +352,24 @@ export default function CallCenter() {
     } catch { return false }
   }
 
+  // Stop recording and file the tasks, WITHOUT touching the call. These were
+  // wired to the same action, so pressing stop hung up on everyone — which is
+  // the opposite of what a stop button on a recorder should do. Hanging up
+  // still files whatever was recorded (see hangUp), but the two are now
+  // separate decisions.
+  const stopRecordingAndFile = async () => {
+    if (!recordingRef.current) return
+    const id = callIdRef.current
+    const names = Object.values(peersRef.current).map((p) => p.name)
+    const blob = await stopRecording()
+    await callToTasks(blob, names, id)
+  }
+
   // ---- signalling ---------------------------------------------------------
   const signal = useCallback((to: string, payload: any) => {
     const ws = wsRef.current
     if (ws?.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify({ type: 'call-signal', callId: callIdRef.current, to, signal: payload })) } catch {}
+      try { ws.send(JSON.stringify({ type: 'call-signal', callId: callIdRef.current, to, signal: { ...payload, session: sessionIdRef.current } })) } catch {}
     }
   }, [])
 
@@ -402,6 +449,16 @@ export default function CallCenter() {
     if (localVideoRef.current) localVideoRef.current.srcObject = stream
     return stream
   }, [])
+
+  // Bind the self-preview to whatever we are currently sending. This cannot be
+  // done where the camera is acquired: the self tile only exists once `kind`
+  // flips to 'video', so the ref is still null at that moment — which is why an
+  // upgraded audio call showed your camera to everyone except you.
+  useEffect(() => {
+    const el = localVideoRef.current
+    const stream = sharing ? screenRef.current : localRef.current
+    if (el && stream && el.srcObject !== stream) el.srcObject = stream
+  })
 
   // ---- start / answer -----------------------------------------------------
   const begin = useCallback(async (conversationId: string, k: CallKind, label: string) => {
@@ -489,6 +546,21 @@ export default function CallCenter() {
           const from = msg.from
           const sig = msg.signal || {}
           if (sig.sdp) {
+            // Their session changed: this is the same person from a new tab or a
+            // new device, and the connection we hold is to a browser that is
+            // gone. Replace it here — keyed off the offer itself — rather than
+            // on the call-joined event, which races the offer and used to leave
+            // the rejoined side sending but never receiving.
+            const known = peerSessionRef.current.get(from)
+            if (sig.session && known && known !== sig.session) {
+              const dead = pcsRef.current.get(from)
+              if (dead) { try { dead.close() } catch {} }
+              pcsRef.current.delete(from)
+              negRef.current.delete(from)
+              pendingIce.current.delete(from)
+            }
+            if (sig.session) peerSessionRef.current.set(from, sig.session)
+
             const pc = getPc(from, peersNameRef.current[from] || 'Teammate')
             const neg = negRef.current.get(from)
             try {
@@ -523,8 +595,10 @@ export default function CallCenter() {
         }
 
         if (msg.type === 'call-joined' && msg.callId === callIdRef.current) {
-          // Someone picked up. They will offer to us, so there is nothing to do
-          // but remember their name for the tile.
+          // Someone picked up, or came back. Nothing is torn down here on
+          // purpose: replacing the connection is driven by the session id on
+          // their next offer, which cannot race with the offer the way this
+          // event could.
           if (msg.name) peersNameRef.current[msg.userId] = msg.name
           setPhase((p) => (p === 'ringing' ? 'connecting' : p))
           return
@@ -571,8 +645,65 @@ export default function CallCenter() {
     return () => { closed = true; if (retry) clearTimeout(retry); try { wsRef.current?.close() } catch {} }
   }, [user, getPc, drainIce, signal, cleanup])
 
+  // Re-enter a call that is still running. Deliberately silent and automatic:
+  // no "Resume?" prompt. A dropped call is not a decision someone made, it is an
+  // accident of a closed tab, a dead battery or a walk out of signal — and the
+  // people still on the call are waiting. Leaving explicitly (hang up) records
+  // left_at, so a call you MEANT to leave is never rejoined.
+  const rejoinedRef = useRef(false)
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const tryRejoin = async () => {
+      if (cancelled || rejoinedRef.current || callIdRef.current) return
+      let live: any = null
+      try { live = (await api.get('/chat/calls/active')).call } catch { return }
+      if (!live || cancelled || callIdRef.current) return
+      rejoinedRef.current = true
+      const k: CallKind = live.kind === 'video' ? 'video' : 'audio'
+      setKind(k); kindRef.current = k
+      setTitle(live.title || 'Call')
+      setPhase('connecting')
+      setCallId(live.id); callIdRef.current = live.id
+      convIdRef.current = live.conversation_id
+      try {
+        await grabMedia(k)
+      } catch {
+        cleanup()
+        toast.error('Rejoining the call needs the microphone')
+        return
+      }
+      try {
+        const res: any = await api.post(`/chat/call/${live.id}/answer`)
+        await offerTo(res.peers || live.peers || [], peersNameRef.current)
+        toast.info('Reconnected to your call')
+      } catch { cleanup() }
+    }
+    // On open, and again when the tab comes back — a phone that slept may have
+    // missed the socket entirely.
+    const t = setTimeout(tryRejoin, 900)
+    const onVis = () => { if (document.visibilityState === 'visible') tryRejoin() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { cancelled = true; clearTimeout(t); document.removeEventListener('visibilitychange', onVis) }
+  }, [user?.id, grabMedia, offerTo, cleanup])
+
   // The bus: Chats (or anything else) asking us to ring someone.
   useEffect(() => subscribeCalls((req) => { begin(req.conversationId, req.kind, req.title) }), [begin])
+
+  // Speech capture can fail in ways nothing reports: the browser's recogniser
+  // reaches a service it cannot use, and simply returns nothing for ever. That
+  // is invisible until the end of the call, when the recording turns out to have
+  // produced no tasks — by which point the conversation is over. So: if we have
+  // been recording for a while and have not heard a single word, say so while
+  // there is still time to do something about it.
+  useEffect(() => {
+    if (!recording || speechDead || heardCount > 0) return
+    const t = setTimeout(() => {
+      setSpeechDead('no words are reaching the recogniser')
+      toast.error('Recording, but no speech is being captured — this call will not produce tasks. The audio is still being saved.', 9000)
+    }, 30000)
+    return () => clearTimeout(t)
+  }, [recording, speechDead, heardCount])
 
   // Call timer, once media is actually flowing.
   useEffect(() => {
@@ -724,7 +855,15 @@ export default function CallCenter() {
               <div className="call-stage-sub">
                 {phase === 'ringing' ? 'Ringing…' : phase === 'connecting' ? 'Connecting…' : fmt(elapsed)}
                 {sharing && ' · sharing screen'}
-                {recordedBy && <span className="rec-badge"><span className="rec-dot" />REC</span>}
+                {recordedBy && (
+                  <span className={'rec-badge' + (speechDead ? ' muted-speech' : '')}
+                    title={speechDead
+                      ? `Recording audio, but speech is not being captured: ${speechDead}`
+                      : `${heardCount} line${heardCount === 1 ? '' : 's'} captured so far`}>
+                    <span className="rec-dot" />REC
+                    {speechDead ? ' · audio only' : heardCount > 0 ? ` · ${heardCount}` : ''}
+                  </span>
+                )}
               </div>
             </div>
             <div className="row" style={{ gap: 2 }}>
@@ -785,9 +924,9 @@ export default function CallCenter() {
             {canRecord && (
               <button
                 className={'call-btn' + (recording ? ' recording' : '')}
-                onClick={() => (recording ? hangUp() : startRecording())}
+                onClick={() => (recording ? stopRecordingAndFile() : startRecording())}
                 disabled={processing}
-                title={recording ? 'Stop recording and turn the call into tasks' : 'Record this call and turn it into tasks'}
+                title={recording ? 'Stop recording and turn it into tasks — the call carries on' : 'Record this call and turn it into tasks'}
                 aria-label={recording ? 'Stop recording and create tasks' : 'Record this call and create tasks'}
               >
                 <Ic name={recording ? 'taskAdd' : 'record'} size={19} />

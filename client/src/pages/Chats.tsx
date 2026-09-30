@@ -32,10 +32,12 @@ interface Msg {
   id: string; conversation_id: string; sender_id: string; body: string; created_at: string
   edited_at?: string | null; forwarded?: boolean; reply_to?: string | null; reply?: ReplyPreview | null; file?: ChatFile | null
   reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; deleted?: boolean; uploading?: boolean
-  pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null
+  pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
 }
 // A finished call leaves a line in the thread instead of a chat bubble.
 interface CallInfo { id: string; kind: 'audio' | 'video'; status: string; started_by: string; duration_sec: number; joined: number }
+// The audit a transcribed call leaves behind, shown where the call happened.
+interface MeetingCard { id: string; title: string; summary: string; engine?: string; tasks: number; decisions: number; risks: number; blockers: number }
 interface OrgUser { id: string; name: string; email: string; role: string; avatar_color?: string; avatar_file?: string | null }
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
@@ -279,6 +281,7 @@ export default function Chats() {
   const [recording, setRecording] = useState(false)
   const [recSecs, setRecSecs] = useState(0)
   const [transcribing, setTranscribing] = useState<string | null>(null)
+  const [summarising, setSummarising] = useState<string | null>(null)
   const [flashId, setFlashId] = useState<string | null>(null)
   const [forwardMsg, setForwardMsg] = useState<Msg | null>(null)
   // @mention composer state: the open picker, its keyboard cursor, and everyone
@@ -687,6 +690,24 @@ export default function Chats() {
         ? 'Transcription needs a speech provider key on the server.'
         : 'Could not transcribe: ' + e.message)
     } finally { setTranscribing(null) }
+  }
+
+  // Turn a recording sitting in the thread into a meeting summary with
+  // reviewable tasks. This is the path when speech could not be recognised live
+  // — and the retry once a transcription provider is configured, so recordings
+  // already in the chat are not lost just because the key arrived later.
+  const recordingToMeeting = async (m: Msg) => {
+    if (summarising) return
+    setSummarising(m.id)
+    try {
+      const d = await api.post(`/chat/message/${m.id}/to-meeting`)
+      toast.success(d.existing ? 'Opening the summary' : `${d.suggestion_count || 0} task${d.suggestion_count === 1 ? '' : 's'} found — review and assign`)
+      navigate(`/meetings/${d.id}`)
+    } catch (e: any) {
+      toast.error(/provider|NO_PROVIDER/i.test(e.message)
+        ? 'Transcription needs a speech provider key on the server before a recording can be summarised.'
+        : 'Could not summarise that recording: ' + e.message)
+    } finally { setSummarising(null) }
   }
 
   // ---- chat → task --------------------------------------------------------
@@ -1335,7 +1356,20 @@ export default function Chats() {
               for (const rx of m.reactions || []) { (agg[rx.emoji] ||= { count: 0, mine: false }); agg[rx.emoji].count++; if (rx.user_id === user!.id) agg[rx.emoji].mine = true }
               return (
                 <div key={m.id} data-msg={m.id} className={'msg-wrap' + (flashId === m.id ? ' flash' : '')} style={{ alignItems: m.call ? 'center' : mine ? 'flex-end' : 'flex-start' }}>
-                  {m.call ? (
+                  {m.meeting ? (
+                    <button className="meeting-card" onClick={() => navigate(`/meetings/${m.meeting!.id}`)}>
+                      <div className="meeting-card-head">
+                        <Ic name="doc" size={14} /> <span>{m.meeting.title}</span>
+                      </div>
+                      {m.meeting.summary && <div className="meeting-card-sum">{m.meeting.summary}</div>}
+                      <div className="meeting-card-meta">
+                        {m.meeting.tasks > 0 && <span className="mc-chip">{m.meeting.tasks} task{m.meeting.tasks === 1 ? '' : 's'} to review</span>}
+                        {m.meeting.decisions > 0 && <span className="mc-chip">{m.meeting.decisions} decision{m.meeting.decisions === 1 ? '' : 's'}</span>}
+                        {m.meeting.risks > 0 && <span className="mc-chip warn">{m.meeting.risks} risk{m.meeting.risks === 1 ? '' : 's'}</span>}
+                        <span className="mc-open">Open summary →</span>
+                      </div>
+                    </button>
+                  ) : m.call ? (
                     <div className="call-line">
                       <Ic name={m.call.kind === 'video' ? 'video' : 'phone'} size={14} />
                       <span>{m.body}</span>
@@ -1356,13 +1390,19 @@ export default function Chats() {
                           {m.file && isAudio(m.file) && !m.uploading ? (
                             <div className="voice-note">
                               <VoicePlayer src={fileUrl(m)} id={m.id} mine={mine} />
-                              {m.transcript
-                                ? <div className="voice-text">{m.transcript}</div>
-                                : (
+                              {m.transcript && <div className="voice-text">{m.transcript}</div>}
+                              <div className="voice-actions">
+                                {!m.transcript && (
                                   <button className="voice-transcribe" disabled={transcribing === m.id} onClick={() => transcribeNote(m)}>
                                     {transcribing === m.id ? <><span className="spinner" /> Transcribing…</> : <><Ic name="ai" size={12} /> Read it as text</>}
                                   </button>
                                 )}
+                                {isManager && (
+                                  <button className="voice-transcribe" disabled={summarising === m.id} onClick={() => recordingToMeeting(m)}>
+                                    {summarising === m.id ? <><span className="spinner" /> Summarising…</> : <><Ic name="doc" size={12} /> Summary &amp; tasks</>}
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           ) : m.file && (isImage && !m.uploading
                             ? <a href={fileUrl(m)} target="_blank" rel="noreferrer"><img className="chat-image" src={fileUrl(m)} alt={m.file.name} /></a>

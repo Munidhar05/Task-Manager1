@@ -801,6 +801,9 @@ export function initSchema() {
   // transcription is a paid call per request, and everyone in the thread would
   // otherwise pay for the same thirty seconds of audio.
   ensureColumn('chat_messages', 'transcript', 'TEXT')
+  // The meeting a chat line reports on, so a finished call leaves its summary
+  // where the conversation happened rather than only in the Meetings list.
+  ensureColumn('chat_messages', 'meeting_id', 'TEXT')
   // Mute with an expiry ("for 8 hours"). The old boolean stays the source of
   // truth for "muted forever"; this column is what makes a timed mute wear off.
   ensureColumn('chat_participants', 'muted_until', 'TEXT')

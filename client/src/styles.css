@@ -1874,6 +1874,10 @@ tbody tr:hover { background: var(--n-50); }
 /* Everyone in the call sees this, not just the person who pressed record. */
 .rec-badge { display: inline-flex; align-items: center; gap: 4px; margin-left: 7px; color: #dc2626; font-weight: 800; font-size: 10px; letter-spacing: .04em; }
 .rec-dot { width: 7px; height: 7px; border-radius: 50%; background: #dc2626; animation: rec-blink 1.2s steps(2, start) infinite; }
+/* Recording, but capturing no words — the audio is being kept, the transcript
+   is not happening. Worth looking different from a healthy REC. */
+.rec-badge.muted-speech { color: var(--muted); }
+.rec-badge.muted-speech .rec-dot { background: var(--muted); animation: none; }
 @keyframes rec-blink { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } }
 
@@ -1989,7 +1993,9 @@ tbody tr:hover { background: var(--n-50); }
 .voice-btn { padding: 0 10px; flex-shrink: 0; color: var(--muted); display: flex; align-items: center; }
 .voice-btn:hover:not(:disabled) { color: var(--primary); background: var(--bg); }
 .voice-note { display: flex; flex-direction: column; gap: 6px; min-width: 210px; }
-.voice-note audio.vp-audio { display: none; }   /* our own controls drive it */
+.voice-note audio.vp-audio { display: none; }
+/* Actions under a recording: read it as text, or turn it into a meeting. */
+.voice-actions { display: flex; flex-wrap: wrap; gap: 6px; }   /* our own controls drive it */
 
 /* WhatsApp-shaped voice note: play, waveform, remaining time, speed. Nothing
    here offers to save the file — that stays in the message's own menu. */
@@ -2075,6 +2081,41 @@ tbody tr:hover { background: var(--n-50); }
 .files-thumb { border: 0; padding: 0; background: var(--bg); border-radius: 8px; overflow: hidden; cursor: pointer; aspect-ratio: 1; }
 .files-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .files-thumb:hover img { opacity: .85; }
+
+/* A finished call's summary, sitting in the conversation it came from. */
+.meeting-card {
+  display: block; width: 100%; max-width: 420px; text-align: left; cursor: pointer;
+  margin: 2px auto; padding: 11px 13px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface);
+}
+.meeting-card:hover { border-color: var(--primary); }
+.meeting-card-head { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px; color: var(--primary); }
+.meeting-card-sum { margin-top: 6px; font-size: 12.5px; line-height: 1.45; color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.meeting-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
+.mc-chip { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; background: var(--bg); color: var(--muted); }
+.mc-chip.warn { background: rgba(239,68,68,.12); color: #dc2626; }
+.mc-open { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--primary); }
+
+/* ---- Meeting summary with traceable evidence --------------------------------
+   The quote behind each line is collapsed by default: a summary you have to
+   scroll past five blockquotes to read is not a summary. */
+.sum-point { border: 1px solid transparent; border-radius: 9px; padding: 2px 4px; transition: background .12s, border-color .12s; }
+.sum-point.open { background: var(--bg); border-color: var(--border); }
+.sum-point-row { display: flex; align-items: baseline; gap: 9px; }
+.sum-bullet { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); flex-shrink: 0; transform: translateY(-2px); }
+.sum-text { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.sum-why {
+  flex-shrink: 0; border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  border-radius: 999px; padding: 1px 9px; font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.sum-why:hover { border-color: var(--primary); color: var(--primary); }
+.sum-why.muted { cursor: default; border-style: dashed; }
+.sum-why.muted:hover { border-color: var(--border); color: var(--muted); }
+.sum-evidence {
+  margin: 7px 0 4px 14px; padding: 8px 11px; border-left: 3px solid var(--primary);
+  background: var(--surface); border-radius: 0 8px 8px 0; font-size: 12.5px; line-height: 1.5; color: var(--text);
+}
+.sum-evidence-src { display: block; margin-top: 5px; font-size: 11px; color: var(--muted); font-weight: 600; }
 
 /* ---- Workload chips ----------------------------------------------------------
    Deliberately quiet when there is nothing to say: a chip on every name trains

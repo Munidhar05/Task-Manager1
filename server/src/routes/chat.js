@@ -120,8 +120,28 @@ function shapeMessage(row, viewerId, ctx = {}) {
     pinned_at: row.pinned_at || null,
     transcript: row.transcript || null,
     call: row.call_id ? callSummary(row.call_id) : null,
+    meeting: row.meeting_id ? meetingCard(row.meeting_id) : null,
     seen,
   }
+}
+
+// The summary card a finished, transcribed call leaves in the thread.
+function meetingCard(meetingId) {
+  const m = db.prepare('SELECT id, title, summary_json, engine FROM meetings WHERE id=?').get(meetingId)
+  if (!m) return null
+  let exec = ''
+  let counts = { decisions: 0, risks: 0, blockers: 0 }
+  try {
+    const s = JSON.parse(m.summary_json || '{}')
+    exec = String(s.executive_summary || '')
+    counts = {
+      decisions: (s.key_decisions || []).length,
+      risks: (s.risks || []).length,
+      blockers: (s.blockers || []).length,
+    }
+  } catch {}
+  const tasks = db.prepare("SELECT COUNT(*) c FROM suggested_tasks WHERE meeting_id=? AND status='pending'").get(meetingId).c
+  return { id: m.id, title: m.title, summary: exec, engine: m.engine, tasks, ...counts }
 }
 
 // The ledger line a finished call leaves in the thread.
@@ -676,9 +696,12 @@ const liveCall = (convId) => db.prepare("SELECT * FROM chat_calls WHERE conversa
 function postCallLine(conv, call) {
   const mins = Math.round((call.duration_sec || 0) / 60)
   const label = call.kind === 'video' ? 'Video call' : 'Audio call'
+  // "Missed" reads as an accusation to whoever placed the call — they did not
+  // miss anything, nobody picked up. One line is shared by everyone in the
+  // thread, so it has to be true from both ends: "no answer" is.
   const body = call.status === 'ended'
     ? `${label} · ${call.duration_sec < 60 ? `${call.duration_sec}s` : `${mins}m`}`
-    : call.status === 'declined' ? `${label} declined` : `Missed ${label.toLowerCase()}`
+    : call.status === 'declined' ? `${label} declined` : `${label} · no answer`
   const mid = id('msg')
   db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, call_id, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)')
     .run(mid, conv.org_id, conv.id, call.started_by, '', body, call.id, now())
@@ -848,6 +871,21 @@ r.post('/call/:id/to-tasks', requireRole('manager', 'admin'), async (req, res) =
     const { mid, suggestionCount } = persistMeeting(
       { orgId: me.org_id, userId: me.id, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds },
       analysis)
+    // These utterances are now a meeting with a transcript of their own, so
+    // drop them. Recording a SECOND stretch of the same call would otherwise
+    // re-file everything said in the first one.
+    db.prepare('DELETE FROM chat_call_segments WHERE call_id=?').run(call.id)
+
+    // Leave the audit where the conversation happened. A summary that lives only
+    // in the Meetings list is a summary nobody on the call ever sees again.
+    const lid = id('msg')
+    db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, meeting_id, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)')
+      .run(lid, me.org_id, call.conversation_id, me.id, '', `Summary of ${title}`, mid, now())
+    touchConvo(call.conversation_id)
+    const lrow = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(lid)
+    for (const uid of participantsOf(call.conversation_id)) {
+      pushToUser(uid, { type: 'message', conversationId: call.conversation_id, message: shapeMessage(lrow, uid, {}) })
+    }
     res.status(201).json({ id: mid, suggestion_count: suggestionCount, engine: analysis.engine, lines: lines.length })
   } catch (err) {
     console.error('[chat] call-to-tasks failed:', err.message)
@@ -878,6 +916,29 @@ r.post('/call/:id/recording', (req, res) => {
   if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
   pushToConversation(call.conversation_id, { type: 'call-recording', callId: call.id, on: !!req.body?.on, by: me.id, byName: me.name })
   res.json({ ok: true })
+})
+
+// The call I am STILL IN, wherever I am. A browser that is closed, killed or
+// backgrounded never sends /end, so the server still has me as present — which
+// is exactly the state that lets a new tab, or a different device entirely, walk
+// straight back in without being asked.
+r.get('/calls/active', (req, res) => {
+  const me = req.user
+  const row = db.prepare(`
+    SELECT c.* FROM chat_calls c
+    JOIN chat_call_participants p ON p.call_id=c.id AND p.user_id=?
+    WHERE c.status IN ('ringing','active') AND p.joined_at IS NOT NULL AND p.left_at IS NULL
+    ORDER BY c.started_at DESC LIMIT 1`).get(me.id)
+  if (!row) return res.json({ call: null })
+  const conv = db.prepare('SELECT type, name FROM chat_conversations WHERE id=?').get(row.conversation_id)
+  const others = db.prepare(`
+    SELECT u.name FROM chat_call_participants p JOIN users u ON u.id=p.user_id
+    WHERE p.call_id=? AND p.user_id!=?`).all(row.id, me.id).map((x) => x.name)
+  res.json({ call: {
+    ...row,
+    peers: callPeers(row.id, me.id),
+    title: conv?.type === 'group' ? (conv.name || 'Group') : (others[0] || 'Call'),
+  } })
 })
 
 // Current live call in a conversation, so a refresh mid-call can rejoin.
@@ -1251,8 +1312,12 @@ r.post('/message/:id/transcribe', async (req, res) => {
   if (!m || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
   if (!m.file_stored || !(m.file_type || '').startsWith('audio/')) return res.status(400).json({ error: 'That message is not a voice note' })
   if (m.transcript) return res.json({ text: m.transcript, cached: true })
+  // The row can outlive its file (a restore from a DB-only backup, a disk that
+  // was not carried across). Say which it is, rather than surfacing a raw ENOENT.
+  const notePath = path.join(UPLOAD_DIR, m.file_stored)
+  if (!fs.existsSync(notePath)) return res.status(410).json({ error: 'The audio for this voice note is no longer on the server, so it cannot be transcribed.', code: 'FILE_MISSING' })
   try {
-    const buf = fs.readFileSync(path.join(UPLOAD_DIR, m.file_stored))
+    const buf = fs.readFileSync(notePath)
     const { text } = await transcribeAudio(buf, m.file_name || 'voice.webm', m.file_type || 'audio/webm')
     const clean = String(text || '').trim()
     if (!clean) return res.status(422).json({ error: 'Nothing could be made out in that recording' })
@@ -1261,6 +1326,62 @@ r.post('/message/:id/transcribe', async (req, res) => {
     res.json({ text: clean, cached: false })
   } catch (err) {
     console.error('[chat] voice transcription failed:', err.message)
+    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+  }
+})
+
+// Turn a recorded call (or any voice note) sitting in the chat into a meeting
+// summary with reviewable tasks.
+//
+// The live path needs speech recognised DURING the call; when that is not
+// available the audio is still kept in the thread, and this is how it gets
+// used. It is also the retry: add a transcription provider later and every
+// recording already in the chat becomes summarisable, instead of being lost
+// because the key arrived a day too late.
+r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, res) => {
+  const me = req.user
+  const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
+  if (!m || m.deleted_for_all || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
+  if (!m.file_stored || !(m.file_type || '').startsWith('audio/')) return res.status(400).json({ error: 'That message has no recording' })
+  if (m.meeting_id) return res.json({ id: m.meeting_id, existing: true })
+
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(m.conversation_id)
+  try {
+    // A call recording is long, so prefer Whisper when a key is present —
+    // Sarvam's instant endpoint rejects audio over 30 seconds (same reasoning
+    // as the meetings upload route).
+    const recPath = path.join(UPLOAD_DIR, m.file_stored)
+    if (!fs.existsSync(recPath)) return res.status(410).json({ error: 'The recording is no longer on the server, so it cannot be summarised.', code: 'FILE_MISSING' })
+    const buf = fs.readFileSync(recPath)
+    const provider = process.env.OPENAI_API_KEY ? 'openai' : undefined
+    const { text } = await transcribeAudio(buf, m.file_name || 'call.webm', m.file_type || 'audio/webm', { provider })
+    const transcript = String(text || '').trim()
+    if (!transcript) return res.status(422).json({ error: 'Nothing could be made out in that recording' })
+
+    db.prepare('UPDATE chat_messages SET transcript=? WHERE id=?').run(transcript, m.id)
+    const participantIds = participantsOf(m.conversation_id)
+    const attendees = attendeesFor(me.org_id, participantIds)
+    const meetingDate = now().slice(0, 10)
+    const analysis = await analyzeMeetingTranscript(transcript, {
+      meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
+    })
+    const title = conv?.type === 'group' ? `Call — ${conv.name || 'Group'}` : `Call with ${attendees.filter((a) => a.id !== me.id)[0]?.name || 'a teammate'}`
+    const { mid, suggestionCount } = persistMeeting(
+      { orgId: me.org_id, userId: me.id, title, description: 'Transcribed from a recording in the chat.', meetingDate, transcript, sourceType: 'call', participantIds },
+      analysis)
+
+    // Point the recording at its summary, and drop the audit card in the thread.
+    db.prepare('UPDATE chat_messages SET meeting_id=? WHERE id=?').run(mid, m.id)
+    const lid = id('msg')
+    db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, meeting_id, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)')
+      .run(lid, me.org_id, m.conversation_id, me.id, '', `Summary of ${title}`, mid, now())
+    touchConvo(m.conversation_id)
+    const lrow = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(lid)
+    for (const uid of participantIds) pushToUser(uid, { type: 'message', conversationId: m.conversation_id, message: shapeMessage(lrow, uid, {}) })
+
+    res.status(201).json({ id: mid, suggestion_count: suggestionCount, engine: analysis.engine })
+  } catch (err) {
+    console.error('[chat] recording -> meeting failed:', err.message)
     res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
   }
 })
@@ -1318,6 +1439,36 @@ function broadcastStatus(userId, row) {
 // handling, same WebSocket push. A second delivery path would drift.
 export function runChatDue() {
   const ts = now()
+
+  // Calls nobody is on any more. A killed browser never sends /end, which is
+  // deliberate — it is what lets someone walk back into the call from another
+  // device. The cost is that a call would otherwise stay 'active' for ever and
+  // the next call in that conversation would silently join a ghost. So: end a
+  // call once every participant has been off the socket for a couple of
+  // minutes, and give up on one that has been ringing unanswered.
+  try {
+    const live = db.prepare("SELECT * FROM chat_calls WHERE status IN ('ringing','active')").all()
+    if (live.length) {
+      const online = new Set(getOnlineUsers())
+      for (const call of live) {
+        const present = db.prepare('SELECT user_id FROM chat_call_participants WHERE call_id=? AND joined_at IS NOT NULL AND left_at IS NULL').all(call.id)
+        const anyoneHere = present.some((p) => online.has(p.user_id))
+        const ageMs = Date.now() - new Date(call.started_at).getTime()
+        // The grace period is what makes a reload survivable: the socket drops
+        // and comes back within seconds, and the call must still be there.
+        const abandoned = !anyoneHere && ageMs > 120000
+        const ringingTooLong = call.status === 'ringing' && ageMs > 90000
+        if (!abandoned && !ringingTooLong) continue
+
+        const status = call.answered_at ? 'ended' : 'missed'
+        db.prepare('UPDATE chat_calls SET status=?, ended_at=? WHERE id=?').run(status, ts, call.id)
+        db.prepare('UPDATE chat_call_participants SET left_at=? WHERE call_id=? AND left_at IS NULL').run(ts, call.id)
+        const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
+        pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
+        if (conv) postCallLine(conv, callSummary(call.id))
+      }
+    }
+  } catch (e) { console.error('[chat] call reaper failed:', e.message) }
 
   // Reminders I set on a message ("remind me at 4pm").
   const dueReminders = db.prepare('SELECT * FROM chat_reminders WHERE sent=0 AND remind_at<=? LIMIT 50').all(ts)

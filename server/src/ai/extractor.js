@@ -1,6 +1,7 @@
 // Orchestrator: choose Claude when configured, else the rule-based engine.
 // Then resolve spoken names to real user records and return a unified result.
 import { analyzeTranscript } from './rules.js'
+import { attachEvidence } from './evidence.js'
 import { analyzeWithClaude } from './claude.js'
 import { analyzeWithOpenAI } from './openai.js'
 import { analyzeWithOpenRouter } from './openrouter.js'
@@ -113,21 +114,29 @@ export async function analyzeMeetingTranscript(transcript, opts = {}) {
   const hasOpenAI = !!process.env.OPENAI_API_KEY
 
   if (hasOpenRouter) {
-    try { return await analyzeWithOpenRouter(transcript, opts) }
+    try { return cite(await analyzeWithOpenRouter(transcript, opts), transcript) }
     catch (err) { console.warn('[ai] OpenRouter failed:', err.message) }
   }
   if (hasClaude) {
-    try { return await analyzeWithClaude(transcript, opts) }
+    try { return cite(await analyzeWithClaude(transcript, opts), transcript) }
     catch (err) { console.warn('[ai] Claude failed:', err.message) }
   }
   if (hasOpenAI) {
-    try { return await analyzeWithOpenAI(transcript, opts) }
+    try { return cite(await analyzeWithOpenAI(transcript, opts), transcript) }
     catch (err) {
       console.warn('[ai] OpenAI failed, falling back to rule-based:', err.message)
       const result = analyzeTranscript(transcript, opts)
       result.fallback_reason = err.message
-      return result
+      return cite(result, transcript)
     }
   }
-  return analyzeTranscript(transcript, opts)
+  return cite(analyzeTranscript(transcript, opts), transcript)
+}
+
+// Every return path above goes through this, so a summary point can always be
+// traced back to the sentence behind it no matter which engine produced it —
+// and no model prompt has to be taught about citations.
+function cite(result, transcript) {
+  try { return attachEvidence(result, transcript) }
+  catch (err) { console.warn('[ai] evidence linking failed:', err.message); return result }
 }

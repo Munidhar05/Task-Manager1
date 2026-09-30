@@ -18,6 +18,55 @@ const SUMMARY_SECTIONS: { key: string; label: string; icon: React.ReactNode }[] 
   { key: 'follow_ups', label: 'Follow-ups', icon: <Ic name="refresh" /> },
 ]
 
+// A summary point is either a bare string (meetings summarised before evidence
+// linking existed) or { text, evidence }. Normalising here means the UI never
+// has to care which, and old meetings keep rendering.
+interface Cite { quote: string; speaker?: string; seq?: number; language?: string; match?: number }
+interface Point { text: string; evidence?: Cite | null }
+
+function normalisePoints(raw: any): Point[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((it) => (typeof it === 'string' ? { text: it, evidence: null } : { text: it?.text ?? '', evidence: it?.evidence ?? null }))
+    .filter((p) => p.text.trim())
+}
+
+// One line of the summary, with the sentence behind it folded away.
+//
+// Hidden by default on purpose: the summary is what you read, and a quote under
+// every line turns five bullets into a wall of transcript. But "where did that
+// come from?" is the first question anyone asks of an AI summary, so the answer
+// is always one click away rather than a trip to the transcript tab.
+function SummaryPoint({ point }: { point: Point }) {
+  const [open, setOpen] = useState(false)
+  const ev = point.evidence
+  return (
+    <div className={'sum-point' + (open ? ' open' : '')}>
+      <div className="sum-point-row">
+        <span className="sum-bullet" aria-hidden="true" />
+        <span className="sum-text">{point.text}</span>
+        {ev ? (
+          <button className="sum-why" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+            {open ? 'Hide' : 'Why?'}
+          </button>
+        ) : (
+          <span className="sum-why muted" title="No single sentence in the transcript accounts for this line">—</span>
+        )}
+      </div>
+      {open && ev && (
+        <blockquote className="sum-evidence">
+          <span className="evidence-quote-mark" aria-hidden="true">“</span>{ev.quote}”
+          <span className="sum-evidence-src">
+            {ev.speaker ? `${ev.speaker}` : 'From the transcript'}
+            {ev.language ? ` · ${ev.language}` : ''}
+            {typeof ev.match === 'number' ? ` · ${ev.match}% match` : ''}
+          </span>
+        </blockquote>
+      )}
+    </div>
+  )
+}
+
 export default function MeetingDetail() {
   const { id } = useParams()
   const [m, setM] = useState<any>(null)
@@ -200,13 +249,17 @@ export default function MeetingDetail() {
           </div>
           <div>
             {SUMMARY_SECTIONS.map((sec) => {
-              const items: string[] = s[sec.key] || []
+              const items = normalisePoints(s[sec.key])
               if (!items.length) return null
+              const cited = items.filter((it) => it.evidence).length
               return (
                 <div key={sec.key} className="card section">
-                  <div className="card-head"><h3 className="row" style={{ gap: 8 }}>{sec.icon} {sec.label} ({items.length})</h3></div>
-                  <div className="card-pad">
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>{items.map((it, i) => <li key={i} style={{ marginBottom: 6, fontSize: 13.5 }}>{it}</li>)}</ul>
+                  <div className="card-head spread">
+                    <h3 className="row" style={{ gap: 8 }}>{sec.icon} {sec.label} ({items.length})</h3>
+                    {cited > 0 && <span className="muted" style={{ fontSize: 11.5 }}>{cited} of {items.length} traceable</span>}
+                  </div>
+                  <div className="card-pad" style={{ display: 'grid', gap: 8 }}>
+                    {items.map((it, i) => <SummaryPoint key={i} point={it} />)}
                   </div>
                 </div>
               )
