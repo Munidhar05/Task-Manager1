@@ -44,16 +44,37 @@ export function attachChatHub(server) {
     try { ws.send(JSON.stringify({ type: 'presence-list', online: getOnlineUsers() })) } catch {}
     if (wasOffline) broadcastAll({ type: 'presence', userId: user.id, online: true })
 
-    // Relay ephemeral "typing…" signals to the other participants of a conversation.
+    // Relay ephemeral signals: "typing…", and WebRTC call negotiation.
     ws.on('message', (raw) => {
       let msg
       try { msg = JSON.parse(raw.toString()) } catch { return }
-      if (msg.type !== 'typing' || !msg.conversationId) return
-      const isMember = db.prepare('SELECT 1 FROM chat_participants WHERE conversation_id=? AND user_id=?').get(msg.conversationId, user.id)
-      if (!isMember) return
-      const others = db.prepare('SELECT user_id FROM chat_participants WHERE conversation_id=? AND user_id!=?').all(msg.conversationId, user.id)
-      const payload = { type: 'typing', conversationId: msg.conversationId, userId: user.id, name: user.name, isTyping: !!msg.isTyping }
-      for (const o of others) pushToUser(o.user_id, payload)
+
+      if (msg.type === 'typing' && msg.conversationId) {
+        const isMember = db.prepare('SELECT 1 FROM chat_participants WHERE conversation_id=? AND user_id=?').get(msg.conversationId, user.id)
+        if (!isMember) return
+        const others = db.prepare('SELECT user_id FROM chat_participants WHERE conversation_id=? AND user_id!=?').all(msg.conversationId, user.id)
+        const payload = { type: 'typing', conversationId: msg.conversationId, userId: user.id, name: user.name, isTyping: !!msg.isTyping }
+        for (const o of others) pushToUser(o.user_id, payload)
+        return
+      }
+
+      // WebRTC offer / answer / ICE candidate, relayed verbatim between two
+      // people in the same call. The server is a post box, not a participant:
+      // it never parses the SDP and the audio and video never pass through it —
+      // they go peer-to-peer, which is what keeps a group call from costing us
+      // bandwidth per stream.
+      //
+      // Both ends are still checked every time. `callId` alone would let anyone
+      // who guessed one inject an offer, so the sender must be a member of that
+      // call's conversation and the recipient must be one too — a stale socket
+      // from someone since removed from the group cannot keep signalling into it.
+      if (msg.type === 'call-signal' && msg.callId && msg.to) {
+        const call = db.prepare('SELECT conversation_id FROM chat_calls WHERE id=?').get(msg.callId)
+        if (!call) return
+        const inConvo = (uid) => db.prepare('SELECT 1 FROM chat_participants WHERE conversation_id=? AND user_id=?').get(call.conversation_id, uid)
+        if (!inConvo(user.id) || !inConvo(msg.to)) return
+        pushToUser(msg.to, { type: 'call-signal', callId: msg.callId, from: user.id, signal: msg.signal })
+      }
     })
 
     // Heartbeat bookkeeping so we can reap dead sockets (closed laptops etc.).

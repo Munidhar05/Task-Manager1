@@ -370,7 +370,10 @@ r.post('/audio', requireRole('manager', 'admin'), upload.single('audio'), async 
     })
     recordAnalysisUsage(req, text, analysis)
     const { mid, suggestionCount } = persistMeeting(
-      { orgId: req.user.org_id, userId: req.user.id, title: req.body.title || 'Recorded Meeting', description: req.body.description, meetingDate, transcript: text, sourceType: 'audio', audioFilename: req.file.originalname, participantIds },
+      // source_type is passed through so a recording that came from a CALL is
+      // labelled as one. Nothing branches on it — it is provenance, and a call
+      // and an uploaded recording are otherwise processed identically.
+      { orgId: req.user.org_id, userId: req.user.id, title: req.body.title || 'Recorded Meeting', description: req.body.description, meetingDate, transcript: text, sourceType: req.body.source_type === 'call' ? 'call' : 'audio', audioFilename: req.file.originalname, participantIds },
       analysis)
     res.status(201).json({ id: mid, suggestion_count: suggestionCount, engine: analysis.engine })
   } catch (err) {
@@ -461,4 +464,4 @@ r.post('/:id/assign', requireRole('manager', 'admin'), (req, res) => {
 })
 
 export default r
-export { persistMeeting }
+export { persistMeeting, attendeesFor }

@@ -17,6 +17,9 @@ const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone:
   task_reassigned: { name: 'refresh', tone: 'warning' },
   task_comment: { name: 'chat', tone: 'info' },
   chat_message: { name: 'chat', tone: 'info' },
+  chat_mention: { name: 'at', tone: 'primary' },
+  chat_call: { name: 'phone', tone: 'warning' },
+  chat_reminder: { name: 'clock', tone: 'info' },
 }
 function NotifIcon({ type }: { type: string }) {
   const cfg = NOTIF_ICON[type]
@@ -149,7 +152,7 @@ export default function NotificationBell() {
   // the Chats page for message notifications.
   const openNotif = (n: Notif) => {
     setOpen(false)
-    if (n.type === 'chat_message') navigate('/chats')
+    if (n.type === 'chat_message' || n.type === 'chat_mention' || n.type === 'chat_call' || n.type === 'chat_reminder') navigate('/chats')
     else if (n.task_id) navigate(`/tasks?task=${n.task_id}`)
   }
 
@@ -186,7 +189,7 @@ export default function NotificationBell() {
           </div>
           {items.length === 0 && <div className="empty" style={{ padding: 24 }}>You're all caught up</div>}
           {items.map((n) => {
-            const actionable = n.type === 'chat_message' || !!n.task_id
+            const actionable = n.type === 'chat_message' || n.type === 'chat_mention' || n.type === 'chat_call' || n.type === 'chat_reminder' || !!n.task_id
             return (
               <div
                 key={n.id}

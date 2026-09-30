@@ -3,6 +3,7 @@
 // restart can't double-send.
 import { db } from './db.js'
 import { sendDailyDigests } from './digest.js'
+import { runChatDue } from './routes/chat.js'
 import { purgeDeletedTask } from './routes/tasks.js'
 import {
   sendDailyTaskMail, sendCriticalDigest, sendNewCriticalAlerts, sendDeadlineWarnings,
@@ -75,6 +76,11 @@ async function tick() {
   // is two cheap indexed reads.
   try { await sendNewCriticalAlerts() } catch (e) { console.error('[scheduler] critical alert failed:', e.message) }
   try { await sendDeadlineWarnings() } catch (e) { console.error('[scheduler] deadline warning failed:', e.message) }
+
+  // Chat reminders falling due and scheduled messages going out. Same minute
+  // granularity as everything else here — "remind me at 4pm" means within the
+  // minute, which is what people actually expect of a reminder.
+  try { runChatDue() } catch (e) { console.error('[scheduler] chat due work failed:', e.message) }
 }
 
 export function startScheduler() {

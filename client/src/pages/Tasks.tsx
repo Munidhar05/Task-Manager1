@@ -8,6 +8,7 @@ import TaskBoard from '../components/TaskBoard'
 import { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
+import { takeTaskDraft, TaskDraft } from '../lib/taskDraft'
 import { useEscape } from '../lib/useEscape'
 import { useSurface } from '../voice/uiRegistry'
 import { typeInto, pickValue, flashPress, highlight, pause, settle, findVaEl, waitForVaEl } from '../voice/uiController'
@@ -402,6 +403,10 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // Opening a task by id (e.g. ?task=… from a clicked notification) shows its drawer.
   const [openId, setOpenId] = useState<string | null>(searchParams.get('task'))
   const [showNew, setShowNew] = useState(false)
+  // A task drafted elsewhere — today, from a chat message — that the New task form
+  // should open pre-filled on. Read once out of sessionStorage (see lib/taskDraft),
+  // never from the URL: a 4000-character message does not belong in a query string.
+  const [draft, setDraft] = useState<TaskDraft | null>(null)
   const [showTrash, setShowTrash] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
   // Wide enough to show the list and one task side by side. Below this the
@@ -482,6 +487,24 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   useEffect(() => {
     const t = searchParams.get('task')
     if (t) setOpenId(t)
+  }, [searchParams])
+
+  // Arrived from "Assign as task" in the chat: take the stashed draft, open the
+  // real New task form on it, and drop ?new=1 so a reload doesn't reopen an empty
+  // form over the list.
+  //
+  // The ref is load-bearing, not defensive: takeTaskDraft() CONSUMES the draft, and
+  // StrictMode runs this effect twice on mount — without the guard the second pass
+  // reads an empty sessionStorage and blanks the form that the first pass filled.
+  const draftTaken = useRef(false)
+  useEffect(() => {
+    if (searchParams.get('new') !== '1' || draftTaken.current) return
+    draftTaken.current = true
+    setDraft(takeTaskDraft())
+    setShowNew(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
   }, [searchParams])
 
   // Close the drawer and drop the ?task= param so it stays closed and the URL is clean.
@@ -1016,7 +1039,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       {/* Drawer edits patch the single row in place when the mutation returned the
           updated task; anything else (delete, uploads) falls back to a reload. */}
       {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
-      {showNew && <NewTaskModal users={users} personal={personal} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
+      {showNew && <NewTaskModal users={users} personal={personal} draft={draft} onClose={() => { setShowNew(false); setDraft(null) }} onCreated={() => { setShowNew(false); setDraft(null); load() }} />}
       {showTrash && <TrashModal onClose={() => setShowTrash(false)} onRestored={load} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
       {filtersOpen && (
@@ -1038,7 +1061,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 // still-correct change rather than a broken one.
 const findField = (key: string) => findVaEl(`tasks.new.${key}`)
 
-function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; personal?: boolean; onClose: () => void; onCreated: () => void }) {
+function NewTaskModal({ users, personal, draft, onClose, onCreated }: { users: User[]; personal?: boolean; draft?: TaskDraft | null; onClose: () => void; onCreated: () => void }) {
   const { user } = useAuth()
   useEscape(onClose)
   const isEmployee = user?.role === 'employee'
@@ -1047,9 +1070,21 @@ function NewTaskModal({ users, personal, onClose, onCreated }: { users: User[]; 
   const asPersonal = !!personal
   // Default the owner to yourself (so it shows in your list); managers triage, so
   // they default to Unassigned.
-  const [form, setForm] = useState<any>({ title: '', description: '', priority: 'Medium', assignee_id: isEmployee ? (user?.id || '') : '', due_date: dueDateForPriority('Medium') })
-  // Once the user picks a date by hand, stop auto-syncing it to the priority.
-  const [dueManual, setDueManual] = useState(false)
+  // A draft handed over from elsewhere (a chat message) wins over the defaults for
+  // whatever it actually filled in; anything it left blank falls back to the same
+  // defaults a hand-opened form would have.
+  const draftPriority = draft?.priority || 'Medium'
+  const [form, setForm] = useState<any>({
+    title: draft?.title || '',
+    description: draft?.description || '',
+    priority: draftPriority,
+    assignee_id: draft?.assignee_id || (isEmployee ? (user?.id || '') : ''),
+    due_date: draft?.due_date || dueDateForPriority(draftPriority),
+  })
+  // Once the user picks a date by hand, stop auto-syncing it to the priority. A
+  // date the draft read out of the message ("by Friday") counts as picked — the
+  // sender said it, so a later priority change must not silently overwrite it.
+  const [dueManual, setDueManual] = useState(!!draft?.due_date)
   // Change priority and keep the due date in step (unless the user set it by hand).
   const setPriority = (priority: string) =>
     setForm((f: any) => ({ ...f, priority, due_date: dueManual ? f.due_date : dueDateForPriority(priority) }))

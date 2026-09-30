@@ -80,6 +80,9 @@ const PUSH_TITLES = {
   task_approved: 'Task approved',
   task_reopened: 'Task reopened',
   chat_message: 'New message',
+  chat_mention: 'You were mentioned',
+  chat_call: 'Missed call',
+  chat_reminder: 'Reminder',
 }
 
 // A short, human name for the client behind a request — "Android app",
