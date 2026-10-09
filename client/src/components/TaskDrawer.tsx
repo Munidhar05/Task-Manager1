@@ -5,6 +5,7 @@ import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, Co
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
+import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
 import { useSurface } from '../voice/uiRegistry'
 import { typeInto, pickValue, flashPress, settle, findVaEl } from '../voice/uiController'
 
@@ -20,14 +21,34 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   const { user } = useAuth()
   const pane = variant === 'pane'
   const drawerRef = useDialog<HTMLDivElement>(onClose, !pane)
+  // A screenshot pasted anywhere in the drawer (Ctrl+V — in the comment box too)
+  // or files dropped on it are attached to the task: comments carry words only,
+  // so the task's attachments are where a picture belongs. A paste of words is
+  // still words (lib/pasteFiles). Reached through a ref because `shell` is built
+  // before uploadFiles exists in a render that returns early (while loading).
+  const takeFilesRef = useRef<(files: File[]) => void>(() => {})
+  const fileEvents = {
+    onPaste: (e: React.ClipboardEvent) => {
+      const files = clipboardFiles(e.clipboardData)
+      if (!files.length) return
+      e.preventDefault()
+      takeFilesRef.current(files)
+    },
+    onDragOver: (e: React.DragEvent) => { if (dragHasFiles(e.dataTransfer)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } },
+    onDrop: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      takeFilesRef.current(droppedFiles(e.dataTransfer))
+    },
+  }
   // A plain function, deliberately not a component: a component declared inside
   // render is a new type every render, so React would unmount and remount the
   // whole drawer on each keystroke and every field would lose what was typed.
   const shell = (label: string, children: React.ReactNode) => pane
-    ? <div className="drawer drawer-pane" ref={drawerRef} aria-label={label}>{children}</div>
+    ? <div className="drawer drawer-pane" ref={drawerRef} aria-label={label} {...fileEvents}>{children}</div>
     : (
       <div className="overlay" onClick={onClose}>
-        <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={label} onClick={(e) => e.stopPropagation()}>{children}</div>
+        <div className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label={label} onClick={(e) => e.stopPropagation()} {...fileEvents}>{children}</div>
       </div>
     )
   const [task, setTask] = useState<Task | null>(null)
@@ -103,14 +124,20 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   // Attach more reference files to an existing task (uploaded immediately).
   const attachInput = useRef<HTMLInputElement>(null)
   const ATTACH_MAX = 50 * 1024 * 1024
-  const uploadFiles = async (list: FileList | null) => {
+  // `announce`: a paste or a drop has nothing else on screen to show it worked.
+  const uploadFiles = async (list: FileList | File[] | null, announce = false) => {
     if (!list) return
-    const picked = Array.from(list).filter((f) => (/^(image|video)\//.test(f.type) || f.type === 'application/pdf') && f.size <= ATTACH_MAX)
-    if (picked.length < list.length) toast.error('Some files were skipped — only images, PDFs and videos under 50 MB are allowed.')
+    const all = Array.from(list)
+    const picked = all.filter((f) => (/^(image|video)\//.test(f.type) || f.type === 'application/pdf') && f.size <= ATTACH_MAX)
+    if (picked.length < all.length) toast.error('Some files were skipped — only images, PDFs and videos under 50 MB are allowed.')
+    if (!picked.length) return
     setBusy(true)
-    try { for (const f of picked) { try { await api.upload(`/tasks/${taskId}/attachments`, f) } catch { toast.error(`Couldn't attach ${f.name}`) } } await load(); onChange?.() }
+    const done: string[] = []
+    try { for (const f of picked) { try { await api.upload(`/tasks/${taskId}/attachments`, f); done.push(f.name) } catch { toast.error(`Couldn't attach ${f.name}`) } } await load(); onChange?.() }
     finally { setBusy(false); if (attachInput.current) attachInput.current.value = '' }
+    if (announce && done.length) toast.success(done.length === 1 ? `Attached "${done[0]}" to this task` : `Attached ${done.length} files to this task`)
   }
+  takeFilesRef.current = (files) => { if (!busy) uploadFiles(files, true) }
   // Deleting an attachment is irreversible — confirm it like the task delete.
   const removeAttachment = async (a: Attachment) => {
     if (!(await confirmDialog({ title: 'Remove attachment', message: `Remove "${a.filename}"? This cannot be undone.`, confirmText: 'Remove', danger: true }))) return
@@ -561,7 +588,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
             <div className="spread" style={{ alignItems: 'center' }}>
               <label style={{ margin: 0 }}>Attachments ({task.attachments?.length || 0})</label>
               <input ref={attachInput} type="file" multiple accept="image/*,application/pdf,video/*" style={{ display: 'none' }} onChange={(e) => uploadFiles(e.target.files)} />
-              <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => attachInput.current?.click()} title="Attach images, PDFs or videos"><Ic name="attach" size={13} /> Attach</button>
+              <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => attachInput.current?.click()} title="Attach images, PDFs or videos — or paste a screenshot here with Ctrl+V"><Ic name="attach" size={13} /> Attach</button>
             </div>
             {task.attachments && task.attachments.length > 0 && (
               <div className="attach-grid" style={{ marginTop: 8 }}>

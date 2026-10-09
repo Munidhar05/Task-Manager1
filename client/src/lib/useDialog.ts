@@ -42,6 +42,16 @@ export function useDialog<T extends HTMLElement>(onClose: () => void, enabled = 
     else if (ref.current) { ref.current.setAttribute('tabindex', '-1'); ref.current.focus() }
 
     const onKey = (e: KeyboardEvent) => {
+      // A dialog raised over this one owns the keyboard: a confirmation
+      // (remove? delete?) or a chat dialog opened from inside it (Mute, from the
+      // chat info panel). This listener runs first (capture), so without the
+      // check Escape would close the dialog underneath and Tab would pull focus
+      // back into it. Its own wrapping overlay is not "over" it, nor is
+      // anything inside it.
+      const self = ref.current
+      const over = Array.from(document.querySelectorAll('.confirm-center, .modal-overlay'))
+        .some((el) => !el.contains(self) && !self?.contains(el))
+      if (over) return
       if (e.key === 'Escape') { e.preventDefault(); closeRef.current(); return }
       if (e.key !== 'Tab') return
       const items = focusables()
@@ -49,7 +59,9 @@ export function useDialog<T extends HTMLElement>(onClose: () => void, enabled = 
       const firstEl = items[0], lastEl = items[items.length - 1]
       const active = document.activeElement as HTMLElement
       if (e.shiftKey && (active === firstEl || !ref.current?.contains(active))) { e.preventDefault(); lastEl.focus() }
-      else if (!e.shiftKey && active === lastEl) { e.preventDefault(); firstEl.focus() }
+      // Focus can fall to <body> when the button that had it goes away (a menu
+      // item, a cancelled question's opener): Tab then starts inside again.
+      else if (!e.shiftKey && (active === lastEl || active === document.body)) { e.preventDefault(); firstEl.focus() }
     }
     document.addEventListener('keydown', onKey, true)
     return () => {

@@ -1722,13 +1722,12 @@ tbody tr:hover { background: var(--n-50); }
 
   /* ...and with the thread open, everything anchored to the tab bar stands down.
      Every floating element on a phone is positioned off that 80px bar, so hiding
-     the bar alone would leave the feedback tab and the toasts hovering in the gap
+     the bar alone would leave the toasts and the voice dock hovering in the gap
      it left. `chat-thread-open` is set on <body> by the Chats page.
 
      The tab bar is not lost: the thread has its own back arrow (.chat-list-btn),
      which returns to the conversation list and brings the bar back with it. */
-  body.chat-thread-open .bottom-nav,
-  body.chat-thread-open .fbtn { display: none; }
+  body.chat-thread-open .bottom-nav { display: none; }
   body.chat-thread-open .content { padding-bottom: env(safe-area-inset-bottom, 0px); }
   body.chat-thread-open .toast-host,
   body.chat-thread-open .verify-pop { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
@@ -2074,13 +2073,6 @@ tbody tr:hover { background: var(--n-50); }
 }
 .vis-pick button span { font-weight: 500; font-size: 11px; color: var(--muted); }
 .vis-pick button.active { border-color: var(--primary); background: rgba(242,98,46,.07); }
-.vis-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; }
-
-/* ---- Shared files ------------------------------------------------------------- */
-.files-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-bottom: 10px; }
-.files-thumb { border: 0; padding: 0; background: var(--bg); border-radius: 8px; overflow: hidden; cursor: pointer; aspect-ratio: 1; }
-.files-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.files-thumb:hover img { opacity: .85; }
 
 /* A finished call's summary, sitting in the conversation it came from. */
 .meeting-card {
@@ -2129,6 +2121,11 @@ tbody tr:hover { background: var(--n-50); }
 .load-chip.late { background: rgba(239,68,68,.13); color: #dc2626; }
 .chat-peer-sub { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .chat-peer-sub > *:not(.load-chip) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The status (online, last seen, typing…) outranks the workload chip: on a
+   narrow phone the chip gives way and ends in "…", not the other way round. */
+.chat-peer-sub > :first-child { flex-shrink: 0; max-width: 100%; }
+.chat-peer-sub > .load-chip { flex-shrink: 1; min-width: 0; }
+.load-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-opt .load-chip { margin-left: auto; }
 
 /* ---- Global message search --------------------------------------------------- */
@@ -2169,6 +2166,9 @@ tbody tr:hover { background: var(--n-50); }
 /* file / image attachments inside a bubble */
 .file-bubble { padding: 8px 10px; }
 .chat-image { display: block; max-width: 240px; max-height: 240px; border-radius: 10px; cursor: pointer; }
+/* A picture's bubble is the picture's width, and a caption wraps under it, as
+   on WhatsApp — not a wide bubble with the picture parked at one end. */
+.bubble.pic-bubble { width: min-content; }
 .chat-file { display: flex; align-items: center; gap: 10px; }
 .chat-file-icon { font-size: 22px; }
 .chat-file-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
@@ -2214,7 +2214,13 @@ tbody tr:hover { background: var(--n-50); }
 .msg-line.mine { flex-direction: row-reverse; }
 .msg-body { min-width: 0; }
 .msg-tools { position: relative; display: flex; align-items: center; gap: 1px; opacity: 0; transition: .12s; flex-shrink: 0; }
-.msg-line:hover .msg-tools { opacity: 1; }
+/* Shown on hover, and also whenever one of them has keyboard focus (Tab reached
+   them invisibly before: a focus ring drawn inside an opacity:0 box) or its menu
+   or picker is open (.open) — moving the mouse off the line must not leave an
+   open menu invisible but still clickable. */
+.msg-line:hover .msg-tools,
+.msg-line:focus-within .msg-tools,
+.msg-tools.open { opacity: 1; }
 .msg-tool-btn { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 4px 5px; border-radius: 6px; }
 .msg-tool-btn:hover { background: var(--bg); }
 .msg-menu-wrap { position: relative; }
@@ -3040,8 +3046,17 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
    opened inside a page (profile, task drawer, feedback) comes LATER in the DOM
    and — at the same z-index: 50 — painted on top of the confirmation, leaving a
    dialog that was rendered but unreachable behind the thing that asked for it.
-   A confirmation is the last thing on screen by definition. */
-.confirm-center { z-index: 90; }
+   A confirmation is the last thing on screen by definition.
+   90 only cleared the .modal-center pages; the chat dialogs (.modal-overlay,
+   200) still covered it — "Remove this member?" opened BEHIND Group info and
+   could only be answered after closing it. 1320 clears every modal, the voice
+   panel (1300) and the emoji / @mention pickers (1305, 1310), and stays under
+   the call stage and ringer (1400–1500): a call outranks everything. */
+.confirm-center { z-index: 1320; }
+/* …except the call's own questions ("Record this call?") during a full-screen
+   call: over the stage (1400) and its "processing" bar (1450), still under a
+   ringing call (1500). */
+body:has(.call-stage.max) .confirm-center { z-index: 1460; }
 .confirm-modal { width: 420px; max-width: 92vw; padding: 22px; }
 .confirm-body { display: flex; gap: 14px; align-items: flex-start; }
 .confirm-icon { flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--primary) 12%, #fff); color: var(--primary); }
@@ -3065,19 +3080,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 @media (max-width: 1024px) { .skel-kpis, .skel-kpis.emp { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 560px) { .skel-kpis, .skel-kpis.emp { grid-template-columns: 1fr 1fr; } }
 
-/* 8. Chat — touch usability. Message tools only show on hover (fine on desktop),
-   but touch devices have no hover, so keep them reachable & tappable on phones. */
-@media (hover: none) {
-  .msg-tools { opacity: 1; }
-}
+/* 8. Chat — touch usability. The per-message tools beside a bubble appear on
+   hover, which touch screens do not have. There a tap or a long-press selects
+   the message instead, WhatsApp-style (Chats.tsx renders no tools row at all;
+   see "a selected message" at the end of this file). */
 @media (max-width: 720px) {
   .msg-tool-btn { min-width: 36px; min-height: 36px; padding: 6px; font-size: 15px; }
   .reaction-chip { padding: 3px 9px; font-size: 12.5px; min-height: 28px; }
 
-  /* Those three buttons are ~115px wide and, per the hover:none rule above, always
-     visible on touch. Sharing a row with the bubble they took roughly a third of a
-     phone's width, so a long message was squeezed into a tall narrow column with a
-     dead gutter beside it. Give the bubble the whole row and let the buttons wrap
+  /* A narrow window driven by a mouse still gets the tools row, ~150px wide.
+     Sharing a row with the bubble it took roughly a third of the width, so a
+     long message was squeezed into a tall narrow column with a dead gutter
+     beside it. Give the bubble the whole row and let the buttons wrap
      underneath — same tap targets, no competition for width.
      Each wrapped line holds one item, so row-reverse on .mine no longer reorders
      anything; flex-start alone lands the buttons under the side they belong to. */
@@ -3270,23 +3284,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .fb-admin .fb-summary { max-width: 460px; }
 .fb-admin .fb-list { max-width: 780px; }
 
-/* ---- Floating feedback tab --------------------------------------------------- */
-/* Bottom-right, stacked above the draggable "Ask BTM" voice pill (which owns the
-   corner at bottom:20px). Below modals (1300) and below a pill mid-drag (1310). */
-.fbtn {
-  position: fixed; right: 20px; bottom: 88px; z-index: 1150;
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 40px; padding: 0 16px; border: 0; border-radius: 999px;
-  font: inherit; font-size: 13.5px; font-weight: 700; color: #fff; cursor: pointer;
-  background: linear-gradient(135deg, #7c4ddb, #5b34b8);
-  box-shadow: 0 8px 22px rgba(91,52,184,.42), inset 0 1px 0 rgba(255,255,255,.22);
-  transition: transform .12s ease, box-shadow .2s ease, filter .2s;
-}
-.fbtn:hover { transform: translateY(-2px); filter: brightness(1.07); box-shadow: 0 12px 28px rgba(91,52,184,.5), inset 0 1px 0 rgba(255,255,255,.28); }
-.fbtn:active { transform: translateY(0); }
-.fbtn:focus-visible { outline: 3px solid rgba(124,77,219,.55); outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) { .fbtn { transition: none; } .fbtn:hover { transform: none; } }
-
 /* ---- Task attachments -------------------------------------------------------- */
 /* Staged files in the New Task form (before upload) */
 .attach-stage { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
@@ -3441,20 +3438,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
      card (and with it the drag affordance) is desktop/tablet only — the dock
      stays put here purely to anchor the coachmark above the tab bar. */
   .va-fab-pill { display: none; }
-  /* The feedback tab moves to the bottom-LEFT on phones. The right corner is
-     taken (new-task FAB) and the centre is the mic orb, but the left of the tab
-     bar is free on every page — so the tab keeps one consistent spot. Compact,
-     and layered like the other mobile floating buttons (under the tab bar and
-     under toasts) rather than over them. */
-  .fbtn {
-    left: 12px; right: auto; z-index: 33;
-    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
-    height: 34px; padding: 0 13px; gap: 6px; font-size: 12.5px;
-    box-shadow: 0 4px 14px rgba(91,52,184,.42), inset 0 1px 0 rgba(255,255,255,.22);
-  }
-  .fbtn svg { width: 15px; height: 15px; }
-  /* The verify-email card lands in this same corner (full-width on small phones)
-     and would sit ON the tab, swallowing the tap — stack it above instead. */
+  /* The verify-email card is full-width on a phone, so it has to clear both the
+     tab bar and, on Tasks, the new-task button in the right corner (74–128px). */
   .verify-pop { bottom: calc(126px + env(safe-area-inset-bottom, 0px)); }
 
   /* --- Floating "New task" action ----------------------------------------- */
@@ -3596,3 +3581,432 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 /* Not a hole in the button: clicking the arrow has to open the menu, the way it
    does on every other dropdown anyone has used. */
 .prio-pick-caret { position: absolute; right: 7px; pointer-events: none; opacity: .9; }
+
+/* ============================================================================
+   Chats — a clean thread. Icon-only header actions, one composer box, the
+   All / Groups / Personal tabs and the "who reacted" sheet; on a phone an open
+   thread is the whole screen. Last in the file on purpose: it restyles pieces
+   the earlier chat blocks (and the phone layer) already set.
+   ============================================================================ */
+
+/* Plain round icon buttons. Not .btn: the app-wide secondary-button tint (a
+   bordered warm box, see .btn:not(.btn-primary)) suits a toolbar of labelled
+   actions, but six of those boxes in a row of glyphs is what made the thread
+   header read as clutter. */
+.ic-btn {
+  width: 38px; height: 38px; flex-shrink: 0; display: inline-grid; place-items: center; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.ic-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--text); }
+.ic-btn:disabled { opacity: .4; cursor: default; }
+
+/* The whole width on a big screen, and a list wide enough for its names. */
+body.chats-page .content { max-width: none; }
+@media (min-width: 861px) {
+  .chat-layout { grid-template-columns: 300px minmax(0, 1fr); }
+}
+
+/* The pane hands its padding to the header, log and composer, so the header
+   rule and the composer can run edge to edge. Its height is the list's. */
+.chat-layout .chat-pane { padding: 0; height: calc(100dvh - 124px); }
+.chat-layout .chat { height: 100%; }
+.chat-layout .chat-peer-head { position: relative; gap: 10px; margin: 0; padding: 10px 10px 10px 16px; min-height: 60px; }
+.chat-peer-name { font-weight: 700; font-size: 15px; line-height: 1.3; }
+.chat-layout .chat-peer-sub { font-size: 12px; margin-top: 1px; }
+/* The photo and the name open the chat's info, as on WhatsApp. */
+.chat-peer-photo { flex-shrink: 0; display: inline-flex; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; line-height: 0; }
+.chat-layout .chat-peer-who { cursor: pointer; border-radius: 8px; }
+.chat-peer-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.chat-layout .pin-bar, .chat-layout .pin-list, .chat-layout .in-search { padding-left: 12px; padding-right: 12px; }
+.chat-layout .in-search { padding-top: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.chat-layout .chat-log { padding: 12px 16px; }
+.chat-layout .composer { padding: 8px 12px 12px; }
+
+/* The ⋮ menu: icon + label rows. The search row is for phones, where the
+   header has no room for its own search button. */
+.head-menu { min-width: 210px; }
+.head-menu button { display: flex; align-items: center; gap: 10px; }
+.head-menu button svg { color: var(--muted); flex-shrink: 0; }
+.head-menu .phone-only { display: none; }
+
+/* The workload chip as a button, and what it opens. */
+.load-chip-btn { border: 0; cursor: pointer; font-family: inherit; }
+.load-chip-btn:hover { filter: brightness(1.15); }
+.load-pop {
+  position: absolute; top: calc(100% + 4px); left: 60px; z-index: 25; width: min(340px, calc(100% - 72px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg);
+  padding: 12px 14px; font-size: 13px; line-height: 1.45; color: var(--text);
+}
+.load-pop p { margin: 6px 0 0; }
+.load-pop p.muted { font-size: 12px; }
+.load-pop .btn { margin-top: 10px; }
+.load-pop-title { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+
+/* ---- the composer: one box ---------------------------------------------------
+   Emoji, the text, then attach and the mic/send button, all inside the same
+   rounded field. The emoji picker hangs off the whole row (.chat-input is the
+   positioned box) rather than off its 38px button. */
+.chat-input.chat-compose { padding-top: 0; gap: 0; align-items: flex-end; }
+.composer-box {
+  flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 1px;
+  min-height: 50px; padding: 5px; border-radius: 25px;
+  background: var(--surface); border: 1px solid var(--border);
+  transition: border-color .15s, box-shadow .15s;
+}
+.composer-box:focus-within { border-color: color-mix(in srgb, var(--primary) 60%, var(--border)); box-shadow: 0 0 0 3px rgba(242,98,46,.12); }
+.composer-box .emoji-wrap { position: static; }
+.composer-box .composer-input {
+  flex: 1; min-width: 0; align-self: center; border: 0; background: transparent; box-shadow: none; border-radius: 0;
+  padding: 8px 4px; font-size: 15px; line-height: 1.4;
+}
+.composer-box .composer-input:focus { border: 0; box-shadow: none; outline: none; }
+.composer-box .composer-input::placeholder { white-space: nowrap; overflow: hidden; }
+.composer-box .voice-recording { flex: 1; min-height: 38px; padding: 0 4px 0 12px; }
+.composer-box .cb-discard { margin-left: auto; color: var(--danger-ink); }
+.send-btn {
+  width: 38px; height: 38px; flex-shrink: 0; display: grid; place-items: center; padding: 0;
+  border: 0; border-radius: 50%; cursor: pointer; color: #fff;
+  background: linear-gradient(135deg, #d2480a, var(--primary)); box-shadow: 0 2px 7px rgba(234,88,12,.3);
+  transition: transform .1s, opacity .15s, background .15s;
+}
+.send-btn svg { margin-left: -2px; }
+.send-btn:active:not(:disabled) { transform: scale(.93); }
+.send-btn:disabled { opacity: .45; cursor: default; }
+.send-btn.mic { background: transparent; color: var(--muted); box-shadow: none; }
+.send-btn.mic svg { margin-left: 0; }
+.send-btn.mic:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--text); }
+
+/* ---- files waiting for Send (pasted, dropped or picked) ---------------------
+   A row of previews above the box: pictures as thumbnails, other files as a
+   small card. It scrolls sideways rather than pushing the thread up. */
+.stage-strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 8px; scrollbar-width: thin; }
+.stage-item {
+  position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 9px; max-width: 220px; height: 64px;
+  padding: 8px 30px 8px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+}
+.stage-item.pic { width: 64px; padding: 0; overflow: hidden; }
+.stage-item.pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stage-ic {
+  width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 9px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--surface)); color: var(--primary); font-size: 10px; font-weight: 800; letter-spacing: .03em;
+}
+.stage-ic.audio { background: color-mix(in srgb, #22c55e 16%, var(--surface)); color: #16a34a; }
+.stage-meta { min-width: 0; display: flex; flex-direction: column; }
+.stage-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-size { font-size: 11.5px; color: var(--muted); }
+.stage-x {
+  position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0;
+  border: 0; border-radius: 50%; background: rgba(15,23,42,.72); color: #fff; cursor: pointer;
+}
+.stage-x:hover { background: rgba(15,23,42,.9); }
+
+/* Files dragged over the thread: the pane says where they will go. */
+.chat-layout .chat-pane { position: relative; }
+.drop-veil {
+  position: absolute; inset: 8px; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  border: 2px dashed var(--primary); border-radius: 14px; pointer-events: none;
+  background: color-mix(in srgb, var(--surface) 88%, var(--primary)); color: var(--primary); font-weight: 700; font-size: 16px;
+}
+.drop-veil-sub { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+
+/* The clip's menu on touch screens: pick a file, or paste from the clipboard. */
+.attach-pop {
+  position: absolute; right: 44px; bottom: calc(100% + 8px); z-index: 1305; min-width: 210px; padding: 5px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg);
+}
+.attach-pop button {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 11px 12px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.attach-pop button svg { color: var(--primary); flex-shrink: 0; }
+.attach-pop button:hover { background: var(--bg); }
+
+/* ---- list: All / Groups / Personal ---------------------------------------- */
+.chat-tabs { display: flex; gap: 6px; }
+.chat-tab {
+  flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px;
+  border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted);
+  font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.chat-tab:hover { color: var(--text); }
+.chat-tab.active {
+  color: var(--text); background: color-mix(in srgb, var(--primary) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+.chat-tab-badge {
+  min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
+  background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+}
+
+/* ---- reactions: one pill, and who reacted --------------------------------- */
+.reaction-chip { display: inline-flex; align-items: center; gap: 4px; }
+.reaction-emojis { letter-spacing: 1px; }
+.reaction-count { font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.reaction-chip.mine .reaction-count { color: var(--primary); }
+.rx-sheet { max-width: 360px; padding: 0; overflow: hidden; }
+.rx-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--border); }
+.rx-tabs { flex: 1; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.rx-tab {
+  flex-shrink: 0; border: 0; background: transparent; padding: 6px 11px; border-radius: 999px; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 700; color: var(--muted);
+}
+.rx-tab.active { color: var(--text); background: color-mix(in srgb, var(--primary) 14%, var(--surface)); }
+.rx-list { overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.rx-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border-radius: 10px;
+  border: 0; background: transparent; color: var(--text); font: inherit; text-align: left;
+}
+button.rx-row { cursor: pointer; }
+button.rx-row:hover { background: var(--bg); }
+.rx-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rx-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rx-sub { font-size: 12px; color: var(--muted); }
+.rx-emoji { font-size: 22px; line-height: 1; }
+
+/* ---- touch: a selected message ---------------------------------------------
+   WhatsApp's long-press, on any touch screen (Chats.tsx, selectMessage): the
+   row is tinted, the quick reactions float over it and the header turns into
+   the message's action bar. The tint's padding is paid back by its negative
+   margin, so selecting a message moves nothing. A tint alone measured 1.2:1
+   against the thread, so the row also gets a ring that reads in both themes. */
+.msg-wrap.selected {
+  position: relative; z-index: 4; margin: -3px -6px; padding: 3px 6px; border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 70%, transparent);
+}
+/* Read out, not shown: what a screen reader needs that the eye gets elsewhere. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+/* A long-press is for selecting, not for the phone's text selection and its
+   copy/share callout: Copy is in the action bar. */
+@media (hover: none) {
+  .chat-layout .bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+.react-tray {
+  position: absolute; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 5px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--e-2);
+  animation: react-tray-in .16s cubic-bezier(.2, .9, .3, 1.2);
+}
+.react-tray.above { bottom: calc(100% + 6px); }
+.react-tray.below { top: calc(100% + 6px); }
+.react-tray.inside { top: 8px; }
+.react-tray:not(.mine) { left: 4px; }
+.react-tray.mine { right: 4px; }
+.react-tray button {
+  width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; cursor: pointer;
+  font-size: 25px; line-height: 1; transition: transform .12s, background .12s;
+}
+.react-tray button:active { transform: scale(1.3); }
+/* Your own reaction: the ring is the only mark of it, so it is solid primary
+   (5:1 on the tray in light, as .reaction-chip.mine) — a 55% mix was 2.8:1. */
+.react-tray button.on {
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+.react-tray .react-tray-more { width: 36px; height: 36px; margin-left: 2px; color: var(--muted); background: var(--bg); }
+@keyframes react-tray-in { from { opacity: 0; transform: translateY(8px) scale(.9); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .react-tray { animation: none; } }
+/* Seven 40px buttons are ~300px; a 360px phone's thread is ~340px wide. */
+@media (max-width: 380px) {
+  .react-tray button { width: 36px; height: 36px; font-size: 22px; }
+  .react-tray .react-tray-more { width: 32px; height: 32px; }
+}
+/* The header as the selected message's action bar. Same height as the header
+   it replaces, so the thread does not jump. */
+.sel-bar { gap: 4px; background: color-mix(in srgb, var(--primary) 9%, var(--surface)); border-radius: var(--radius) var(--radius) 0 0; }
+.sel-bar .ic-btn { color: var(--text); }
+.sel-bar .ic-btn.on { color: var(--primary); }
+.sel-bar .ic-btn.on svg { fill: currentColor; }
+
+/* ---- chat info: Group info / Contact info ------------------------------------
+   WhatsApp's layout: white sections on the grey page, each a separate band —
+   who it is, what was shared, the members, settings, the way out. A drawer
+   from the right on a wide screen, the whole screen on a phone. Above the
+   thread and its pickers (the phone's pane is 30), under every real modal
+   (.modal-overlay 200) and the confirmations it raises (1320). */
+.ci-overlay {
+  position: fixed; inset: 0; z-index: 70; display: flex; justify-content: flex-end;
+  background: rgba(16,24,40,.38); animation: ci-fade .18s ease;
+}
+.ci-panel {
+  width: min(420px, 100vw); height: 100%; display: flex; flex-direction: column;
+  background: var(--bg); box-shadow: var(--shadow-lg); animation: ci-slide .22s cubic-bezier(.2,.8,.2,1);
+}
+.ci-head {
+  flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: calc(9px + env(safe-area-inset-top, 0px)) 12px 9px 8px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.ci-head .ic-btn { color: var(--text); }
+.ci-head-title { font-weight: 700; font-size: 16px; }
+.ci-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+/* A sticky bar stops at its scroller's padding: on the Add page the bar is the
+   bottom edge (and carries the safe-area inset itself), so no padding below it. */
+.ci-body.flush { padding-bottom: 0; }
+
+.ci-hero { background: var(--surface); padding: 22px 16px 18px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; }
+.ci-photo { position: relative; display: inline-block; border: 0; padding: 0; background: transparent; border-radius: 50%; margin-bottom: 10px; line-height: 0; }
+button.ci-photo:not(:disabled) { cursor: pointer; }
+.ci-photo-badge {
+  position: absolute; right: 0; bottom: 2px; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--primary); color: #fff; border: 3px solid var(--surface);
+}
+.ci-name { display: flex; align-items: center; justify-content: center; gap: 2px; max-width: 100%; font-size: 21px; font-weight: 700; line-height: 1.3; }
+.ci-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-name-pen { width: 32px; height: 32px; }
+.ci-name-edit { display: flex; gap: 6px; width: 100%; max-width: 340px; }
+.ci-name-edit input { flex: 1; min-width: 0; padding: 8px 11px; border: 1px solid var(--primary); border-radius: 9px; font: inherit; font-size: 15px; background: var(--surface); color: var(--text); }
+.ci-sub { color: var(--muted); font-size: 13.5px; }
+.ci-quick { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.ci-quick button {
+  flex: 1 1 0; width: 78px; padding: 11px 0 9px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--primary);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s;
+}
+.ci-quick button span { color: var(--text); }
+.ci-quick button:hover { background: color-mix(in srgb, var(--primary) 8%, var(--surface)); border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); }
+
+.ci-sec { margin-top: 8px; padding: 10px 0; background: var(--surface); }
+.ci-sec-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 16px 8px; font-size: 13.5px; font-weight: 600; color: var(--muted); }
+.ci-row-head {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 16px 10px;
+  border: 0; background: transparent; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--muted); cursor: pointer;
+}
+.ci-row-head:hover { color: var(--text); }
+.ci-count { display: inline-flex; align-items: center; gap: 2px; font-weight: 600; }
+.ci-strip { display: flex; gap: 8px; overflow-x: auto; padding: 0 16px 4px; scrollbar-width: none; }
+.ci-strip::-webkit-scrollbar { display: none; }
+.ci-tile {
+  position: relative; flex: 0 0 auto; width: 80px; height: 80px; border-radius: 10px; overflow: hidden;
+  display: grid; place-items: center; background: var(--bg); border: 1px solid var(--border); color: var(--muted); text-decoration: none;
+}
+.ci-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ci-tile:hover img { opacity: .88; }
+.ci-tile-ext { font-size: 11px; font-weight: 800; letter-spacing: .05em; color: var(--primary); }
+.ci-tile-link { border: 0; color: #fff; font-size: 26px; font-weight: 800; }
+.ci-tile-play { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; padding-left: 3px; }
+.ci-tile-skel { background: linear-gradient(90deg, var(--bg), color-mix(in srgb, var(--border) 60%, var(--bg)), var(--bg)); background-size: 200% 100%; animation: ci-shimmer 1.2s linear infinite; }
+.ci-empty { padding: 16px; color: var(--muted); font-size: 13px; text-align: center; }
+
+.ci-row {
+  width: 100%; display: flex; align-items: center; gap: 14px; padding: 9px 16px; min-height: 58px;
+  border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14.5px; text-align: left; cursor: pointer;
+}
+.ci-row:hover:not(:disabled):not(.ci-static) { background: var(--bg); }
+.ci-row:disabled { cursor: default; opacity: 1; }
+.ci-row.ci-static { cursor: default; }
+.ci-row-ic { width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; color: var(--muted); }
+.ci-row-ic.late { color: #dc2626; }
+.ci-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ci-row-text > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-row-sub { font-size: 12.5px; color: var(--muted); }
+.ci-row .btn { flex-shrink: 0; }
+.ci-danger, .ci-danger .ci-row-ic { color: var(--danger-ink); font-weight: 600; }
+.ci-add-ic { width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: var(--primary); color: #fff; }
+.ci-member-name { font-weight: 600; }
+.ci-admin {
+  flex-shrink: 0; padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; color: var(--brand-ink);
+  background: color-mix(in srgb, var(--primary) 12%, transparent); border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.ci-member.open > .ci-row { background: var(--bg); }
+.ci-member-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 16px 12px 70px; background: var(--bg); }
+.ci-danger-btn { color: var(--danger-ink) !important; }
+.ci-member-search { width: 100%; max-width: 170px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--text); }
+
+.ci-tabs { position: sticky; top: 0; z-index: 1; display: flex; background: var(--surface); border-bottom: 1px solid var(--border); }
+.ci-tab {
+  flex: 1; padding: 13px 0 11px; border: 0; border-bottom: 2.5px solid transparent; background: transparent; cursor: pointer;
+  font: inherit; font-size: 14px; font-weight: 700; color: var(--muted);
+}
+.ci-tab span { margin-left: 1px; font-weight: 600; opacity: .75; }
+.ci-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.ci-period { padding: 14px 16px 7px; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.ci-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 0 3px; }
+.ci-grid .ci-tile { width: auto; height: auto; aspect-ratio: 1; border-radius: 4px; border: 0; }
+.ci-item { display: flex; align-items: center; gap: 2px; padding: 4px 8px 4px 16px; background: var(--surface); }
+.ci-item + .ci-item { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.ci-item-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 7px 0; color: var(--text); text-decoration: none; }
+.ci-item-name { font-size: 14px; font-weight: 600; }
+.ci-doc-ic {
+  width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--surface)); color: var(--primary); font-size: 10.5px; font-weight: 800; letter-spacing: .03em;
+}
+.ci-doc-ic.audio { background: color-mix(in srgb, #22c55e 16%, var(--surface)); color: #16a34a; }
+.ci-link-ic { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px; color: #fff; font-size: 19px; font-weight: 800; }
+.ci-link-url { font-size: 12.5px; color: var(--primary); }
+/* The Add page fills the panel, so its button bar is the bottom edge whether
+   the list is two people or two hundred (sticky, for a list that scrolls). */
+.ci-add { background: var(--surface); padding-top: 10px; min-height: 100%; display: flex; flex-direction: column; }
+.ci-add-search { display: block; max-width: none; width: calc(100% - 32px); margin: 0 16px 6px; padding: 9px 12px; font-size: 14px; }
+.ci-add .ci-row input[type="checkbox"] { width: 20px; height: 20px; flex-shrink: 0; accent-color: var(--primary); }
+.ci-add-bar { position: sticky; bottom: 0; margin-top: auto; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--surface); border-top: 1px solid var(--border); }
+.ci-add-bar .btn { width: 100%; }
+
+@keyframes ci-slide { from { transform: translateX(36px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ci-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ci-shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .ci-overlay, .ci-panel, .ci-tile-skel { animation: none; } }
+/* The voice pill floats bottom-right on wide screens, which is the panel's
+   bottom rows — it steps to the panel's left edge while the panel is open. A
+   pill the user dragged somewhere keeps its inline position. */
+@media (min-width: 721px) {
+  body.chat-info-open .va-dock { right: calc(min(420px, 100vw) + 20px); }
+}
+@media (max-width: 720px) {
+  .ci-overlay { background: transparent; }
+  .ci-panel { width: 100vw; box-shadow: none; }
+}
+
+/* ---- phones: the open thread is the whole screen ---------------------------
+   The app's top bar (title, bell, profile) stands down along with the tab bar,
+   and the pane is pinned to the viewport rather than sized by subtracting the
+   chrome around it — sized that way it was a card inside a frame inside the
+   page, and every one of those borders and paddings came out of the thread. */
+@media (max-width: 720px) {
+  body.chat-thread-open .topbar { display: none; }
+  body.chat-thread-open .content { padding: 0; }
+  .chat-layout.chat-open .chat-pane {
+    position: fixed; inset: 0; z-index: 30; height: auto;
+    border: 0; border-radius: 0; box-shadow: none;
+    padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+  }
+  body.chat-thread-open .chat { height: 100%; }
+  .chat-layout .chat-peer-head { gap: 8px; padding: 8px 4px 8px 4px; min-height: 56px; }
+  .chat-layout .chat-list-btn { margin: 0; padding: 7px 4px; }
+  .chat-peer-actions { gap: 0; }
+  .chat-peer-actions .wide-only { display: none; }
+  .head-menu .phone-only { display: flex; }
+  .sel-bar { border-radius: 0; }
+  /* It now hangs off ⋮ at the screen's right edge, not off a calendar button
+     further in, so the older 40px nudge to the right would push it off screen. */
+  .chat-peer-actions .jump-pop { right: 4px; }
+  .chat-layout .chat-log { padding: 10px; }
+  .chat-layout .composer { padding: 6px 8px 8px; }
+  /* 16px: iOS zooms the page into any field set smaller when it takes focus. */
+  .composer-box .composer-input { font-size: 16px; }
+  /* A file's bubble is as wide as what it holds. The 85% cap above resolves
+     against a column sized by the bubble itself, which shrank a 240px picture's
+     bubble to ~230px and left the picture hanging out of its right edge. */
+  .chat-layout .bubble.file-bubble { max-width: 100%; }
+  .load-pop { left: 8px; width: auto; right: 8px; }
+  /* Toasts and the verify-email card sit above the composer rather than over it. */
+  body.chat-thread-open .toast-host,
+  body.chat-thread-open .verify-pop { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+
+  /* The top bar above already says "Chats". */
+  .chat-history-head .ch-title { display: none; }
+  .chat-history-head { justify-content: flex-end; }
+  .rx-overlay { place-items: end stretch; padding: 0; }
+  .rx-sheet { max-width: none; max-height: 70vh; border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+}
+/* Below 400px five buttons in the box left ~140px to type in. Send-later is the
+   least used of them, so its clock gives way to the text there; holding Send
+   still opens it (Chats.tsx). */
+@media (max-width: 399px) {
+  .composer-box .cb-later { display: none; }
+}

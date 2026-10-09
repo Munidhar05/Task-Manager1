@@ -200,7 +200,7 @@ function summarizeConvo(conv, viewerId) {
     other_user_id: isGroup ? null : (others[0]?.id || null),
     other_last_seen: isGroup ? null : (others[0]?.last_seen || null),
     member_count: parts.length,
-    members: parts.map((p) => ({ id: p.id, name: p.name, avatar_color: p.avatar_color, avatar_file: p.avatar_file || null, role: p.member_role, status_text: p.status_text || '', status_emoji: p.status_emoji || '', dnd_until: p.dnd_until || null })),
+    members: parts.map((p) => ({ id: p.id, name: p.name, avatar_color: p.avatar_color, avatar_file: p.avatar_file || null, role: p.member_role, job_role: p.role, status_text: p.status_text || '', status_emoji: p.status_emoji || '', dnd_until: p.dnd_until || null })),
     role: me ? (parts.find((p) => p.id === viewerId)?.member_role) : 'member',
     visibility: conv.visibility || 'private',
     muted: !!me?.muted && (!me?.muted_until || me.muted_until > now()),
@@ -1220,6 +1220,46 @@ r.get('/conversations/:id/media', (req, res) => {
     ...shapeMessage(row, req.user.id, {}),
     sender_name: names[row.sender_id] || (names[row.sender_id] = db.prepare('SELECT name FROM users WHERE id=?').get(row.sender_id)?.name || 'Unknown'),
   })) })
+})
+
+// ---------- links shared in a conversation ----------
+// The Links tab of the chat info panel: every web address in the messages this
+// person can still see — the same filter as /media above (not deleted for
+// everyone, not hidden by their own "clear chat") — newest first, one row per
+// address per message. Asked of the server rather than read off the open
+// thread, which loads only part of a long chat.
+//
+// "A link" is exactly what the thread makes clickable (Chats.tsx MessageText
+// and renderInline): ``` blocks come out first, then `code`, *bold*, _italic_
+// and ~strike~ win over a URL inside them in one alternation, so only bare URL
+// tokens are links. Matching URLs alone listed "https://x.com*" for a bolded
+// address, with a broken host to go with it.
+const LINK_RE = /\bhttps?:\/\/[^\s<>"')\]]+[^\s<>"')\].,;:!?]/gi
+const INLINE_RE = new RegExp(['`[^`\\n]+`', '\\*[^*\\n]+\\*', '_[^_\\n]+_', '~[^~\\n]+~', LINK_RE.source].join('|'), 'gi')
+const linksIn = (body) => [...new Set(String(body || '').split(/```[\s\S]*?```/)
+  .flatMap((seg) => (seg.match(INLINE_RE) || []).filter((t) => /^https?:\/\//i.test(t))))]
+r.get('/conversations/:id/links', (req, res) => {
+  if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Not found' })
+  const rows = db.prepare(`
+    SELECT id, sender_id, body, created_at FROM chat_messages
+    WHERE conversation_id=? AND deleted_for_all=0 AND body LIKE '%http%'
+      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+    ORDER BY created_at DESC LIMIT 1000`).all(req.params.id, req.user.id)
+  const names = {}
+  const items = []
+  for (const row of rows) {
+    for (const url of linksIn(row.body)) {
+      let host
+      try { host = new URL(url).hostname.replace(/^www\./, '') } catch { continue }
+      items.push({
+        id: row.id, url, host, created_at: row.created_at, sender_id: row.sender_id,
+        sender_name: names[row.sender_id] || (names[row.sender_id] = db.prepare('SELECT name FROM users WHERE id=?').get(row.sender_id)?.name || 'Unknown'),
+      })
+      if (items.length >= 300) break
+    }
+    if (items.length >= 300) break
+  }
+  res.json({ items })
 })
 
 // ---------- public channels ----------

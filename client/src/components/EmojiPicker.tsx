@@ -120,12 +120,16 @@ export function rememberEmoji(e: string) {
   } catch { /* private mode — recents are a convenience, never a requirement */ }
 }
 
-export default function EmojiPicker({ onPick, onClose, align = 'left' }: { onPick: (e: string) => void; onClose: () => void; align?: 'left' | 'right' }) {
+// `autoFocus` (default on) puts the caret in the search box. A phone's reaction
+// picker turns it off: focusing a text box raises the keyboard, which lands
+// exactly where the emoji grid is. It focuses the first category tab instead.
+export default function EmojiPicker({ onPick, onClose, align = 'left', autoFocus = true }: { onPick: (e: string) => void; onClose: () => void; align?: 'left' | 'right'; autoFocus?: boolean }) {
   const [q, setQ] = useState('')
   const [tab, setTab] = useState(0)
   const recent = useMemo(loadRecent, [])
   const ref = useRef<HTMLDivElement>(null)
 
+  useEffect(() => { if (!autoFocus) ref.current?.querySelector<HTMLElement>('.emoji-tabs button')?.focus({ preventScroll: true }) }, [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -153,7 +157,7 @@ export default function EmojiPicker({ onPick, onClose, align = 'left' }: { onPic
         value={q}
         onChange={(e) => setQ(e.target.value)}
         aria-label="Search emoji"
-        autoFocus
+        autoFocus={autoFocus}
       />
       {!results && (
         <div className="emoji-tabs" role="tablist">
