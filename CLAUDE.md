@@ -108,7 +108,8 @@ injected from `localStorage['smarttask_token']`, errors thrown as `Error(data.er
 `*Url()` helpers that put the token in the query string.
 
 `App.tsx` holds the `Layout` — sidebar, mobile bottom nav, and the globally mounted
-`VoiceAssistant`, `ToastHost`, `ConfirmHost`, and feedback tab. Routes are declared there;
+`VoiceAssistant`, `ToastHost`, `ConfirmHost` and `FeedbackModal` (opened from the sidebar's
+"Rate this app" and from Profile — there is deliberately no floating feedback button). Routes are declared there;
 note the dashboard is `/`, there is no `/dashboard`.
 
 Cross-cutting UI is imperative, not context: `toast.success(...)` / `toast.error(...)` from

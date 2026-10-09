@@ -10,6 +10,7 @@ import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
 import { takeTaskDraft, TaskDraft } from '../lib/taskDraft'
 import { useEscape } from '../lib/useEscape'
+import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
 import { useSurface } from '../voice/uiRegistry'
 import { typeInto, pickValue, flashPress, highlight, pause, settle, findVaEl, waitForVaEl } from '../voice/uiController'
 
@@ -1094,14 +1095,16 @@ function NewTaskModal({ users, personal, draft, onClose, onCreated }: { users: U
   const ATTACH_MAX = 50 * 1024 * 1024
   const [files, setFiles] = useState<File[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
-  const addFiles = (list: FileList | null) => {
-    if (!list) return
+  // Returns how many were taken, so a paste can say what it added.
+  const addFiles = (list: FileList | File[] | null) => {
+    if (!list) return 0
     const picked = Array.from(list)
     const ok = picked.filter((f) => (/^(image|video)\//.test(f.type) || f.type === 'application/pdf') && f.size <= ATTACH_MAX)
     const rejected = picked.length - ok.length
     if (rejected) toast.error(`${rejected} file(s) skipped — only images, PDFs and videos under 50 MB are allowed.`)
     setFiles((prev) => [...prev, ...ok])
     if (fileInput.current) fileInput.current.value = ''
+    return ok.length
   }
   const removeFile = (i: number) => setFiles((prev) => prev.filter((_, idx) => idx !== i))
   const save = async () => {
@@ -1357,7 +1360,22 @@ function NewTaskModal({ users, personal, draft, onClose, onCreated }: { users: U
 
   return (
     <div className="modal-center" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        // A screenshot pasted anywhere in the form (Ctrl+V — in the title or the
+        // description too) or files dropped on it join the attachments below; a
+        // paste of words is still words (lib/pasteFiles).
+        onPaste={(e) => {
+          const pasted = clipboardFiles(e.clipboardData)
+          if (!pasted.length) return
+          e.preventDefault()
+          const added = addFiles(pasted)
+          if (added) toast.success(added === 1 ? 'Added the pasted file to the attachments below' : `Added ${added} pasted files to the attachments below`)
+        }}
+        onDragOver={(e) => { if (dragHasFiles(e.dataTransfer)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } }}
+        onDrop={(e) => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); addFiles(droppedFiles(e.dataTransfer)) }}
+      >
         <div className="card-head spread"><h3>{asPersonal ? 'New personal task' : 'New task'}</h3><button className="btn btn-ghost" onClick={onClose}>✕</button></div>
         <div className="card-pad grid" style={{ gap: 12 }}>
           {asPersonal && <div className="muted row" style={{ gap: 7, fontSize: 12, background: 'var(--info-bg)', border: '1px solid var(--info-border)', color: 'var(--info-ink)', borderRadius: 8, padding: '8px 10px' }}><Ic name="lock" size={13} /> Private to you — only you can see this task.</div>}
@@ -1412,7 +1430,7 @@ function NewTaskModal({ users, personal, draft, onClose, onCreated }: { users: U
           <div>
             <label>Attachments <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· reference images, PDFs or videos</span></label>
             <input ref={fileInput} type="file" multiple accept="image/*,application/pdf,video/*" style={{ display: 'none' }} onChange={(e) => addFiles(e.target.files)} />
-            <button type="button" className="btn btn-sm row" style={{ gap: 6 }} onClick={() => fileInput.current?.click()}><Ic name="attach" size={14} /> Attach files</button>
+            <button type="button" className="btn btn-sm row" style={{ gap: 6 }} onClick={() => fileInput.current?.click()} title="Or paste a screenshot anywhere in this form with Ctrl+V"><Ic name="attach" size={14} /> Attach files</button>
             {files.length > 0 && (
               <div className="attach-stage">
                 {files.map((f, i) => (

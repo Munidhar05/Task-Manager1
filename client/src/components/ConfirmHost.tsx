@@ -1,17 +1,40 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { subscribeConfirm, resolveConfirm, PendingConfirm } from '../lib/confirm'
 
 // Renders the active confirm dialog (one at a time). Esc cancels. Enter confirms
 // only for benign dialogs — on a danger dialog a stray Enter must never delete,
-// so there Enter is inert and Cancel takes the initial focus instead.
+// so there Enter is inert and Cancel takes the initial focus instead. Tab and
+// Shift+Tab stay on its two buttons: it is modal, and it can be raised from
+// inside another dialog, whose own Tab trap stands aside while it is up.
 export default function ConfirmHost() {
   const [c, setC] = useState<PendingConfirm | null>(null)
-  useEffect(() => subscribeConfirm(setC), [])
+  const boxRef = useRef<HTMLDivElement>(null)
+  // What asked the question gets focus back when it is answered. Taken in the
+  // subscription, which runs the moment confirmDialog() is called — before the
+  // dialog renders and its autoFocus moves focus onto its own button. Without
+  // it focus fell to <body> on every answer, and Tab then walked the page
+  // behind the dialog that asked (a task drawer, the chat info panel).
+  const askedFrom = useRef<HTMLElement | null>(null)
+  useEffect(() => subscribeConfirm((next) => {
+    if (next) { if (!askedFrom.current) askedFrom.current = document.activeElement as HTMLElement | null }
+    else { const el = askedFrom.current; askedFrom.current = null; if (el?.isConnected) el.focus() }
+    setC(next)
+  }), [])
   useEffect(() => {
     if (!c) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); resolveConfirm(false) }
-      else if (e.key === 'Enter' && !c.danger) { e.preventDefault(); resolveConfirm(true) }
+      if (e.key === 'Escape') { e.preventDefault(); resolveConfirm(false); return }
+      // A ringing call is painted over this dialog: it is the top layer, so Tab
+      // and Enter are the call's, not this question's hidden buttons.
+      if (document.querySelector('.call-ringer')) return
+      if (e.key === 'Enter' && !c.danger) { e.preventDefault(); resolveConfirm(true) }
+      else if (e.key === 'Tab') {
+        const buttons = Array.from(boxRef.current?.querySelectorAll<HTMLElement>('button') || [])
+        if (!buttons.length) return
+        const at = buttons.indexOf(document.activeElement as HTMLElement)
+        e.preventDefault()
+        buttons[at < 0 ? 0 : (at + (e.shiftKey ? buttons.length - 1 : 1)) % buttons.length].focus()
+      }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -19,7 +42,7 @@ export default function ConfirmHost() {
   if (!c) return null
   return (
     <div className="modal-center confirm-center" onClick={() => resolveConfirm(false)}>
-      <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label={c.title || 'Confirm'}>
+      <div className="modal confirm-modal" ref={boxRef} onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label={c.title || 'Confirm'}>
         <div className="confirm-body">
           <div className={'confirm-icon' + (c.danger ? ' danger' : '')}>
             {c.danger

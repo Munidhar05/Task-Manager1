@@ -11,7 +11,6 @@ import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
 import FeedbackModal from './components/FeedbackModal'
-import FeedbackButton from './components/FeedbackButton'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
@@ -108,6 +107,15 @@ function Layout({ children }: { children: React.ReactNode }) {
   const [showFeedback, setShowFeedback] = useState(false)
   const [showInvite, setShowInvite] = useState(false)
   const loc = useLocation()
+  const navigate = useNavigate()
+  // "Chats" clicked while a chat is open on /chats: step Back to its list. A
+  // link to the page you are on REPLACES the entry, which turned the open
+  // chat's history entry into a second copy of the list — the next Back then
+  // did nothing. (Chats.tsx records `pushed` when a list entry lies underneath.)
+  const onChatsNav = (e: React.MouseEvent) => {
+    const st = loc.state as { chat?: string; info?: boolean; pushed?: boolean } | null
+    if (loc.pathname === '/chats' && st?.chat && st.pushed) { e.preventDefault(); navigate(st.info ? -2 : -1) }
+  }
   // No explicit in-app back button: Android handles "back" via the hardware
   // button / swipe gesture (see useAndroidBackButton), and browsers have their own.
   const [open, setOpen] = useState(false)
@@ -154,7 +162,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   }
   // One bottom-nav tab (shared by the slots on either side of the center mic).
   const renderBottomTab = (n: typeof NAV[number]) => (
-    <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
+    <NavLink key={n.to} to={n.to} end={n.to === '/'} onClick={n.to === '/chats' ? onChatsNav : undefined} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
       <span className="bn-ic">{n.icon}</span>
       <span className="bn-label">{n.label}</span>
       {n.to === '/chats' && chatUnread > 0 && <span className="bn-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
@@ -172,7 +180,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         </div>
         <nav className="nav" onClick={() => setOpen(false)}>
           {visibleNav.map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink key={n.to} to={n.to} end={n.to === '/'} onClick={n.to === '/chats' ? onChatsNav : undefined} className={({ isActive }) => (isActive ? 'active' : '')}>
               <span className="nav-icon">{n.icon}</span>{n.label}
               {n.to === '/chats' && chatUnread > 0 && <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
             </NavLink>
@@ -364,8 +372,9 @@ function Layout({ children }: { children: React.ReactNode }) {
           onFeedback={() => { setShowProfile(false); setProfileSection(undefined); setShowFeedback(true) }}
         />
       )}
-      {/* Corner feedback tab — hidden while the modal is open so it isn't behind it. */}
-      {!showFeedback && <FeedbackButton onClick={() => setShowFeedback(true)} />}
+      {/* Feedback is asked for from the sidebar's "Rate this app" and from
+          Profile, never by a button floating over the page: the corner tab that
+          used to sit on every screen was taken out for good (7 Oct 2026). */}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
       {showInvite && <QuickInvite onClose={() => setShowInvite(false)} />}
       {/* Global hands-free voice assistant — available on every authenticated page. */}
