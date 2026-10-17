@@ -462,7 +462,7 @@ r.post('/', (req, res) => {
   // Auto-fill the due date from priority when the caller didn't supply one.
   const dueDate = b.due_date || dueDateForPriority(priority)
   // Category: an explicit choice wins, else auto-detect from the task's text.
-  const category = resolveCategory({ text: `${b.title} ${b.description || ''} ${b.source_quote || ''}`, explicit: b.category })
+  const category = resolveCategory({ text: `${b.title} ${b.description || ''} ${b.source_quote || ''}`, explicit: b.category, orgId: req.user.org_id })
   const tid = id('task')
   db.prepare(`INSERT INTO tasks
     (id, org_id, title, description, assignee_id, assigned_by_id, due_date, due_date_raw, priority, status,
@@ -492,7 +492,7 @@ r.patch('/:id', (req, res) => {
   const sets = [], args = []
   for (const f of fields) if (f in b) { sets.push(`${f}=?`); args.push(b[f]) }
   // Category override: normalise to a known label, or null to clear (Uncategorized).
-  if ('category' in b) { sets.push('category=?'); args.push(normalizeCategory(b.category)) }
+  if ('category' in b) { sets.push('category=?'); args.push(normalizeCategory(b.category, req.user.org_id)) }
   let newlyAssigned = null
   let takenFrom = null
   if ('assignee_id' in b) {
@@ -604,7 +604,7 @@ r.post('/:id/split', (req, res) => {
     if (!assignee) continue
     const cid = id('task')
     // Inherit the parent's category unless the part's own title points elsewhere.
-    const childCategory = resolveCategory({ text: p.title, aiSuggested: parent.category })
+    const childCategory = resolveCategory({ text: p.title, aiSuggested: parent.category, orgId: req.user.org_id })
     db.prepare(`INSERT INTO tasks
       (id, org_id, title, description, assignee_id, assigned_by_id, due_date, due_date_raw, priority, status,
        project_id, department_id, meeting_id, ownership_confidence, parent_task_id, progress, approval_status, source_quote,

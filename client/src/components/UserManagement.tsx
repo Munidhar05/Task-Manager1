@@ -3,6 +3,7 @@ import { api, User } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Badge, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
+import DepartmentSelect, { Dept } from './DepartmentSelect'
 
 // User-management UI for the Administration page. The manager is the org admin
 // and manages employees and other managers.
@@ -26,6 +27,9 @@ export default function UserManagement() {
     api.get('/digest/status').then(setDigest).catch(() => {})
   }, [])
   const deptName = (id?: string) => depts.find((d) => d.id === id)?.name || '—'
+  // A department created from inside a form joins this list at once: the table
+  // behind the dialog names users by it, and the next dialog must offer it.
+  const addDept = (d: Dept) => setDepts((prev) => (prev.some((x) => x.id === d.id) ? prev : [...prev, d].sort((a, b) => a.name.localeCompare(b.name))))
 
   const revokeInvite = async (inv: any) => {
     if (!(await confirmDialog({ title: 'Revoke invitation', message: `Revoke the invitation for ${inv.email}?`, confirmText: 'Revoke', danger: true }))) return
@@ -125,15 +129,15 @@ export default function UserManagement() {
           </tbody>
         </table>
       </div>
-      {editing && <UserForm user={editing === 'new' ? null : editing} depts={depts} isAdmin={isAdmin} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load() }} />}
-      {inviting && <InviteForm depts={depts} isAdmin={isAdmin} onClose={() => setInviting(false)} onDone={loadInvites} />}
+      {editing && <UserForm user={editing === 'new' ? null : editing} depts={depts} onDeptAdded={addDept} isAdmin={isAdmin} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load() }} />}
+      {inviting && <InviteForm depts={depts} onDeptAdded={addDept} isAdmin={isAdmin} onClose={() => setInviting(false)} onDone={loadInvites} />}
     </>
   )
 }
 
 // Invite a teammate by email. Shows the resulting accept-link so the manager can
 // copy/share it directly — essential when SMTP isn't configured (preview mode).
-export function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
+export function InviteForm({ depts, onDeptAdded, isAdmin, onClose, onDone }: { depts: any[]; onDeptAdded?: (d: Dept) => void; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState<any>({ email: '', role: 'employee', department_id: '' })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -180,7 +184,7 @@ export function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; 
               <div><label>Email</label><input value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="teammate@company.com" type="email" autoFocus /></div>
               <div className="grid grid-2" style={{ gap: 10 }}>
                 <div><label>Role</label><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roleOptions.map((r) => <option key={r}>{r}</option>)}</select></div>
-                <div><label>Department</label><select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}><option value="">—</option>{depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+                <div><label>Department</label><DepartmentSelect value={f.department_id} onChange={(id) => setF((p: any) => ({ ...p, department_id: id }))} depts={depts} onAdded={onDeptAdded} /></div>
               </div>
               {err && <div style={{ color: 'var(--danger-ink)', fontSize: 13 }}>{err}</div>}
               <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -195,7 +199,9 @@ export function InviteForm({ depts, isAdmin, onClose, onDone }: { depts: any[]; 
   )
 }
 
-function UserForm({ user, depts, isAdmin, onClose, onDone }: { user: any | null; depts: any[]; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
+// Exported for the task form, whose assignee picker opens it to add the person
+// a task is for. `onDone` receives the saved user so that caller can select them.
+export function UserForm({ user, depts, onDeptAdded, isAdmin, onClose, onDone }: { user: any | null; depts: any[]; onDeptAdded?: (d: Dept) => void; isAdmin: boolean; onClose: () => void; onDone: (saved?: User) => void }) {
   const isEdit = !!user
   const [f, setF] = useState<any>({
     // No prefilled default password — shipping a guessable 'password123' that
@@ -220,14 +226,15 @@ function UserForm({ user, depts, isAdmin, onClose, onDone }: { user: any | null;
     if (phone.length !== 10) { setErr('Phone number must be exactly 10 digits'); return }
     setBusy(true)
     try {
+      let saved: User
       if (isEdit) {
         const body: any = { ...f, email, phone }
         if (!body.password) delete body.password // don't overwrite password if left blank
-        await api.patch('/users/' + user.id, body)
+        saved = await api.patch('/users/' + user.id, body)
       } else {
-        await api.post('/users', { ...f, email, phone })
+        saved = await api.post('/users', { ...f, email, phone })
       }
-      onDone()
+      onDone(saved)
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
   return (
@@ -242,7 +249,7 @@ function UserForm({ user, depts, isAdmin, onClose, onDone }: { user: any | null;
           </div>
           <div className="grid grid-2" style={{ gap: 10 }}>
             <div><label>Role</label><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roleOptions.map((r) => <option key={r}>{r}</option>)}</select></div>
-            <div><label>Department</label><select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}><option value="">—</option>{depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+            <div><label>Department</label><DepartmentSelect value={f.department_id} onChange={(id) => setF((p: any) => ({ ...p, department_id: id }))} depts={depts} onAdded={onDeptAdded} /></div>
           </div>
           <div><label>Password {isEdit && <span className="muted" style={{ fontWeight: 400 }}>(leave blank to keep current)</span>}</label><input type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
           {err && <div style={{ color: 'var(--danger-ink)', fontSize: 13 }} role="alert">{err}</div>}

@@ -4,11 +4,19 @@
 // keyword matcher runs on every task; the AI's suggestion is used only as a
 // fallback when no keyword matches.
 //
+// Two sources: the built-in list below, and whatever an org has added itself
+// from the task form (the task_categories table, one row per org and name —
+// see POST /users/meta/categories). A custom category has no keyword list of
+// its own: its NAME is the keyword, so a task that says "furniture" lands in
+// Furniture. The AI prompts still list only the built-ins; an org's own names
+// reach a meeting's tasks through this keyword pass, not through the model.
+//
 // ⇩⇩ EDIT ME ⇩⇩  Tune each category's `keywords` to your business. Keywords match
 // on WHOLE WORDS (case-insensitive), so short aliases like "gs" won't fire inside
 // "logs". Multi-word phrases match with flexible spacing ("global shopper" also
 // matches "global  shopper"). Order matters: the FIRST category with a hit wins,
 // so keep the more specific/!distinctive categories higher.
+import { db } from './db.js'
 
 export const CATEGORIES = [
   {
@@ -58,28 +66,42 @@ function keywordRegex(kw) {
 // Precompile: [{ label, regexes: [RegExp,...] }] in CATEGORIES order.
 const COMPILED = CATEGORIES.map((c) => ({ label: c.label, regexes: c.keywords.map(keywordRegex) }))
 
+// The org's own categories, oldest first so the list reads in the order people
+// added them. Read on every call rather than cached: a handful of rows, and a
+// cache would need invalidating from the route that inserts them.
+export function orgCategories(orgId) {
+  if (!orgId) return []
+  return db.prepare('SELECT id, name, color FROM task_categories WHERE org_id=? ORDER BY created_at, name').all(orgId)
+}
+
 // Detect a task's category from its free text (title + description + any quote).
-// Returns the category label, or null when nothing matches. First match wins by
-// CATEGORIES order.
-export function detectCategory(...parts) {
-  const text = parts.filter(Boolean).join(' \n ')
-  if (!text.trim()) return null
+// Returns the category label, or null when nothing matches. Built-ins first, in
+// CATEGORIES order, then the org's own names; first match wins.
+export function detectCategory(text, orgId = null) {
+  if (!text || !text.trim()) return null
   for (const c of COMPILED) {
     if (c.regexes.some((re) => re.test(text))) return c.label
+  }
+  for (const c of orgCategories(orgId)) {
+    if (keywordRegex(c.name).test(text)) return c.name
   }
   return null
 }
 
 // Normalise an incoming category value to a known label, or null. Lets the API
-// accept a user/AI-supplied category while rejecting anything off-list.
-export function normalizeCategory(value) {
+// accept a user/AI-supplied category while rejecting anything off-list — where
+// "the list" is the built-ins plus this org's additions.
+export function normalizeCategory(value, orgId = null) {
   if (!value) return null
-  const hit = byLabel.get(String(value).trim().toLowerCase())
-  return hit ? hit.label : null
+  const key = String(value).trim().toLowerCase()
+  const hit = byLabel.get(key)
+  if (hit) return hit.label
+  const own = orgCategories(orgId).find((c) => c.name.toLowerCase() === key)
+  return own ? own.name : null
 }
 
 // Resolve a task's category with the hybrid rule: an explicit/keyword hit wins,
 // otherwise fall back to the AI's suggestion, otherwise null (Uncategorized).
-export function resolveCategory({ text = '', explicit = null, aiSuggested = null } = {}) {
-  return normalizeCategory(explicit) || detectCategory(text) || normalizeCategory(aiSuggested) || null
+export function resolveCategory({ text = '', explicit = null, aiSuggested = null, orgId = null } = {}) {
+  return normalizeCategory(explicit, orgId) || detectCategory(text, orgId) || normalizeCategory(aiSuggested, orgId) || null
 }

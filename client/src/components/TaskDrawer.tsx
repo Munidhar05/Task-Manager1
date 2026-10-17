@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Task, User, Attachment, taskAttachmentUrl } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
+import CategorySelect from './CategorySelect'
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
@@ -383,10 +384,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               <span className="dr-field-label">Category</span>
               <div className="dr-field-val">
                 {canEdit ? (
-                  <select value={task.category || ''} onChange={(e) => setCategory(e.target.value)} style={{ width: 'auto' }}>
-                    <option value="">Uncategorized</option>
-                    {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
+                  <CategorySelect value={task.category || ''} onChange={setCategory} blankLabel="Uncategorized" compact />
                 ) : (task.category ? <CategoryBadge c={task.category} /> : <span className="muted">Uncategorized</span>)}
               </div>
             </div>

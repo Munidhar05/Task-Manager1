@@ -34,6 +34,7 @@ Ships as a **web app** and a **native Android app** (Capacitor, `io.smarttask.ap
 
 ### Team
 - **Chat** — direct + group conversations, file uploads, reactions, stars, forwarding, edit/delete, read receipts, presence, real-time delivery over WebSocket.
+- **Departments** — managed on their own Administration tab (create, rename, delete; who is in each, what work sits with them). Every department, category and assignee dropdown can grow: the last row of the menu adds one in place.
 - **Leaderboard & scoring** — daily performance rollups with a calibration view.
 - **Push notifications** (native FCM) for task assignment, reassignment, submission, approval, reopen, comments, and chat messages.
 - **Daily digest** to Zoho Cliq and email at `DIGEST_HOUR`.

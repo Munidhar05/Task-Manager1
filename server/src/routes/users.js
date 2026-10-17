@@ -8,6 +8,8 @@ import { db } from '../db.js'
 import { authRequired, requireRole, hashPassword, verifyPassword, verifyToken } from '../auth.js'
 import { id, now, audit, orgAllowedDomains, emailDomainAllowed } from '../util.js'
 import { publicUser, sendVerificationEmail } from './auth.js'
+import { CATEGORIES, orgCategories, normalizeCategory } from '../categories.js'
+import { createDepartment } from './departments.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const AVATAR_DIR = path.join(__dirname, '..', '..', 'data', 'avatars')
@@ -288,9 +290,49 @@ r.post('/import', requireRole('manager', 'admin'), upload.single('file'), (req, 
   res.json({ created, updated, errors, rows: rows.length })
 })
 
-// Departments & projects (read for dropdowns)
+// Departments & projects (read for dropdowns; managers can also add a department)
 r.get('/meta/departments', (req, res) => {
   res.json(db.prepare('SELECT * FROM departments WHERE org_id=? ORDER BY name').all(req.user.org_id))
+})
+// Managers add departments from wherever they pick one — the user form and the
+// invite dialog — as well as on the Departments tab of Administration. Only
+// manager/admin: the picker hides the option from anyone else, and this is
+// what makes that real. One rulebook for both doors, in routes/departments.js.
+r.post('/meta/departments', requireRole('manager', 'admin'), (req, res) => {
+  const out = createDepartment(req.user.org_id, req.user.id, req.body?.name)
+  if (out.error) return res.status(out.status).json({ error: out.error })
+  res.status(out.status).json(out.body)
+})
+// Task categories: the built-in brands (categories.js, with keyword detection)
+// plus whatever this org added from the task form. One list for every picker,
+// so a category added while creating a task is already there in the drawer.
+// `id` is the name on purpose: the name is what a task's category column holds.
+r.get('/meta/categories', (req, res) => {
+  const builtin = CATEGORIES.map((c) => ({ id: c.label, name: c.label, color: null, builtin: true }))
+  const custom = orgCategories(req.user.org_id).map((c) => ({ id: c.name, name: c.name, color: c.color, builtin: false }))
+  res.json([...builtin, ...custom])
+})
+// Colours for custom categories, handed out in order so two additions never
+// share one until the palette is exhausted. Chosen away from the built-ins'
+// blue / violet / green / amber / red so a new brand is told apart at a glance.
+const CATEGORY_COLORS = ['#0ea5e9', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16', '#a855f7', '#06b6d4', '#eab308', '#64748b']
+r.post('/meta/categories', requireRole('manager', 'admin'), (req, res) => {
+  const name = String(req.body?.name || '').replace(/\s+/g, ' ').trim()
+  if (!name) return res.status(400).json({ error: 'Category name is required.' })
+  if (name.length > 40) return res.status(400).json({ error: 'Category name must be 40 characters or fewer.' })
+  // Same name again, any case, built-in or not: hand back the one that exists.
+  const existing = normalizeCategory(name, req.user.org_id)
+  if (existing) {
+    const own = orgCategories(req.user.org_id).find((c) => c.name === existing)
+    return res.json({ id: existing, name: existing, color: own?.color || null, builtin: !own, existed: true })
+  }
+  const own = orgCategories(req.user.org_id)
+  const used = new Set(own.map((c) => c.color))
+  const color = CATEGORY_COLORS.find((c) => !used.has(c)) || CATEGORY_COLORS[own.length % CATEGORY_COLORS.length]
+  const cid = id('cat')
+  db.prepare('INSERT INTO task_categories (id, org_id, name, color, created_at) VALUES (?,?,?,?,?)').run(cid, req.user.org_id, name, color, now())
+  audit(req.user.org_id, req.user.id, 'category.create', 'task_category', cid, name)
+  res.status(201).json({ id: name, name, color, builtin: false })
 })
 r.get('/meta/projects', (req, res) => {
   res.json(db.prepare('SELECT * FROM projects WHERE org_id=? ORDER BY name').all(req.user.org_id))

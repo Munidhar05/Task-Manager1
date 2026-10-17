@@ -26,6 +26,7 @@ import scoreRoutes from './routes/scores.js'
 import feedbackRoutes from './routes/feedback.js'
 import ttsRoutes from './routes/tts.js'
 import apiKeyRoutes from './routes/apiKeys.js'
+import departmentRoutes from './routes/departments.js'
 import mcpRoutes from './routes/mcp.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe, attachAssistantLive } from './ws/liveTranscribe.js'
@@ -90,6 +91,7 @@ app.use('/api/scores', scoreRoutes)
 app.use('/api/feedback', feedbackRoutes)
 app.use('/api/tts', ttsRoutes)
 app.use('/api/keys', apiKeyRoutes)
+app.use('/api/departments', departmentRoutes)
 // Outside /api on purpose: MCP carries its own credential in the path and speaks
 // JSON-RPC, not REST, so none of the /api middleware applies to it.
 app.use('/mcp', mcpRoutes)
