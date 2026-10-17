@@ -2,8 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, CATEGORY_OPTIONS, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
+import CategorySelect from '../components/CategorySelect'
+import PickerWithAdd from '../components/PickerWithAdd'
+import { UserForm } from '../components/UserManagement'
 import TaskBoard from '../components/TaskBoard'
 import { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { pushBackHandler } from '../back'
@@ -1040,7 +1043,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       {/* Drawer edits patch the single row in place when the mutation returned the
           updated task; anything else (delete, uploads) falls back to a reload. */}
       {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
-      {showNew && <NewTaskModal users={users} personal={personal} draft={draft} onClose={() => { setShowNew(false); setDraft(null) }} onCreated={() => { setShowNew(false); setDraft(null); load() }} />}
+      {showNew && <NewTaskModal users={users} personal={personal} draft={draft} onUserCreated={(u) => setUsers((p) => [...p, u])} onClose={() => { setShowNew(false); setDraft(null) }} onCreated={() => { setShowNew(false); setDraft(null); load() }} />}
       {showTrash && <TrashModal onClose={() => setShowTrash(false)} onRestored={load} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
       {filtersOpen && (
@@ -1062,10 +1065,21 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 // still-correct change rather than a broken one.
 const findField = (key: string) => findVaEl(`tasks.new.${key}`)
 
-function NewTaskModal({ users, personal, draft, onClose, onCreated }: { users: User[]; personal?: boolean; draft?: TaskDraft | null; onClose: () => void; onCreated: () => void }) {
+function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreated }: { users: User[]; personal?: boolean; draft?: TaskDraft | null; onUserCreated?: (u: User) => void; onClose: () => void; onCreated: () => void }) {
   const { user } = useAuth()
   useEscape(onClose)
   const isEmployee = user?.role === 'employee'
+  // "Add new employee or manager…" on the assignee picker: the person you want
+  // to hand this to is not in the system yet, and the round trip through
+  // Administration lost the task you were typing. The same Add-user form opens
+  // on top of this one; who it creates joins the list and is selected. Managers
+  // and admins only — the server would refuse anyone else anyway.
+  const canAddPeople = user?.role === 'manager' || user?.role === 'admin'
+  const [showNewUser, setShowNewUser] = useState(false)
+  const [depts, setDepts] = useState<any[]>([])
+  useEffect(() => {
+    if (showNewUser && !depts.length) api.get('/users/meta/departments').then(setDepts).catch(() => {})
+  }, [showNewUser]) // eslint-disable-line react-hooks/exhaustive-deps
   // Private only in My Tasks (personal) mode. Everywhere else, anyone may assign
   // the task to anyone — so the assignee picker is shown to everyone.
   const asPersonal = !!personal
@@ -1418,14 +1432,18 @@ function NewTaskModal({ users, personal, draft, onClose, onCreated }: { users: U
           <div><label>Description</label><textarea data-va="tasks.new.description" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           <div className={asPersonal ? 'grid grid-2' : 'grid grid-3'} style={{ gap: 10 }}>
             <div><label>Priority</label><select data-va="tasks.new.priority" value={form.priority} onChange={(e) => setPriority(e.target.value)}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
-            {!asPersonal && <div><label>Assign to {form.assignee_id === user?.id && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· defaults to you — pick anyone</span>}</label><select data-va="tasks.new.assignee" value={form.assignee_id} onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}><option value="">Unassigned</option>{users.filter(u => u.role !== 'admin').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === user?.id ? ' (me)' : ''}</option>)}</select></div>}
+            {!asPersonal && <div><label>Assign to {form.assignee_id === user?.id && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· defaults to you — pick anyone</span>}</label>
+              <PickerWithAdd
+                dataVa="tasks.new.assignee" value={form.assignee_id} onChange={(id) => setForm((f: any) => ({ ...f, assignee_id: id }))}
+                options={assignable.map((u) => ({ id: u.id, name: u.name + (u.id === user?.id ? ' (me)' : '') }))}
+                blankLabel="Unassigned" addLabel="Add new employee or manager…" noun="person"
+                canAdd={canAddPeople} onAddClick={() => setShowNewUser(true)} ariaLabel="Assign to"
+              />
+            </div>}
             <div><label>Due date {!dueManual && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto from priority</span>}</label><input data-va="tasks.new.due_date" type="date" value={form.due_date} onChange={(e) => { setDueManual(true); setForm({ ...form, due_date: e.target.value }) }} /></div>
           </div>
           <div><label>Category {!form.category && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto-detected if left blank</span>}</label>
-            <select value={form.category || ''} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-              <option value="">Auto-detect</option>
-              {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <CategorySelect value={form.category || ''} onChange={(c) => setForm((f: any) => ({ ...f, category: c }))} blankLabel="Auto-detect" />
           </div>
           <div>
             <label>Attachments <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· reference images, PDFs or videos</span></label>
@@ -1448,6 +1466,23 @@ function NewTaskModal({ users, personal, draft, onClose, onCreated }: { users: U
             <button className="btn" onClick={onClose}>Cancel</button>
             <button data-va="tasks.new.submit" className="btn btn-primary" onClick={save} disabled={busy || !form.title}>{busy ? <span className="spinner" /> : 'Create task'}</button>
           </div>
+          {showNewUser && (
+            // display:contents, so the wrapper adds no row to the form's grid. It
+            // exists only to keep the user form's clicks and Escape from reaching
+            // this modal, which would close the task form underneath.
+            <div style={{ display: 'contents' }} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setShowNewUser(false) } }}>
+              <UserForm
+                user={null} depts={depts} isAdmin={user?.role === 'admin'} onClose={() => setShowNewUser(false)}
+                onDone={(u) => {
+                  setShowNewUser(false)
+                  if (!u) return
+                  onUserCreated?.(u)
+                  setForm((f: any) => ({ ...f, assignee_id: u.id }))
+                  toast.success(`${u.name} added and assigned`)
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

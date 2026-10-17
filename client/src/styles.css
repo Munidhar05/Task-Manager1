@@ -1094,6 +1094,95 @@ tbody tr:hover { background: var(--n-50); }
   background: color-mix(in srgb, var(--primary) 8%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent); color: var(--text); }
 
+/* A dropdown that can grow (components/PickerWithAdd.tsx): the department,
+   category and assignee pickers. A custom menu rather than a <select>, because
+   the whole point is its last row: "Add another …" drawn in the secondary-
+   button tint so it reads as an action and not as one more choice, and a
+   native <option> cannot be styled. The trigger copies the input look above so
+   the form stays uniform, with an own caret for the reason .prio-pick-sel
+   gives: the UA's arrow was faint enough that the box read as a text field. */
+.addpick { position: relative; }
+.addpick-btn {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  font-family: inherit; font-size: 14px; padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.addpick-btn:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.addpick-btn:focus-visible, .addpick-btn.open { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(242,98,46,.20); }
+.addpick-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.addpick-caret { color: var(--muted); flex-shrink: 0; transition: transform .18s ease; }
+.addpick-btn.open .addpick-caret { transform: rotate(180deg); color: var(--primary); }
+/* Inline and sized to its text, for a field inside the task drawer. */
+.addpick-compact { display: inline-block; }
+.addpick-compact .addpick-btn { width: auto; }
+/* The menu is portalled to <body> and placed from the trigger's rect, so the
+   modal's and the drawer's overflow cannot clip it; .modal-center is z 50 and
+   the voice panel 1300, so it sits above either. */
+.addpick-menu {
+  position: fixed; z-index: 1350; overflow-y: auto; padding: 6px 6px 0;
+  width: max-content; max-width: min(360px, calc(100vw - 16px)); /* grows to its widest row, like a native menu; min-width is the trigger, set inline */
+  background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, .17); animation: sortmenu-in .14s ease;
+}
+.addpick-opt { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border-radius: 8px; font-size: 13.5px; color: var(--text); cursor: pointer; }
+.addpick-opt.active { background: var(--bg); }
+.addpick-opt.selected { color: var(--primary); font-weight: 700; }
+.addpick-opt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.addpick-sep { height: 1px; margin: 5px 2px; background: var(--border); }
+/* Without an add row (employees) the menu still needs its bottom padding. */
+.addpick-menu:not(.has-foot) { padding-bottom: 6px; }
+/* The add row rides the bottom edge of the menu while the list scrolls under
+   it: last in the list, never below the fold. Opaque, so rows passing beneath
+   do not show through the gap above it. */
+.addpick-foot { position: sticky; bottom: 0; margin: 0 -6px; padding: 0 6px 6px; background: var(--surface); }
+/* The add row: the warm tint of every secondary button (see .btn above), so it
+   reads as the action it is. */
+.addpick-opt-add {
+  justify-content: flex-start; gap: 8px; font-weight: 600;
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  color: color-mix(in srgb, var(--primary) 55%, var(--text));
+}
+.addpick-opt-add.active { background: color-mix(in srgb, var(--primary) 20%, var(--surface)); color: color-mix(in srgb, var(--primary) 78%, var(--text)); }
+/* "Add another …" swaps the trigger for a name box with Add and a cancel beside
+   it, inside the same column, so nothing else in the form moves. */
+.addpick-row { display: flex; align-items: center; gap: 6px; }
+.addpick-row input { flex: 1 1 auto; min-width: 0; }
+.addpick-row .btn { flex: 0 0 auto; padding-left: 11px; padding-right: 11px; }
+.addpick-err { color: var(--danger-ink); font-size: 12.5px; margin-top: 5px; }
+
+/* Administration → Departments (components/DepartmentsPanel.tsx). The list on
+   the left, the chosen department on the right — its people and its tasks —
+   one column on a phone. */
+.dept-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
+.dept-list { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.dept-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 10px 12px; border: none; border-radius: 9px; background: transparent; color: var(--text); text-align: left; font-family: inherit; cursor: pointer; }
+.dept-row:hover { background: var(--bg); }
+.dept-row.active { background: color-mix(in srgb, var(--primary) 12%, var(--surface)); color: var(--primary); }
+.dept-row-name { font-weight: 600; font-size: 14px; }
+.dept-row-meta { font-size: 12px; }
+.dept-row.active .dept-row-meta { color: color-mix(in srgb, var(--primary) 70%, var(--muted)); }
+.dept-new { gap: 8px; }
+.dept-new input { width: 230px; }
+.dept-detail .card-head h3 { min-width: 0; }
+.dept-rename { padding: 4px 6px; color: var(--muted); }
+.dept-section { padding: 14px 20px; border-top: 1px solid var(--border); }
+.dept-detail .dept-section:first-of-type { border-top: none; }
+.dept-section h4 { margin: 0 0 10px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.dept-table th, .dept-table td { font-size: 13px; }
+.dept-add-person { display: flex; gap: 8px; align-items: center; margin-top: 12px; max-width: 420px; }
+.dept-add-person .addpick { flex: 1 1 auto; }
+.dept-task-row { cursor: pointer; }
+.dept-task-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+@media (max-width: 720px) {
+  .dept-layout { grid-template-columns: 1fr; }
+  .dept-list { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .dept-row { width: auto; border: 1px solid var(--border); }
+  .dept-new { width: 100%; }
+  .dept-new input { width: auto; flex: 1 1 auto; min-width: 0; }
+  .dept-add-person { max-width: none; }
+}
+
 /* Who-can-join policy: two radio cards. The whole card is the hit target, and
    the selected one takes the brand tint so the current answer is readable at a
    glance rather than from a 13px dot. */

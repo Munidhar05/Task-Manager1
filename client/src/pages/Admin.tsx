@@ -3,6 +3,7 @@ import { api, API_BASE } from '../api'
 import { useAuth } from '../auth'
 import { Stat, Badge } from '../ui'
 import UserManagement from '../components/UserManagement'
+import DepartmentsPanel from '../components/DepartmentsPanel'
 import JoinLink from '../components/JoinLink'
 import FeedbackReviews from '../components/FeedbackReviews'
 import { toast } from '../lib/toast'
@@ -121,14 +122,14 @@ function AllowedDomains() {
   )
 }
 
-type AdminTab = 'overview' | 'users' | 'audit' | 'keys' | 'usage' | 'feedback'
+type AdminTab = 'overview' | 'users' | 'departments' | 'audit' | 'keys' | 'usage' | 'feedback'
 
 export default function Admin() {
   // The feedback modal deep-links here with ?tab=feedback, so the initial tab
   // comes from the URL when it names a real one.
   const [tab, setTab] = useState<AdminTab>(() => {
     const want = new URLSearchParams(window.location.search).get('tab')
-    return (['overview', 'users', 'audit', 'keys', 'usage', 'feedback'] as const).includes(want as AdminTab)
+    return (['overview', 'users', 'departments', 'audit', 'keys', 'usage', 'feedback'] as const).includes(want as AdminTab)
       ? (want as AdminTab) : 'overview'
   })
   // The Usage tab appears only if the platform admin granted this org access.
@@ -155,6 +156,7 @@ export default function Admin() {
       <div className="toolbar">
         <button className={'btn btn-sm' + (tab === 'overview' ? ' btn-primary' : '')} data-va="admin.tab.overview" onClick={() => setTab('overview')}>Overview</button>
         <button className={'btn btn-sm' + (tab === 'users' ? ' btn-primary' : '')} data-va="admin.tab.users" onClick={() => setTab('users')}>User Management</button>
+        <button className={'btn btn-sm' + (tab === 'departments' ? ' btn-primary' : '')} data-va="admin.tab.departments" onClick={() => setTab('departments')}>Departments</button>
         <button className={'btn btn-sm' + (tab === 'audit' ? ' btn-primary' : '')} data-va="admin.tab.audit" onClick={() => setTab('audit')}>Audit Log</button>
         <button className={'btn btn-sm' + (tab === 'keys' ? ' btn-primary' : '')} data-va="admin.tab.keys" onClick={() => setTab('keys')}>API Keys</button>
         <button className={'btn btn-sm' + (tab === 'feedback' ? ' btn-primary' : '')} data-va="admin.tab.feedback" onClick={() => setTab('feedback')}>Feedback</button>
@@ -162,6 +164,7 @@ export default function Admin() {
       </div>
       {tab === 'overview' && <Overview />}
       {tab === 'users' && <><AllowedDomains /><JoinLink /><UserManagement /></>}
+      {tab === 'departments' && <DepartmentsPanel />}
       {tab === 'audit' && <Audit />}
       {tab === 'keys' && <ApiKeys />}
       {tab === 'feedback' && <Feedback />}

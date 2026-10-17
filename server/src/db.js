@@ -685,6 +685,18 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_deleted_tasks_org ON deleted_tasks(org_id, deleted_at);
   CREATE INDEX IF NOT EXISTS idx_deleted_tasks_purge ON deleted_tasks(purge_after);
+  -- Task categories an org added itself (the five built-in brands live in
+  -- categories.js). One row per org and name; the name is what a task stores in
+  -- its category column, so renaming is deliberately not offered.
+  CREATE TABLE IF NOT EXISTS task_categories (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT,                              -- picked server-side so every screen agrees
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (org_id) REFERENCES organizations(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_categories_org ON task_categories(org_id);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.

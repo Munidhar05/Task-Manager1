@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useCategories, categoryColor } from './lib/categories'
 
 // Priority/status hues. Kept as concrete values (not CSS vars) because they're
 // also passed to SVG fills, gradient stops, and color-mix in inline styles where
@@ -17,12 +18,8 @@ export const STATUS_COLORS: Record<string, string> = {
 }
 export const LANG_LABEL: Record<string, string> = { en: 'English', hi: 'हिन्दी', te: 'తెలుగు' }
 
-// Task categories (business units / brands). Keep in sync with server/src/categories.js.
-// The empty-string option represents "Uncategorized" (stored as null on the task).
-export const CATEGORY_COLORS: Record<string, string> = {
-  'DCAL': '#3b82f6', '91GI': '#8b5cf6', 'Global Shopper': '#10b981', 'Rice': '#f59e0b', 'Taskmanager': '#f43f5e',
-}
-export const CATEGORY_OPTIONS = ['DCAL', '91GI', 'Global Shopper', 'Rice', 'Taskmanager']
+// Task categories (business units / brands) live in lib/categories.ts: the
+// built-ins plus whatever the org added, with their colours.
 
 // Human-readable file size (e.g. 1.4 MB). Used for attachment chips.
 export function fmtBytes(n?: number | null): string {
@@ -133,8 +130,9 @@ export function StatusBadge({ s }: { s: string }) {
 }
 // Category (business unit) tag. Renders nothing when the task is uncategorized.
 export function CategoryBadge({ c }: { c?: string | null }) {
+  useCategories() // re-render once the org's own categories (and colours) arrive
   if (!c) return null
-  return <Badge color={CATEGORY_COLORS[c] || '#64748b'} soft>{c}</Badge>
+  return <Badge color={categoryColor(c)} soft>{c}</Badge>
 }
 
 // A textarea that grows to fit what is in it, so nothing you type is hidden

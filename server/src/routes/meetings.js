@@ -130,7 +130,7 @@ function persistMeeting({ orgId, userId, title, description, meetingDate, transc
     seen.add(key)
     const conf = Number.isFinite(t.confidence) ? Math.max(0, Math.min(100, Math.round(t.confidence))) : (assignee ? 80 : 30)
     // Hybrid category: keyword match on the task text wins, else the AI's guess.
-    const category = resolveCategory({ text: `${t.title} ${t.description || ''} ${t.source_quote || ''}`, aiSuggested: t.category })
+    const category = resolveCategory({ text: `${t.title} ${t.description || ''} ${t.source_quote || ''}`, aiSuggested: t.category, orgId })
     db.prepare(`INSERT INTO suggested_tasks
       (id, meeting_id, org_id, title, description, suggested_assignee_id, suggested_assignee_raw, assignee_reasoning,
        confidence, priority, due_date, due_date_raw, source_quote, category, status, created_at, updated_at)
@@ -400,7 +400,7 @@ r.patch('/suggestions/:sid', requireRole('manager', 'admin'), (req, res) => {
     if (f in b) { sets.push(`${f}=?`); args.push(b[f]) }
   }
   if ('confidence' in b) { sets.push('confidence=?'); args.push(Math.max(0, Math.min(100, Math.round(Number(b.confidence) || 0)))) }
-  if ('category' in b) { sets.push('category=?'); args.push(normalizeCategory(b.category)) }
+  if ('category' in b) { sets.push('category=?'); args.push(normalizeCategory(b.category, req.user.org_id)) }
   if ('suggested_assignee_id' in b) {
     const uid = b.suggested_assignee_id || null
     if (uid && !db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(uid, req.user.org_id)) {
