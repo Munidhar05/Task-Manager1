@@ -16,10 +16,11 @@ import { flashPress, pause, findVaEl } from '../voice/uiController'
 //
 // This was a bare list of domains with "leave empty to allow any" as the only
 // hint — so the real question (is this workspace open or closed?) was implied by
-// whether a box happened to be empty. Worse, signup silently seeds the list with
-// the founder's own email domain, so a workspace arrives locked to a domain
-// nobody chose and the first invite fails with a message about a rule the
-// manager never set.
+// whether a box happened to be empty. Worse, signup used to seed the list with
+// the founder's own email domain, so a workspace arrived locked to a domain
+// nobody chose and the first invite failed with a message about a rule the
+// manager never set. New workspaces now start on "Anyone"; ones created before
+// that may still carry the seeded domain until an admin switches it here.
 //
 // It is now the either/or it always was, stated outright, with the domain list
 // as detail of the closed option rather than the whole interface.

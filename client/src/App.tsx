@@ -16,6 +16,7 @@ import ToastHost from './components/ToastHost'
 import ConfirmHost from './components/ConfirmHost'
 import CallCenter from './components/CallCenter'
 import QuickInvite from './components/QuickInvite'
+import EmailCodeEntry from './components/EmailCodeEntry'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import AcceptInvite from './pages/AcceptInvite'
@@ -389,11 +390,11 @@ function Layout({ children }: { children: React.ReactNode }) {
 
 // Unverified-email nudge. A small floating popup (NOT a top bar that pushes the
 // page down) that appears at most once per calendar day — once shown or dismissed,
-// it stays hidden until the next day.
+// it stays hidden until the next day. It takes the code right here, so confirming
+// doesn't mean hunting for the setting in Profile.
 function VerifyEmailBanner() {
   const { user } = useAuth()
   const [show, setShow] = useState(false)
-  const [sent, setSent] = useState(false)
   useEffect(() => {
     if (!user || user.email_verified) { setShow(false); return }
     const today = new Date().toISOString().slice(0, 10)
@@ -404,26 +405,18 @@ function VerifyEmailBanner() {
     setShow(true)
   }, [user])
   if (!show || !user || user.email_verified) return null
-  const resend = async () => {
-    try { await api.post('/auth/resend-verification'); setSent(true) } catch {}
-  }
   return (
     <div className="verify-pop" role="status">
       <div className="verify-pop-head">
         <span className="verify-pop-ic"><Ic name="mail" size={18} /></span>
         <div className="verify-pop-body">
           <div className="verify-pop-title">Verify your email</div>
-          <div className="verify-pop-sub">Confirm {user.email} to secure your account.</div>
+          <div className="verify-pop-sub">Enter the 6-digit code we emailed to {user.email}.</div>
         </div>
         <button className="verify-pop-x" onClick={() => setShow(false)} aria-label="Dismiss">✕</button>
       </div>
       <div className="verify-pop-actions">
-        {sent
-          ? <span className="muted" style={{ fontSize: 12.5 }}>Sent — check your inbox.</span>
-          : <>
-              <button className="btn btn-primary btn-sm" onClick={resend}>Resend link</button>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShow(false)}>Later</button>
-            </>}
+        <EmailCodeEntry />
       </div>
     </div>
   )

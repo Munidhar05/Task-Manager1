@@ -3,7 +3,12 @@ import { api, User } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Badge, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
+import { toast } from '../lib/toast'
 import DepartmentSelect, { Dept } from './DepartmentSelect'
+
+// Format only. Any domain is fine as far as the form is concerned — an org that
+// wants to restrict domains does it in Administration, and the server enforces it.
+const VALID_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // User-management UI for the Administration page. The manager is the org admin
 // and manages employees and other managers.
@@ -110,7 +115,7 @@ export default function UserManagement() {
             {users.map((u) => (
               <tr key={u.id}>
                 <td className="cell-title"><span className="row"><Avatar name={u.name} color={u.avatar_color} size={26} /> {u.name}</span></td>
-                <td className="muted" data-label="Email">{u.email}</td>
+                <td className="muted" data-label="Email">{u.email}{!u.email_verified && <span className="um-unconfirmed" title="They haven't entered the confirmation code mailed to this address yet">Unconfirmed</span>}</td>
                 <td className="muted" data-label="Phone">{u.phone || '—'}</td>
                 <td data-label="Role"><Badge color="#ea580c" soft>{u.role}</Badge></td>
                 <td data-label="Department">{deptName(u.department_id)}</td>
@@ -212,28 +217,61 @@ export function UserForm({ user, depts, onDeptAdded, isAdmin, onClose, onDone }:
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // Confirming the address here is optional. A manager with the teammate beside
+  // them (or on a call) sends a code and types in what they read out; anyone
+  // saved without it is mailed a code of their own to enter after signing in.
+  // Both pieces of state remember WHICH address they belong to, so editing the
+  // email field after sending or confirming quietly drops back to "not sent".
+  const [code, setCode] = useState('')
+  const [codeSentTo, setCodeSentTo] = useState('')
+  const [proof, setProof] = useState<{ email: string; token: string } | null>(null)
+  const [codeBusy, setCodeBusy] = useState(false)
+  const [codeErr, setCodeErr] = useState('')
+  const email = (f.email || '').trim().toLowerCase()
+  const emailOk = VALID_EMAIL.test(email)
+  const emailChanged = !isEdit || email !== String(user?.email || '').toLowerCase()
+  const confirmed = proof?.email === email
+  const codePending = codeSentTo === email && !confirmed
   // Managers can assign employee/manager only; admins can assign any role.
   const roleOptions = isAdmin ? ['employee', 'manager', 'admin'] : ['employee', 'manager']
+
+  const sendCode = async () => {
+    setCodeErr(''); setCodeBusy(true)
+    try {
+      const r = await api.post('/users/email-code', { email, user_id: user?.id })
+      setCodeSentTo(email); setCode('')
+      if (!r.delivered) toast.info('Email isn\'t set up on this server, so the code was written to the server log.')
+    } catch (e: any) { setCodeErr(e.message) } finally { setCodeBusy(false) }
+  }
+  const verifyCode = async () => {
+    setCodeErr(''); setCodeBusy(true)
+    try {
+      const r = await api.post('/users/email-code/verify', { email, code })
+      setProof({ email, token: r.proof })
+    } catch (e: any) { setCodeErr(e.message) } finally { setCodeBusy(false) }
+  }
+
   const save = async () => {
     setErr('')
-    // Only @gmail.com or @befach.com addresses are accepted.
-    const email = (f.email || '').trim().toLowerCase()
-    if (!/^[^\s@]+@(gmail\.com|befach\.com)$/.test(email)) {
-      setErr('Email must be a @gmail.com or @befach.com address'); return
-    }
+    // Any domain is accepted here; whether this org restricts domains is the
+    // server's call (Administration → Who can join this workspace).
+    if (!emailOk) { setErr('Please enter a valid email address'); return }
     // Phone must be exactly 10 digits.
     const phone = (f.phone || '').replace(/\D/g, '')
     if (phone.length !== 10) { setErr('Phone number must be exactly 10 digits'); return }
     setBusy(true)
     try {
-      let saved: User
+      let saved: User & { code_sent?: boolean }
+      const email_proof = confirmed ? proof!.token : undefined
       if (isEdit) {
-        const body: any = { ...f, email, phone }
+        const body: any = { ...f, email, phone, email_proof }
         if (!body.password) delete body.password // don't overwrite password if left blank
         saved = await api.patch('/users/' + user.id, body)
       } else {
-        saved = await api.post('/users', { ...f, email, phone })
+        saved = await api.post('/users', { ...f, email, phone, email_proof })
       }
+      if (confirmed) toast.success(`${email} is confirmed.`)
+      else if (saved.code_sent) toast.success(`A confirmation code was sent to ${email}.`)
       onDone(saved)
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -247,6 +285,30 @@ export function UserForm({ user, depts, onDeptAdded, isAdmin, onClose, onDone }:
             <div><label>Email</label><input value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
             <div><label>Phone (10 digits)</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} maxLength={10} inputMode="numeric" placeholder="9876543210" /></div>
           </div>
+          {emailOk && emailChanged && (
+            <div className="uf-verify">
+              {confirmed ? (
+                <span className="pf-verified"><Ic name="check" size={13} /> {email} confirmed</span>
+              ) : codePending ? (
+                <>
+                  <div className="uf-verify-hint">Enter the 6-digit code sent to <b>{email}</b>.</div>
+                  <div className="row" style={{ gap: 8 }}>
+                    <input className="otp-input" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyCode() }}
+                      inputMode="numeric" autoComplete="one-time-code" placeholder="000000" aria-label="Confirmation code" />
+                    <button className="btn btn-sm" onClick={verifyCode} disabled={codeBusy || code.length !== 6}>{codeBusy ? <span className="spinner" /> : 'Verify'}</button>
+                    <button className="btn btn-ghost btn-sm" onClick={sendCode} disabled={codeBusy}>Resend</button>
+                  </div>
+                </>
+              ) : (
+                <div className="row spread" style={{ gap: 10 }}>
+                  <span className="uf-verify-hint">Confirm this email now with a code, or skip it and they'll be emailed one to enter after signing in.</span>
+                  <button className="btn btn-sm" onClick={sendCode} disabled={codeBusy}>{codeBusy ? <span className="spinner" /> : 'Send code'}</button>
+                </div>
+              )}
+              {codeErr && <div className="uf-verify-err" role="alert">{codeErr}</div>}
+            </div>
+          )}
           <div className="grid grid-2" style={{ gap: 10 }}>
             <div><label>Role</label><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roleOptions.map((r) => <option key={r}>{r}</option>)}</select></div>
             <div><label>Department</label><DepartmentSelect value={f.department_id} onChange={(id) => setF((p: any) => ({ ...p, department_id: id }))} depts={depts} onAdded={onDeptAdded} /></div>

@@ -7,6 +7,7 @@ import { THEME_OPTIONS, ThemeChoice, getThemeChoice, applyTheme, resolveTheme } 
 import { useEscape } from '../lib/useEscape'
 import { confirmDialog, confirmLogout } from '../lib/confirm'
 import { savedAccounts } from '../accounts'
+import EmailCodeEntry from './EmailCodeEntry'
 
 // The profile hub, one concern per screen. It used to be a single column that
 // ran photo -> name -> wallpaper -> password -> feedback in one scroll, so
@@ -156,13 +157,6 @@ export default function ProfileModal({ onClose, onFeedback, initialSection }: { 
     finally { setBusy(null) }
   }
 
-  const sendVerification = async () => {
-    setBusy('verify')
-    try { await api.post('/auth/resend-verification', {}); flash('ok', `Confirmation link sent to ${user.email}.`, 'personal') }
-    catch (err: any) { flash('err', err.message || 'Could not send the link.', 'personal') }
-    finally { setBusy(null) }
-  }
-
   // Signing out the device you are holding ends this session too, so it logs out
   // rather than leaving a dead token in place.
   const revokeSession = async (s: Session) => {
@@ -233,10 +227,8 @@ export default function ProfileModal({ onClose, onFeedback, initialSection }: { 
               {(user as any).email_verified
                 ? <span className="pf-verified"><Ic name="check" size={13} /> Verified</span>
                 : <>
-                    <span className="pf-unverified">Not confirmed yet</span>
-                    <button className="btn btn-sm" onClick={sendVerification} disabled={busy === 'verify'}>
-                      {busy === 'verify' ? <span className="spinner" /> : 'Send confirmation link'}
-                    </button>
+                    <span className="pf-unverified">Not confirmed yet — enter the 6-digit code we emailed you.</span>
+                    <EmailCodeEntry />
                   </>}
             </div>
             <div className="muted pf-hint">Your email is your sign-in, so it can't be changed here — ask an admin to move the account.</div>

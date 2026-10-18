@@ -561,6 +561,9 @@ export function initSchema() {
   );
 
   -- Single-use, expiring tokens that confirm a user owns their email address.
+  -- LEGACY: these back the old emailed links. Nothing issues new ones (codes in
+  -- email_codes replaced them); the table stays so links already sitting in
+  -- inboxes still work until they expire.
   CREATE TABLE IF NOT EXISTS email_verifications (
     token TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -697,6 +700,28 @@ export function initSchema() {
     FOREIGN KEY (org_id) REFERENCES organizations(id)
   );
   CREATE INDEX IF NOT EXISTS idx_task_categories_org ON task_categories(org_id);
+
+  -- Six-digit email confirmation codes (see emailCodes.js). user_id set = someone
+  -- confirming their own address; NULL = a manager confirming one before the
+  -- account exists, which is why the address is stored rather than read off a
+  -- user row. created_by is not a foreign key: removing the manager who asked
+  -- for a code shouldn't be blocked by it.
+  CREATE TABLE IF NOT EXISTS email_codes (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT,
+    email TEXT NOT NULL,
+    code TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    proof TEXT,                              -- handed back on a manager-scope match
+    expires_at TEXT NOT NULL,
+    verified_at TEXT,
+    used_at TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email, created_at);
   `)
 
   // Lightweight migrations: add columns to existing DBs that predate them.

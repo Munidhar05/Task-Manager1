@@ -1214,6 +1214,14 @@ tbody tr:hover { background: var(--n-50); }
 .domain-chip button { border: none; background: transparent; color: var(--primary); cursor: pointer; font-size: 12px; line-height: 1; padding: 3px 5px; border-radius: 50%; }
 .domain-chip button:hover { background: color-mix(in srgb, var(--primary) 18%, transparent); }
 
+/* Add / edit user: optional "confirm this email with a code" strip under the
+   name / email / phone row, and the marker in the user table for addresses
+   nobody has confirmed yet. */
+.uf-verify { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: var(--r-md); background: var(--bg); }
+.uf-verify-hint { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.uf-verify-err { font-size: 12.5px; color: var(--danger-ink); }
+.um-unconfirmed { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--warning-bg); color: var(--warning-ink); vertical-align: 1px; }
+
 /* Password strength meter (signup / reset) */
 .pw-strength { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .pw-strength-bar { display: flex; gap: 4px; flex: 1; }
@@ -1706,6 +1714,15 @@ tbody tr:hover { background: var(--n-50); }
 @media (max-width: 560px) {
   .verify-pop { left: 16px; right: 16px; width: auto; bottom: 88px; }
 }
+
+/* Six-digit code entry (EmailCodeEntry, and the add-user form). Wide letter
+   spacing so a code read out over the phone is easy to check digit by digit. */
+.otp-input { width: 8.5em; flex: 0 0 auto; font-variant-numeric: tabular-nums; letter-spacing: .3em; font-weight: 600; text-align: center; }
+.ec { display: grid; gap: 6px; min-width: 0; }
+.ec-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ec-msg { font-size: 12.5px; line-height: 1.45; }
+.ec-msg.ok { color: var(--success-ink); }
+.ec-msg.err { color: var(--danger-ink); }
 
 /* ---- System error strip + save-state indicator ---- */
 /* A SYSTEM failure lives outside the conversation — it is not the assistant
