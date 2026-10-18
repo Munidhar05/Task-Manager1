@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
 import { authRequired, requireRole, hashPassword, verifyPassword, verifyToken } from '../auth.js'
 import { id, now, audit, orgAllowedDomains, emailDomainAllowed } from '../util.js'
-import { publicUser, sendVerificationEmail } from './auth.js'
+import { publicUser } from './auth.js'
+import { sendVerificationEmail, clearEmailConfirmations, sendManagerCode, checkManagerCode, findProof, useProof } from '../emailCodes.js'
 import { CATEGORIES, orgCategories, normalizeCategory } from '../categories.js'
 import { createDepartment } from './departments.js'
 
@@ -103,6 +104,7 @@ r.patch('/me', async (req, res) => {
       }
       sets.push('email=?'); args.push(email)
       sets.push('email_verified=?'); args.push(0)
+      clearEmailConfirmations(req.user.id)
       addressToVerify = email
     }
   }
@@ -121,11 +123,11 @@ r.patch('/me', async (req, res) => {
   if (b.new_password) changed.push('password')
   audit(req.user.org_id, req.user.id, 'user.self_update', 'user', req.user.id, changed.join(', '))
   // Best effort: the address has already changed and the client shows a "verify
-  // your email" banner with a resend button, so a mail failure here must not fail
-  // the request and strand the user between two addresses.
+  // your email" card that can send another code, so a mail failure here must not
+  // fail the request and strand the user between two addresses.
   if (addressToVerify) {
-    try { await sendVerificationEmail({ id: req.user.id, email: addressToVerify }) }
-    catch (e) { console.warn('[users] verification mail failed:', e.message) }
+    const out = await sendVerificationEmail({ ...req.user, email: addressToVerify })
+    if (out.error) console.warn('[users] verification mail failed:', out.error)
   }
   res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)))
 })
@@ -143,13 +145,41 @@ function domainError(orgId, email) {
 
 // Everyone can list org users (needed for assignment dropdowns) — minimal fields.
 r.get('/', (req, res) => {
-  const rows = db.prepare('SELECT id, name, email, role, phone, department_id, avatar_color, avatar_file, aliases, preferred_language FROM users WHERE org_id=? ORDER BY name').all(req.user.org_id)
+  const rows = db.prepare('SELECT id, name, email, role, phone, department_id, avatar_color, avatar_file, aliases, preferred_language, email_verified FROM users WHERE org_id=? ORDER BY name').all(req.user.org_id)
   res.json(rows)
 })
 
-// Create user (admins, and managers for non-admin accounts)
-r.post('/', requireRole('manager', 'admin'), (req, res) => {
-  const { name, email, password, role, department_id, aliases, preferred_language, phone } = req.body || {}
+// Confirm an address from the add / edit user form, before the account is
+// saved. Optional — a user saved without it gets a code of their own to enter
+// after they sign in. `user_id` is the account being edited, so its own current
+// address isn't reported as taken.
+r.post('/email-code', requireRole('manager', 'admin'), async (req, res) => {
+  const email = String(req.body?.email || '').toLowerCase().trim()
+  if (!VALID_EMAIL.test(email)) return res.status(400).json({ error: 'Please enter a valid email address.' })
+  const domErr = domainError(req.user.org_id, email)
+  if (domErr) return res.status(400).json({ error: domErr })
+  const taken = db.prepare('SELECT id FROM users WHERE email=?').get(email)
+  if (taken && taken.id !== req.body?.user_id) return res.status(409).json({ error: 'Someone already uses that email address.' })
+  const out = await sendManagerCode(req.user, email)
+  if (out.error) return res.status(out.status).json({ error: out.error })
+  res.json({ ok: true, delivered: out.delivered })
+})
+r.post('/email-code/verify', requireRole('manager', 'admin'), (req, res) => {
+  const email = String(req.body?.email || '').toLowerCase().trim()
+  const out = checkManagerCode(req.user, email, req.body?.code)
+  if (out.error) return res.status(400).json({ error: out.error })
+  res.json({ proof: out.proof })
+})
+// A proof that was sent but no longer works (expired, or for another address)
+// is refused rather than quietly saving the account unverified: the manager
+// was told the address is confirmed, and saving it otherwise would be a lie.
+const STALE_PROOF = 'The email confirmation has expired. Send a new code, or save without confirming.'
+
+// Create user (admins, and managers for non-admin accounts). With `email_proof`
+// from /email-code/verify the address lands confirmed; without it, the new user
+// is mailed a code to enter themselves.
+r.post('/', requireRole('manager', 'admin'), async (req, res) => {
+  const { name, email, password, role, department_id, aliases, preferred_language, phone, email_proof } = req.body || {}
   if (!name || !email || !password || !role) return res.status(400).json({ error: 'name, email, password, role required' })
   if (!['admin', 'manager', 'employee'].includes(role)) return res.status(400).json({ error: 'invalid role' })
   if (req.user.role === 'manager' && role === 'admin') return res.status(403).json({ error: 'Managers cannot create admin accounts' })
@@ -161,18 +191,34 @@ r.post('/', requireRole('manager', 'admin'), (req, res) => {
   if (phoneDigits.length !== 10) return res.status(400).json({ error: 'Phone must be exactly 10 digits' })
   const exists = db.prepare('SELECT id FROM users WHERE email=?').get(emailNorm)
   if (exists) return res.status(409).json({ error: 'email already exists' })
+  const proofId = email_proof ? findProof(req.user, emailNorm, email_proof) : null
+  if (email_proof && !proofId) return res.status(400).json({ error: STALE_PROOF })
   const uid = id('usr')
   const colors = ['#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4']
-  db.prepare(`INSERT INTO users (id, org_id, department_id, name, email, password_hash, role, phone, aliases, preferred_language, avatar_color, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    uid, req.user.org_id, department_id || null, name, emailNorm, hashPassword(password), role,
-    phoneDigits, aliases || '', preferred_language || 'en', colors[Math.floor(Math.random() * colors.length)], now())
+  db.transaction(() => {
+    db.prepare(`INSERT INTO users (id, org_id, department_id, name, email, password_hash, role, phone, aliases, preferred_language, avatar_color, email_verified, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      uid, req.user.org_id, department_id || null, name, emailNorm, hashPassword(password), role,
+      phoneDigits, aliases || '', preferred_language || 'en', colors[Math.floor(Math.random() * colors.length)], proofId ? 1 : 0, now())
+    if (proofId) useProof(proofId)
+  })()
   audit(req.user.org_id, req.user.id, 'user.create', 'user', uid, email)
-  res.status(201).json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(uid)))
+  const saved = db.prepare('SELECT * FROM users WHERE id=?').get(uid)
+  // Best effort, as on signup: the account exists either way, and the new user
+  // can ask for another code from inside the app.
+  let codeSent = false
+  if (!proofId) {
+    const out = await sendVerificationEmail(saved, { addedBy: req.user })
+    if (out.error) console.warn('[users] verification mail failed:', out.error)
+    codeSent = !out.error
+  }
+  res.status(201).json({ ...publicUser(saved), code_sent: codeSent })
 })
 
-// Update user (admins, and managers for non-admin accounts)
-r.patch('/:id', requireRole('manager', 'admin'), (req, res) => {
+// Update user (admins, and managers for non-admin accounts). Moving someone to a
+// new address un-confirms it unless `email_proof` shows the manager confirmed
+// the new one; otherwise the new address is mailed a code.
+r.patch('/:id', requireRole('manager', 'admin'), async (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!u) return res.status(404).json({ error: 'Not found' })
   const b = req.body || {}
@@ -192,18 +238,39 @@ r.patch('/:id', requireRole('manager', 'admin'), (req, res) => {
   const fields = ['name', 'role', 'department_id', 'aliases', 'preferred_language', 'phone']
   const sets = [], args = []
   for (const f of fields) if (f in b) { sets.push(`${f}=?`); args.push(b[f]) }
+  let newAddress = null, proofId = null
   if ('email' in b && b.email) {
     const email = b.email.toLowerCase().trim()
     const clash = db.prepare('SELECT id FROM users WHERE email=? AND id!=?').get(email, u.id)
     if (clash) return res.status(409).json({ error: 'email already in use' })
-    sets.push('email=?'); args.push(email)
+    if (email !== String(u.email || '').toLowerCase()) {
+      if (b.email_proof) {
+        proofId = findProof(req.user, email, b.email_proof)
+        if (!proofId) return res.status(400).json({ error: STALE_PROOF })
+      }
+      sets.push('email=?'); args.push(email)
+      sets.push('email_verified=?'); args.push(proofId ? 1 : 0)
+      newAddress = email
+    }
   }
   if (b.password) { sets.push('password_hash=?'); args.push(hashPassword(b.password)) }
   if (!sets.length) return res.json(publicUser(u))
   args.push(u.id)
-  db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id=?`).run(...args)
-  audit(req.user.org_id, req.user.id, 'user.update', 'user', u.id, b)
-  res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(u.id)))
+  db.transaction(() => {
+    if (newAddress) clearEmailConfirmations(u.id)
+    db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id=?`).run(...args)
+    if (proofId) useProof(proofId)
+  })()
+  const { email_proof, password, ...logged } = b
+  audit(req.user.org_id, req.user.id, 'user.update', 'user', u.id, logged)
+  const saved = db.prepare('SELECT * FROM users WHERE id=?').get(u.id)
+  let codeSent = false
+  if (newAddress && !proofId) {
+    const out = await sendVerificationEmail(saved, { addedBy: req.user })
+    if (out.error) console.warn('[users] verification mail failed:', out.error)
+    codeSent = !out.error
+  }
+  res.json({ ...publicUser(saved), code_sent: codeSent })
 })
 
 // DELETE a user (managers/admins). Detaches references so the row can be removed

@@ -4,6 +4,7 @@ import { db } from '../db.js'
 import { signToken, verifyPassword, hashPassword, authRequired, platformAdminEmails, createSession } from '../auth.js'
 import { audit, id, now, genToken, appUrl, inDays, isCommonPassword } from '../util.js'
 import { sendMail } from '../mailer.js'
+import { sendVerificationEmail, confirmOwnEmail } from '../emailCodes.js'
 
 const r = Router()
 
@@ -63,13 +64,14 @@ r.post('/signup', (req, res) => {
 
   // Provision org + departments + first user atomically: if anything fails, nothing
   // is left half-created.
-  // Seed the org's allowed email domains from the founder's domain (company mode).
-  // Solo workspaces get no restriction. Admins can edit the list later.
-  const founderDomain = email.split('@')[1] || ''
+  // Every workspace starts open to any email domain. Company signups used to be
+  // seeded with the founder's own domain, which locked a workspace to a rule
+  // nobody chose — the first teammate on gmail or another company's address was
+  // refused. Admins who do want a restriction set it under Administration.
   const provision = db.transaction(() => {
     const orgId = id('org')
-    db.prepare('INSERT INTO organizations (id, name, is_personal, allowed_domains, created_at) VALUES (?,?,?,?,?)')
-      .run(orgId, company, personal ? 1 : 0, personal ? null : founderDomain, now())
+    db.prepare('INSERT INTO organizations (id, name, is_personal, created_at) VALUES (?,?,?,?)')
+      .run(orgId, company, personal ? 1 : 0, now())
     let mgmtDeptId = null
     for (const dept of DEFAULT_DEPARTMENTS) {
       const did = id('dep')
@@ -96,7 +98,9 @@ r.post('/signup', (req, res) => {
   }
 
   audit(user.org_id, user.id, personal ? 'account.signup' : 'org.signup', 'organization', user.org_id, company)
-  sendVerificationEmail(user).catch((e) => console.warn('[auth] verification email failed:', e.message))
+  // Best effort and not awaited: the account exists either way, and the card in
+  // the app can send another code if this one never arrives.
+  sendVerificationEmail(user).then((out) => { if (out.error) console.warn('[auth] verification email failed:', out.error) })
   res.status(201).json({ token: signToken(user, createSession(user, req)), user: userWithWorkspace(user) })
 })
 
@@ -188,26 +192,12 @@ r.get('/me', authRequired, (req, res) => {
 
 // ---------------------------------------------------------------------------
 // Email verification (non-blocking: users can still use the app while unverified;
-// the client shows a gentle "verify your email" banner).
+// the client shows a gentle "verify your email" card). Confirmation is a
+// six-digit code — see emailCodes.js for why it replaced the emailed link.
 // ---------------------------------------------------------------------------
-async function sendVerificationEmail(user) {
-  const token = genToken()
-  db.prepare('INSERT INTO email_verifications (token, user_id, expires_at, used, created_at) VALUES (?,?,?,?,?)')
-    .run(token, user.id, inDays(7), 0, now())
-  const link = `${appUrl()}/verify-email?token=${token}`
-  await sendMail({
-    to: user.email,
-    subject: 'Verify your email for SmartTask',
-    text: `Welcome to SmartTask! Confirm your email address:\n${link}\n\nThis link expires in 7 days.`,
-    html: `<div style="font-family:system-ui,sans-serif;max-width:480px;margin:auto">
-      <h2 style="color:#c2410c">Confirm your email</h2>
-      <p>Welcome to SmartTask! Click below to verify <b>${user.email}</b>.</p>
-      <p><a href="${link}" style="display:inline-block;background:#c2410c;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:600">Verify email</a></p>
-      <p style="color:#999;font-size:12px">This link expires in 7 days.</p></div>`,
-  })
-}
 
-// Confirm an email-verification token.
+// Confirm a LEGACY email-verification link. Nothing mails these any more; the
+// route stays so links already sitting in inboxes still work until they expire.
 r.post('/verify-email', (req, res) => {
   const token = String(req.body?.token || '')
   const row = db.prepare('SELECT * FROM email_verifications WHERE token = ?').get(token)
@@ -222,11 +212,21 @@ r.post('/verify-email', (req, res) => {
   res.json({ ok: true })
 })
 
-// Re-send the verification email to the logged-in user.
+// Confirm the signed-in user's own address with the code mailed to it.
+r.post('/verify-email-code', authRequired, (req, res) => {
+  if (req.user.email_verified) return res.json({ ok: true, already: true })
+  const out = confirmOwnEmail(req.user, req.body?.code)
+  if (out.error) return res.status(400).json({ error: out.error })
+  audit(req.user.org_id, req.user.id, 'auth.email_verified', 'user', req.user.id, req.user.email)
+  res.json({ ok: true })
+})
+
+// Mail the logged-in user a fresh code.
 r.post('/resend-verification', authRequired, async (req, res) => {
   if (req.user.email_verified) return res.json({ ok: true, already: true })
-  try { await sendVerificationEmail(req.user) } catch (e) { console.warn('[auth] resend failed:', e.message) }
-  res.json({ ok: true })
+  const out = await sendVerificationEmail(req.user)
+  if (out.error) return res.status(out.status).json({ error: out.error })
+  res.json({ ok: true, delivered: out.delivered })
 })
 
 // ---------------------------------------------------------------------------
@@ -332,6 +332,4 @@ r.post('/verify-password', authRequired, (req, res) => {
 })
 
 export default r
-// sendVerificationEmail is shared with users.js, where changing your own email
-// resets email_verified and re-confirms the new address through this same flow.
-export { publicUser, sendVerificationEmail }
+export { publicUser }
