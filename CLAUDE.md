@@ -83,6 +83,16 @@ Two WebSocket hubs share the HTTP server: `ws/chatHub.js` (real-time chat) and
 `ws/liveTranscribe.js` (browser ↔ Sarvam audio relay). Browsers can't set headers on a WS
 upgrade, so those authenticate via `verifyToken()` on a query-string token.
 
+Chat (`routes/chat.js`) works like WhatsApp, and two of its rules are easy to break. Ticks
+come from per-participant positions, not per-message rows: `last_delivered_at` and
+`read_receipt_at` only move forward (Mark as unread rewinds `last_read_at`, never the
+receipt), and `chat_receipt_marks` records each move so Message info can say *when*. Go
+through `markRead` / `markDelivered` / `pushReceipts`, never a bare `UPDATE`. And every
+answered call is summarised server-side when the last person leaves (`finalizeCall` →
+`summariseCall`, claimed once via `chat_calls.processed_at`), which assigns the tasks whose
+owner was named; the client only streams each person's own speech up as
+`chat_call_segments`. Group event lines are `kind='system'` messages, never `deliver()`ed.
+
 `scheduler.js` is a one-minute `setInterval`, not cron. It sends the daily digest, guarded
 by an `app_meta` row so a restart can't double-send. Nothing else is scheduled — the
 leaderboard is counted live on every read.
@@ -124,6 +134,10 @@ their per-row edits to localStorage, `MeetingDetail` reopens the review screen o
 you return, and the dashboard banner + the Meetings page's "Unreviewed AI tasks" filter are
 how you find your way back after a cold start. The suggestions themselves were never at
 risk — they live server-side as `suggested_tasks.status='pending'` until someone acts.
+
+`pages/Chats.tsx` is the chat screen; what a message can *be* (task card, poll, place,
+contact, link preview, call summary) and the chat's sheets and photo viewer live in
+`components/chat/`, with the API's shapes in `components/chat/types.ts`.
 
 **All styling is one global `styles.css`** — no CSS modules, no styled-components, no
 Tailwind. Class names are hand-namespaced by feature (`.lb-*` leaderboard, `.fb-*` feedback,

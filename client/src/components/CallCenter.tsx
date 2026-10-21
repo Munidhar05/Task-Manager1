@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { api, getToken, wsUrl, API_BASE } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Ic } from '../ui'
 import { toast } from '../lib/toast'
-import { confirmDialog } from '../lib/confirm'
 import { audioFilename } from '../lib/audioFile'
 import { subscribeCalls, CallKind } from '../lib/call'
 import { startLiveSpeech, isSupported as speechSupported, LiveSpeech } from '../lib/liveSpeech'
@@ -40,10 +38,6 @@ interface Peer { id: string; name: string; stream: MediaStream | null }
 
 export default function CallCenter() {
   const { user } = useAuth()
-  const navigate = useNavigate()
-  // Only a manager can file the result (POST /meetings/audio is manager-gated),
-  // so only a manager is offered the button that produces it.
-  const canRecord = user?.role === 'manager' || user?.role === 'admin'
   const [incoming, setIncoming] = useState<Incoming | null>(null)
   const [callId, setCallId] = useState<string | null>(null)
   const [kind, setKind] = useState<CallKind>('audio')
@@ -56,12 +50,12 @@ export default function CallCenter() {
   const [elapsed, setElapsed] = useState(0)
   const [minimized, setMinimized] = useState(false)
   const [maximized, setMaximized] = useState(false)
-  // Recording is for turning the call into tasks afterwards. It is opt-in, only
-  // a manager can start it (they are the only ones who can file the result), and
-  // everyone in the call is told the moment it starts.
-  const [recording, setRecording] = useState(false)
-  const [recordedBy, setRecordedBy] = useState<string | null>(null)
-  const [processing, setProcessing] = useState(false)
+  // Every call is transcribed, so that when it ends the server can turn it
+  // into a summary in the chat and hand out the tasks agreed on it — no
+  // button to remember to press. Everyone on the call sees that it is on, and
+  // ANYONE can switch it off (or back on); the switch is the call's, not one
+  // person's, and everyone is told who flipped it.
+  const [transcribing, setTranscribing] = useState(false)
   // Surfaced live, because the alternative is what happened: speech capture
   // dies quietly and you only learn at the end of the call that there is
   // nothing to make tasks from.
@@ -85,22 +79,24 @@ export default function CallCenter() {
   // latest, not the value captured when the socket was opened.
   const peersNameRef = useRef<Record<string, string>>({})
 
-  // Recording plumbing. The mixer is a Web Audio graph: every participant's audio
-  // (mine + each remote) is piped into one MediaStreamDestination, and THAT is
-  // what MediaRecorder captures. Recording the raw local stream alone would
-  // capture only my own voice, which is useless for extracting who agreed to what.
-  const mixCtxRef = useRef<AudioContext | null>(null)
-  const mixDestRef = useRef<MediaStreamAudioDestinationNode | null>(null)
-  const mixedRef = useRef<Set<string>>(new Set())
-  const recorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<BlobPart[]>([])
-  const recordingRef = useRef(false)
+  // Transcription plumbing. The call's switch (on unless someone turned it
+  // off), whether the media is flowing yet, and my own half of the
+  // conversation, recognised on this device and posted up as it is spoken.
+  // Everyone in the call runs one of these; the server puts the halves back
+  // together in time order.
+  const transcribeRef = useRef(true)
+  const liveRef = useRef(false)
+  const micOnRef = useRef(true)
   const convIdRef = useRef<string | null>(null)
-  const startedAtRef = useRef<number>(0)
-  // My own half of the conversation, recognised on this device and posted up as
-  // it is spoken. Everyone in the call runs one of these; the server puts the
-  // halves back together in time order.
   const speechRef = useRef<LiveSpeech | null>(null)
+  // A browser that cannot recognise speech (Firefox, an iPhone app's web view)
+  // records its own microphone instead, in short pieces sent to the server to
+  // transcribe — each piece a whole file, which is what a speech service needs.
+  const pieceRecRef = useRef<MediaRecorder | null>(null)
+  const pieceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pieceUploadsRef = useRef<Promise<unknown>[]>([])
+  // The consent line is said once per call, not on every reconnect.
+  const toldRef = useRef<string | null>(null)
   // Identifies THIS tab, not this user. A person can be on the call from a
   // second device, or from a reloaded page, and their peers need to tell the
   // new connection from the dead one they are still holding.
@@ -125,34 +121,34 @@ export default function CallCenter() {
     for (const s of [localRef.current, screenRef.current]) s?.getTracks().forEach((t) => { try { t.stop() } catch {} })
     localRef.current = null
     screenRef.current = null
-    try { mixCtxRef.current?.close() } catch {}
-    mixCtxRef.current = null
-    mixDestRef.current = null
-    mixedRef.current.clear()
-    recorderRef.current = null
-    recordingRef.current = false
     convIdRef.current = null
+    liveRef.current = false
+    transcribeRef.current = true
+    micOnRef.current = true
     try { speechRef.current?.stop() } catch {}
     speechRef.current = null
-    setRecording(false); setRecordedBy(null)
+    if (pieceTimerRef.current) { clearTimeout(pieceTimerRef.current); pieceTimerRef.current = null }
+    try { if (pieceRecRef.current?.state !== 'inactive') pieceRecRef.current?.stop() } catch {}
+    pieceRecRef.current = null
+    setTranscribing(false); setHeardCount(0); setSpeechDead(null)
     setPeers({}); setPhase('idle'); setCallId(null); setSharing(false)
     setMicOn(true); setCamOn(true); setElapsed(0); setMinimized(false); setMaximized(false)
   }, [])
 
-  // Deliberately NOT useCallback: it reaches stopRecording/callToTasks, which are
-  // rebuilt on every render, and a memoised hangUp would hold the very first pair
-  // forever — uploading with a stale `kind` and a stale peer list. It is only ever
-  // called from an onClick, so there is nothing to memoise for.
+  // Leave. Nothing to file from here any more: the server turns the call into
+  // its summary and tasks once the last person is off it. The camera and
+  // microphone stop at once; what this side still owes the transcript — on a
+  // browser that records instead of listening, the last piece of audio — goes
+  // up after that, and only then is the server told this person has left, so
+  // the piece is in before the call is written up.
   const hangUp = async (silent = false) => {
     const id = callIdRef.current
-    // Take the tape BEFORE cleanup() tears the recorder down, and capture the
-    // names while the peer list still exists.
-    const names = Object.values(peersRef.current).map((p) => p.name)
-    const wasRecording = recordingRef.current
-    const blob = wasRecording ? await stopRecording() : null
+    await stopMyTranscript()
+    const owed = pieceUploadsRef.current
+    pieceUploadsRef.current = []
     cleanup()
+    if (owed.length) await Promise.race([Promise.allSettled(owed), new Promise((r) => setTimeout(r, 20000))])
     if (id && !silent) { try { await api.post(`/chat/call/${id}/end`) } catch {} }
-    if (wasRecording) await callToTasks(blob, names, id)
     // Leaving was deliberate, so do not walk back in — but a call started
     // after this one should still be rejoinable.
     rejoinedRef.current = false
@@ -171,198 +167,113 @@ export default function CallCenter() {
     return () => { window.removeEventListener('pagehide', bye); stopAll() }
   }, [])
 
-  // ---- recording: mix every voice into one track --------------------------
-  // Lazily built, and every participant is added to it as they arrive — including
-  // people who join AFTER recording started, which is why addToMix is called from
-  // ontrack rather than once at the top.
-  const ensureMixer = () => {
-    if (!mixCtxRef.current) {
-      const Ctx = window.AudioContext || (window as any).webkitAudioContext
-      const ctx = new Ctx()
-      mixCtxRef.current = ctx
-      mixDestRef.current = ctx.createMediaStreamDestination()
-    }
-    // WKWebView hands back a suspended context unless it was built inside the
-    // tap; resume() explicitly or the recording is pure silence (see CLAUDE.md).
-    if (mixCtxRef.current.state === 'suspended') mixCtxRef.current.resume().catch(() => {})
-    return mixCtxRef.current
-  }
-
-  const addToMix = (key: string, stream: MediaStream | null) => {
-    if (!stream || mixedRef.current.has(key)) return
-    if (!stream.getAudioTracks().length) return
-    try {
-      const ctx = ensureMixer()
-      ctx.createMediaStreamSource(stream).connect(mixDestRef.current!)
-      mixedRef.current.add(key)
-    } catch (e: any) { console.warn('[call] could not mix', key, e?.message) }
-  }
-
-  // Called on EVERY participant once recording starts — not just the recorder.
-  const startMySpeech = () => {
-    if (speechRef.current || !speechSupported()) {
-      if (!speechSupported()) setSpeechDead('this browser cannot do speech recognition')
-      return
-    }
+  // ---- transcription: my half of the call ---------------------------------
+  // Runs on EVERY participant while the call's switch is on, from the moment
+  // the media is flowing. Speech recognised here goes up line by line; a
+  // browser that cannot recognise speech records instead (see the piece
+  // recorder below).
+  const startMyTranscript = () => {
+    if (!transcribeRef.current || !liveRef.current || !callIdRef.current || !micOnRef.current) return
+    if (speechRef.current || pieceRecRef.current) return
+    if (!speechSupported()) { startPieces(); return }
     const callId = callIdRef.current
-    setHeardCount(0); setSpeechDead(null)
+    setSpeechDead(null)
     speechRef.current = startLiveSpeech(
       (text) => {
         const id = callIdRef.current
-        if (!id || id !== callId) return
+        if (!id || id !== callId || !transcribeRef.current) return
         setHeardCount((n) => n + 1)
         api.post(`/chat/call/${id}/segment`, { text }).catch(() => {})
       },
       undefined,
       (st) => {
-        // Only a genuinely fatal state is worth interrupting a call for.
-        if (st.kind === 'dead') { setSpeechDead(st.reason); toast.error(`Speech capture stopped: ${st.reason}. The call is still recording as audio.`) }
+        // Only a genuinely fatal state is worth interrupting a call for — and
+        // then this side falls back to recording, so its half is not lost.
+        if (st.kind === 'dead') {
+          try { speechRef.current?.stop() } catch {}
+          speechRef.current = null
+          setSpeechDead(st.reason)
+          startPieces()
+        }
       },
     )
-    if (!speechRef.current) setSpeechDead('speech recognition would not start')
-  }
-  const stopMySpeech = () => { speechRef.current?.stop(); speechRef.current = null }
-
-  const startRecording = async () => {
-    if (recordingRef.current) return
-    const others = Object.keys(pcsRef.current).length || Object.keys(peers).length
-    const ok = await confirmDialog({
-      title: 'Record this call?',
-      message: others
-        ? 'Everyone on the call will see that it is being recorded. When you hang up, the recording is transcribed and turned into a list of tasks for you to assign.'
-        : 'Nobody has joined yet — there will be nothing to transcribe until they do.',
-      confirmText: 'Start recording',
-    })
-    if (!ok) return
-    try {
-      ensureMixer()
-      addToMix('self', localRef.current)
-      for (const [pid, p] of Object.entries(peers)) addToMix(pid, p.stream)
-      const dest = mixDestRef.current!
-      const rec = new MediaRecorder(dest.stream)
-      chunksRef.current = []
-      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
-      rec.start(1000) // timeslice: survive a crash with something on disk
-      recorderRef.current = rec
-      recordingRef.current = true
-      startedAtRef.current = Date.now()
-      setRecording(true)
-      setRecordedBy(user?.name || 'Someone')
-      startMySpeech()
-      const id = callIdRef.current
-      if (id) api.post(`/chat/call/${id}/recording`, { on: true }).catch(() => {})
-    } catch (e: any) {
-      toast.error('Could not start recording: ' + e.message)
-    }
+    if (!speechRef.current) { setSpeechDead('speech recognition would not start'); startPieces() }
   }
 
-  // Stops the recorder and resolves with the audio. Separated from the upload so
-  // hang-up can stop-and-upload in one go without racing the recorder's flush.
-  const stopRecording = (): Promise<Blob | null> => new Promise((resolve) => {
-    const rec = recorderRef.current
-    if (!rec || rec.state === 'inactive') { resolve(null); return }
-    rec.onstop = () => {
-      const blob = chunksRef.current.length ? new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' }) : null
-      chunksRef.current = []
-      resolve(blob)
-    }
-    try { rec.stop() } catch { resolve(null) }
-    recordingRef.current = false
-    recorderRef.current = null
-    setRecording(false)
-    stopMySpeech()
+  // The recording fallback: my microphone only (everyone else is transcribing
+  // their own), in pieces of about 25 seconds — each one a complete file the
+  // server can transcribe on its own, and short enough for a speech service
+  // that refuses anything over 30 seconds. A piece goes up as soon as it ends,
+  // so a long call is not one huge upload at the end.
+  const startPieces = () => {
+    const stream = localRef.current
     const id = callIdRef.current
-    if (id) api.post(`/chat/call/${id}/recording`, { on: false }).catch(() => {})
-  })
-
-  // Hand the recording to the meetings pipeline — the SAME one that already turns
-  // multilingual meeting speech into assignable tasks. Nothing new is invented
-  // here: transcription, extraction, the review screen and the assignment flow
-  // are all the existing path, which is exactly why this is worth doing.
-  const callToTasks = async (blob: Blob | null, peerNames: string[], callId: string | null) => {
-    setProcessing(true)
-    const who = peerNames.length ? peerNames.join(', ') : 'the team'
-
-    // First choice: the transcript the browsers built as people spoke. It needs
-    // no key, no upload and no waiting, and every line already knows who said
-    // it. The recorded audio is only the fallback for when nobody's browser
-    // could do speech (Safari, iOS) but the server has a provider key.
-    if (callId) {
-      try {
-        const live: any = await api.post(`/chat/call/${callId}/to-tasks`)
-        toast.success(`${live.suggestion_count || 0} task${live.suggestion_count === 1 ? '' : 's'} found — review and assign`)
-        navigate(`/meetings/${live.id}`)
-        setProcessing(false)
-        return
-      } catch (e: any) {
-        // NO_SPEECH just means nothing was recognised — fall through to audio.
-        if (!/NO_SPEECH|Nothing was captured/i.test(e.message || '')) console.warn('[call] live transcript failed:', e.message)
+    if (!stream || !id || pieceRecRef.current || typeof MediaRecorder === 'undefined') return
+    const track = stream.getAudioTracks()[0]
+    if (!track) return
+    const mine = new MediaStream([track])
+    const next = () => {
+      if (!transcribeRef.current || callIdRef.current !== id) { pieceRecRef.current = null; return }
+      let rec: MediaRecorder
+      try { rec = new MediaRecorder(mine) } catch { pieceRecRef.current = null; return }
+      const chunks: BlobPart[] = []
+      const startedAt = new Date().toISOString()
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data) }
+      rec.onstop = () => {
+        const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' })
+        if (blob.size > 3000) pieceUploadsRef.current.push(uploadPiece(id, blob, startedAt))
+        if (pieceRecRef.current === rec) next()
       }
+      pieceRecRef.current = rec
+      rec.start()
+      pieceTimerRef.current = setTimeout(() => { try { if (rec.state !== 'inactive') rec.stop() } catch {} }, 25000)
     }
-
-    if (!blob || blob.size < 2000) {
-      setProcessing(false)
-      toast.info('Nothing was captured from that call to turn into tasks.')
-      return
-    }
+    next()
+  }
+  const uploadPiece = async (id: string, blob: Blob, startedAt: string) => {
     try {
       const form = new FormData()
-      form.append('audio', blob, audioFilename(blob, 'call'))
-      form.append('title', `Call with ${who}`)
-      form.append('description', `Recorded from ${kindRef.current === 'audio' ? 'an' : 'a'} ${kindRef.current} call in VoTask.`)
-      form.append('source_type', 'call')
-      form.append('participant_ids', JSON.stringify(Object.keys(pcsRef.current)))
+      form.append('file', new File([blob], audioFilename(blob, 'call-piece'), { type: blob.type || 'audio/webm' }))
+      form.append('started_at', startedAt)
       const headers: Record<string, string> = {}
       const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`${API_BASE}/api/meetings/audio`, { method: 'POST', headers, body: form })
+      const res = await fetch(`${API_BASE}/api/chat/call/${id}/audio`, { method: 'POST', headers, body: form })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error || 'Could not process the recording')
-      toast.success(`${data.suggestion_count || 0} task${data.suggestion_count === 1 ? '' : 's'} found — review and assign`)
-      navigate(`/meetings/${data.id}`)
-    } catch (e: any) {
-      // The recording is the only copy of what was said and it lives in a Blob
-      // in this tab, so it cannot simply be dropped. It is NOT forced onto the
-      // user's disk either: it goes into the conversation as an ordinary audio
-      // message, where it plays inline for everyone who was on the call. Saving
-      // it is then a choice, from that message's own ⋯ menu.
-      const needsKey = /provider|NO_PROVIDER|speech|NO_SPEECH|Nothing was captured/i.test(e.message || '')
-      const kept = await keepRecordingInChat(blob, convIdRef.current)
-      const why = needsKey
-        ? (speechDead
-            ? `No words were captured (${speechDead}), and the server has no speech provider, so there was nothing to turn into tasks.`
-            : 'No words were captured from this call, and the server has no speech provider, so there was nothing to turn into tasks.')
-        : 'Could not turn the call into tasks: ' + e.message
-      toast.error(kept ? `${why} The recording is in the chat so you can play it back.` : why)
-    } finally { setProcessing(false) }
+      if (res.ok && data.captured) setHeardCount((n) => n + 1)
+      if (!res.ok && data.code === 'NO_PROVIDER') {
+        // Nowhere to send it: stop recording rather than keep uploading audio
+        // nothing can read. The others' halves still make the summary.
+        setSpeechDead('this browser cannot transcribe, and the server has no speech service')
+        stopPieces()
+      }
+    } catch { /* one lost piece; the next one carries on */ }
+  }
+  // Resolves once the last piece has been handed to its upload: the recorder's
+  // own onstop (set first, so it runs first) queues the upload, then this.
+  const stopPieces = (): Promise<void> => {
+    if (pieceTimerRef.current) { clearTimeout(pieceTimerRef.current); pieceTimerRef.current = null }
+    const rec = pieceRecRef.current
+    pieceRecRef.current = null   // so its onstop does not start another piece
+    if (!rec || rec.state === 'inactive') return Promise.resolve()
+    const stopped = new Promise<void>((resolve) => rec.addEventListener('stop', () => setTimeout(resolve, 0), { once: true }))
+    try { rec.stop() } catch { return Promise.resolve() }
+    return Promise.race([stopped, new Promise<void>((r) => setTimeout(r, 1500))])
+  }
+  const stopMyTranscript = () => {
+    try { speechRef.current?.stop() } catch {}
+    speechRef.current = null
+    return stopPieces()
   }
 
-  // Put the recording into the conversation as a normal audio message. Same
-  // upload path as a voice note, so it gets the same inline player, the same
-  // storage and the same optional download — nothing bespoke to maintain.
-  const keepRecordingInChat = async (blob: Blob, conversationId: string | null): Promise<boolean> => {
-    if (!conversationId || !blob || blob.size < 2000) return false
-    try {
-      const name = audioFilename(blob, `call-recording-${new Date().toISOString().slice(11, 16).replace(':', '')}`)
-      const form = new FormData()
-      form.append('file', new File([blob], name, { type: blob.type || 'audio/webm' }))
-      const headers: Record<string, string> = {}
-      const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`${API_BASE}/api/chat/conversations/${conversationId}/upload`, { method: 'POST', headers, body: form })
-      return res.ok
-    } catch { return false }
-  }
-
-  // Stop recording and file the tasks, WITHOUT touching the call. These were
-  // wired to the same action, so pressing stop hung up on everyone — which is
-  // the opposite of what a stop button on a recorder should do. Hanging up
-  // still files whatever was recorded (see hangUp), but the two are now
-  // separate decisions.
-  const stopRecordingAndFile = async () => {
-    if (!recordingRef.current) return
+  // The call's switch — anyone on the call may flip it, and everyone is told.
+  const setCallTranscription = async (on: boolean) => {
     const id = callIdRef.current
-    const names = Object.values(peersRef.current).map((p) => p.name)
-    const blob = await stopRecording()
-    await callToTasks(blob, names, id)
+    if (!id) return
+    transcribeRef.current = on
+    setTranscribing(on)
+    if (on) startMyTranscript(); else stopMyTranscript()
+    try { await api.post(`/chat/call/${id}/recording`, { on }) }
+    catch (e: any) { toast.error('Could not change transcription: ' + e.message) }
   }
 
   // ---- signalling ---------------------------------------------------------
@@ -411,9 +322,6 @@ export default function CallCenter() {
       const stream = e.streams[0]
       setPeers((p) => ({ ...p, [peerId]: { ...(p[peerId] || { id: peerId, name: peerName }), stream } }))
       setPhase('live')
-      // Fold them into the recording mix too — someone who joins mid-recording
-      // must still end up on the tape.
-      if (recordingRef.current || mixCtxRef.current) addToMix(peerId, stream)
     }
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed') {
@@ -475,6 +383,7 @@ export default function CallCenter() {
       const call: any = await api.post(`/chat/conversations/${conversationId}/call`, { kind: k })
       setCallId(call.id); callIdRef.current = call.id
       convIdRef.current = conversationId
+      transcribeRef.current = call.transcribe !== 0; setTranscribing(transcribeRef.current)
       // Joining a call already in progress: offer to everyone in it right away.
       if (call.joined && call.peers?.length) { setPhase('connecting'); await offerTo(call.peers, peersNameRef.current) }
     } catch (e: any) {
@@ -501,6 +410,7 @@ export default function CallCenter() {
     }
     try {
       const res: any = await api.post(`/chat/call/${inc.callId}/answer`)
+      transcribeRef.current = res.transcribe !== 0; setTranscribing(transcribeRef.current)
       await offerTo(res.peers || [], peersNameRef.current)
     } catch (e: any) {
       cleanup()
@@ -621,17 +531,24 @@ export default function CallCenter() {
           return
         }
         if (msg.type === 'call-recording' && msg.callId === callIdRef.current) {
-          // Everyone sees the badge, including the person who started it.
-          setRecordedBy(msg.on ? (msg.byName || 'Someone') : null)
+          // Someone flipped the call's transcription. Everyone follows it —
+          // MY side included, because the Web Speech API hears this device's
+          // microphone and nothing else, so the far end of a call can only
+          // ever be captured by the far end.
+          transcribeRef.current = !!msg.on
+          setTranscribing(!!msg.on)
+          if (msg.on) startMyTranscript(); else void stopMyTranscript()
           if (msg.by !== user.id) {
-            if (msg.on) {
-              toast.info(`${msg.byName || 'Someone'} started recording this call`)
-              // Transcribe MY side too, so the transcript has both halves. This
-              // is the only way the far end can ever be captured: the Web Speech
-              // API hears this device's microphone and nothing else.
-              startMySpeech()
-            } else stopMySpeech()
+            toast.info(msg.on
+              ? `${msg.byName || 'Someone'} turned transcription on — this call will be summarised into tasks`
+              : `${msg.byName || 'Someone'} turned transcription off`)
           }
+          return
+        }
+        if (msg.type === 'call-summary') {
+          // The call I was on has been written up and its tasks handed out.
+          const n = msg.assigned || 0, left = msg.pending || 0
+          toast.success(`Call summary is in the chat${n ? ` — ${n} task${n === 1 ? '' : 's'} assigned` : ''}${left ? `, ${left} without an owner yet` : ''}`, 8000)
           return
         }
         if (msg.type === 'call-ended' && msg.callId === callIdRef.current) { cleanup(); return }
@@ -675,6 +592,8 @@ export default function CallCenter() {
       }
       try {
         const res: any = await api.post(`/chat/call/${live.id}/answer`)
+        transcribeRef.current = (res.transcribe ?? live.transcribe) !== 0; setTranscribing(transcribeRef.current)
+        toldRef.current = live.id // already told when it began
         await offerTo(res.peers || live.peers || [], peersNameRef.current)
         toast.info('Reconnected to your call')
       } catch { cleanup() }
@@ -690,20 +609,19 @@ export default function CallCenter() {
   // The bus: Chats (or anything else) asking us to ring someone.
   useEffect(() => subscribeCalls((req) => { begin(req.conversationId, req.kind, req.title) }), [begin])
 
-  // Speech capture can fail in ways nothing reports: the browser's recogniser
-  // reaches a service it cannot use, and simply returns nothing for ever. That
-  // is invisible until the end of the call, when the recording turns out to have
-  // produced no tasks — by which point the conversation is over. So: if we have
-  // been recording for a while and have not heard a single word, say so while
-  // there is still time to do something about it.
+  // The media is flowing: from here on, my half of the call is transcribed
+  // (while the switch is on), and everyone is told so once, in words — a
+  // transcript nobody was told about is not one this app will take.
   useEffect(() => {
-    if (!recording || speechDead || heardCount > 0) return
-    const t = setTimeout(() => {
-      setSpeechDead('no words are reaching the recogniser')
-      toast.error('Recording, but no speech is being captured — this call will not produce tasks. The audio is still being saved.', 9000)
-    }, 30000)
-    return () => clearTimeout(t)
-  }, [recording, speechDead, heardCount])
+    if (phase !== 'live') return
+    liveRef.current = true
+    if (!transcribeRef.current) return
+    startMyTranscript()
+    if (toldRef.current !== callIdRef.current) {
+      toldRef.current = callIdRef.current
+      toast.info('This call is transcribed, so its summary and tasks land in the chat when it ends. Anyone on the call can switch that off.', 8000)
+    }
+  }, [phase])
 
   // Call timer, once media is actually flowing.
   useEffect(() => {
@@ -767,11 +685,17 @@ export default function CallCenter() {
     if (id) api.post(`/chat/call/${id}/kind`, { kind: 'video' }).catch(() => {})
   }
 
+  // Muting also pauses MY transcription. Speech recognition opens the
+  // microphone by itself, apart from the call's track, so a muted aside would
+  // otherwise still be written down — and, the call being summarised into
+  // tasks, could end up assigned to someone.
   const toggleMic = () => {
     const t = localRef.current?.getAudioTracks()[0]
     if (!t) return
     t.enabled = !t.enabled
+    micOnRef.current = t.enabled
     setMicOn(t.enabled)
+    if (t.enabled) startMyTranscript(); else void stopMyTranscript()
   }
   const toggleCam = () => {
     const t = localRef.current?.getVideoTracks()[0]
@@ -837,16 +761,6 @@ export default function CallCenter() {
         </div>
       )}
 
-      {processing && (
-        <div className="call-processing">
-          <span className="spinner" />
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>Turning the call into tasks…</div>
-            <div className="muted" style={{ fontSize: 12 }}>Transcribing and pulling out who agreed to what.</div>
-          </div>
-        </div>
-      )}
-
       {phase !== 'idle' && (
         <div className={'call-stage' + (minimized ? ' mini' : '') + (maximized ? ' max' : '')}>
           <div className="call-stage-head">
@@ -855,13 +769,13 @@ export default function CallCenter() {
               <div className="call-stage-sub">
                 {phase === 'ringing' ? 'Ringing…' : phase === 'connecting' ? 'Connecting…' : fmt(elapsed)}
                 {sharing && ' · sharing screen'}
-                {recordedBy && (
+                {transcribing && phase === 'live' && (
                   <span className={'rec-badge' + (speechDead ? ' muted-speech' : '')}
                     title={speechDead
-                      ? `Recording audio, but speech is not being captured: ${speechDead}`
-                      : `${heardCount} line${heardCount === 1 ? '' : 's'} captured so far`}>
-                    <span className="rec-dot" />REC
-                    {speechDead ? ' · audio only' : heardCount > 0 ? ` · ${heardCount}` : ''}
+                      ? `Transcribing, but not on this device: ${speechDead}`
+                      : `Transcribed for tasks — ${heardCount} line${heardCount === 1 ? '' : 's'} from you so far`}>
+                    <span className="rec-dot" />Transcribing
+                    {speechDead ? ' · not you' : heardCount > 0 ? ` · ${heardCount}` : ''}
                   </span>
                 )}
               </div>
@@ -921,17 +835,19 @@ export default function CallCenter() {
             <button className={'call-btn' + (sharing ? ' active' : '')} onClick={toggleShare} title={sharing ? 'Stop sharing' : 'Share screen'} aria-label="Share screen">
               <Ic name="screen" size={19} />
             </button>
-            {canRecord && (
-              <button
-                className={'call-btn' + (recording ? ' recording' : '')}
-                onClick={() => (recording ? stopRecordingAndFile() : startRecording())}
-                disabled={processing}
-                title={recording ? 'Stop recording and turn it into tasks — the call carries on' : 'Record this call and turn it into tasks'}
-                aria-label={recording ? 'Stop recording and create tasks' : 'Record this call and create tasks'}
-              >
-                <Ic name={recording ? 'taskAdd' : 'record'} size={19} />
-              </button>
-            )}
+            {/* The call's transcription switch. On by default; anyone on the
+                call may switch it off, and everyone is told who did. What was
+                said while it was on still becomes the summary. */}
+            <button
+              className={'call-btn' + (transcribing ? ' recording' : '')}
+              onClick={() => setCallTranscription(!transcribing)}
+              disabled={!callId}
+              title={transcribing ? 'Transcribing for tasks — press to stop for everyone' : 'Not transcribing — press to transcribe this call for tasks'}
+              aria-label={transcribing ? 'Stop transcribing this call' : 'Transcribe this call for tasks'}
+              aria-pressed={transcribing}
+            >
+              <Ic name={transcribing ? 'taskAdd' : 'record'} size={19} />
+            </button>
             <button className="call-btn decline" onClick={() => hangUp()} title="Leave the call" aria-label="Leave the call">
               <Ic name="callEnd" size={20} />
             </button>

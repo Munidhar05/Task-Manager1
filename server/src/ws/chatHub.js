@@ -15,6 +15,12 @@ import { db } from '../db.js'
 // userId -> Set<WebSocket>
 const clients = new Map()
 
+// Things to run whenever one of someone's devices connects. The chat routes
+// register here to move delivery ticks forward — a registry rather than an
+// import, because routes/chat.js already imports this module.
+const onlineHooks = []
+export function onUserOnline(fn) { onlineHooks.push(fn) }
+
 export function attachChatHub(server) {
   // `noServer` + manual upgrade routing so this shares the HTTP server with the
   // live-transcription socket without either aborting the other's handshakes.
@@ -43,6 +49,7 @@ export function attachChatHub(server) {
     // this socket who is currently online.
     try { ws.send(JSON.stringify({ type: 'presence-list', online: getOnlineUsers() })) } catch {}
     if (wasOffline) broadcastAll({ type: 'presence', userId: user.id, online: true })
+    for (const fn of onlineHooks) { try { fn(user.id) } catch (e) { console.warn('[chat] online hook failed:', e.message) } }
 
     // Relay ephemeral signals: "typing…", and WebRTC call negotiation.
     ws.on('message', (raw) => {
@@ -53,7 +60,10 @@ export function attachChatHub(server) {
         const isMember = db.prepare('SELECT 1 FROM chat_participants WHERE conversation_id=? AND user_id=?').get(msg.conversationId, user.id)
         if (!isMember) return
         const others = db.prepare('SELECT user_id FROM chat_participants WHERE conversation_id=? AND user_id!=?').all(msg.conversationId, user.id)
-        const payload = { type: 'typing', conversationId: msg.conversationId, userId: user.id, name: user.name, isTyping: !!msg.isTyping }
+        // mode 'recording' is WhatsApp's "recording audio…" — someone holding a
+        // voice note open, which is worth waiting for just like typing is.
+        const mode = msg.mode === 'recording' ? 'recording' : 'typing'
+        const payload = { type: 'typing', conversationId: msg.conversationId, userId: user.id, name: user.name, isTyping: !!msg.isTyping, mode }
         for (const o of others) pushToUser(o.user_id, payload)
         return
       }

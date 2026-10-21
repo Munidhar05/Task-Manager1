@@ -3929,6 +3929,367 @@ button.rx-row:hover { background: var(--bg); }
 .sel-bar .ic-btn.on { color: var(--primary); }
 .sel-bar .ic-btn.on svg { fill: currentColor; }
 
+/* ---- WhatsApp parity ---------------------------------------------------------
+   Everything the chat gained to work like WhatsApp: the three tick states, the
+   group event lines, picking several messages, swipe-to-reply, the cards a
+   message can be (task, poll, place, contact, link), the attach sheet, the
+   sheets those open, the photo viewer and the call log. Tokens throughout, so
+   the dark theme follows. */
+
+/* Ticks: one grey (sent), two grey (delivered), two blue (read). On the orange
+   bubble the "blue" is a deep one — the pale blue it used to be was all but
+   white, so read and delivered looked the same. */
+.ticks { display: inline-flex; align-items: center; color: var(--muted); line-height: 0; }
+.ticks.read { color: #2b8fd9; }
+.bubble.user .ticks { color: rgba(255,255,255,.78); }
+.bubble.user .ticks.read { color: #0b3a8f; }
+.bubble.user .ticks.pending { color: rgba(255,255,255,.65); }
+.chat-contact-preview .ticks { margin-right: 3px; vertical-align: -1px; }
+.edited-tag { font-style: normal; opacity: .85; }
+
+/* Four filter chips with counts are wider than a 300px list: they scroll
+   sideways rather than squeeze, as WhatsApp's do. */
+.chat-tabs { overflow-x: auto; scrollbar-width: none; }
+.chat-tabs::-webkit-scrollbar { display: none; }
+.chat-tab { flex: 0 0 auto; padding: 6px 11px; }
+
+/* Search in a chat: the words found, marked. */
+.msg-hit { background: #fde047; color: #1f2937; border-radius: 3px; padding: 0 1px; }
+
+/* The list: a dot for "marked unread", the time in colour when there is news,
+   "Draft:" in front of unsent text, and the Archived row on top. */
+.chat-unread-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--primary); flex-shrink: 0; }
+.chat-unread-dot.dim, .chat-unread-badge.dim { background: var(--n-400, #9ca3af); }
+.convo-time.fresh { color: var(--primary); font-weight: 700; }
+.convo-item.has-unread .convo-title { font-weight: 800; }
+.draft-tag { color: #16a34a; font-weight: 700; }
+.archived-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px; border: 0; border-radius: 9px;
+  background: transparent; color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; text-align: left;
+}
+.archived-row:hover { background: var(--bg); }
+.archived-ic { width: 38px; display: grid; place-items: center; color: var(--primary); }
+.archived-label { flex: 1; }
+.archived-count { font-size: 11.5px; color: var(--muted); font-weight: 700; }
+.archived-count.on { color: var(--primary); }
+
+/* Group events and the "summarising the call" line: centred, quiet, nobody's. */
+.sys-line { display: flex; justify-content: center; margin: 4px 0; }
+.sys-line span {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 86%; text-align: center;
+  padding: 4px 12px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border);
+  color: var(--muted); font-size: 11.5px; line-height: 1.4;
+}
+.sys-line.ai-working span { color: var(--primary); font-weight: 600; animation: sys-pulse 1.6s ease-in-out infinite; }
+@keyframes sys-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .sys-line.ai-working span { animation: none; } }
+.call-line-time { font-size: 11px; opacity: .8; }
+.older-row { display: flex; justify-content: center; padding: 6px 0 2px; min-height: 30px; }
+
+/* Back to the latest message, with how many arrived while you were away. A
+   pill in the middle of the thread's foot rather than WhatsApp's corner
+   button: the bottom-right corner belongs to the voice assistant's dock
+   (fixed, draggable, above everything), which sat right on top of it. */
+.chat-log-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat-log-wrap > .chat-log { flex: 1; min-height: 0; }
+.to-bottom {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 8;
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text);
+  font: inherit; font-size: 12.5px; font-weight: 700; box-shadow: var(--e-2); cursor: pointer;
+}
+.to-bottom:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.to-bottom svg { color: var(--primary); }
+.to-bottom-count { color: var(--primary); }
+
+/* Picking several messages: a check circle in front of each, the picked ones tinted. */
+.chat-log.picking .msg-wrap { position: relative; padding-left: 36px; }
+.chat-log.picking .msg-wrap.centred { padding-left: 0; }
+.pick-box {
+  position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; padding: 0;
+  display: grid; place-items: center; border-radius: 50%; border: 2px solid var(--n-400, #9ca3af);
+  background: var(--surface); color: #fff; cursor: pointer;
+}
+.pick-box.on { background: var(--primary); border-color: var(--primary); }
+.msg-wrap.picked { background: color-mix(in srgb, var(--primary) 12%, transparent); border-radius: 10px; }
+.chat-log.picking .msg-wrap:not(.centred) { cursor: pointer; }
+.multi-bar .sel-count { flex: 1; font-weight: 700; font-size: 15px; color: var(--text); }
+.sel-bar .ic-btn.danger { color: var(--danger-ink); }
+
+/* Swipe right to reply: the row follows the finger, the reply arrow fades in
+   behind it and fills once letting go would reply. */
+.msg-wrap { --swipe: 0px; }
+.msg-wrap.swiping { position: relative; }
+.msg-wrap.swiping > .msg-line { transform: translateX(var(--swipe)); }
+.swipe-ic {
+  position: absolute; left: 4px; top: 50%; width: 30px; height: 30px; margin-top: -15px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--bg); color: var(--muted); opacity: 0; transform: scale(.6); pointer-events: none;
+  transition: opacity .1s, transform .1s, background .1s, color .1s;
+}
+.msg-wrap.swiping .swipe-ic { opacity: .9; transform: scale(.85); }
+.msg-wrap.swipe-armed .swipe-ic { background: var(--primary); color: #fff; transform: scale(1); }
+@media (hover: none) {
+  .chat-layout .bubble { touch-action: pan-y; }
+}
+
+/* A quote is a button now: tapping it shows the message it quotes. */
+button.reply-quote {
+  width: 100%; border-top: 0; border-right: 0; border-bottom: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  flex-direction: row; align-items: center; gap: 8px;
+}
+.reply-quote-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.reply-quote-from { font-weight: 500; opacity: .8; }
+.reply-quote-thumb { width: 38px; height: 38px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+.reply-banner .reply-quote-thumb { width: 42px; height: 42px; }
+.reply-banner.editing { border-left-color: var(--primary); }
+.edit-banner-ic { color: var(--primary); display: inline-flex; }
+
+/* Long messages fold; pictures open in the viewer; videos play where they are. */
+.read-more { display: block; border: 0; background: transparent; padding: 2px 0 0; color: var(--primary); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.bubble.user .read-more { color: #fff; text-decoration: underline; }
+.chat-image-btn { display: block; border: 0; padding: 0; background: transparent; cursor: zoom-in; border-radius: 10px; line-height: 0; }
+.chat-video { display: block; max-width: 260px; max-height: 260px; border-radius: 10px; background: #000; }
+.chat-file-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: color-mix(in srgb, currentColor 12%, transparent); flex-shrink: 0; }
+
+/* Cards inside a bubble: the bubble gives them room and keeps the time below. */
+.bubble.card-bubble { padding: 6px; min-width: 240px; max-width: 300px; }
+.bubble.card-bubble .bubble-foot { position: static; display: flex; justify-content: flex-end; margin: 4px 4px 0; }
+.bubble.card-bubble .reply-quote { margin-bottom: 6px; }
+
+/* A task assigned from the chat. */
+.task-card {
+  display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 10px 11px; border-radius: 10px; text-align: left;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; cursor: pointer;
+}
+.task-card:hover { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+.task-card.done .task-card-title { text-decoration: line-through; opacity: .7; }
+.task-card.gone { flex-direction: row; align-items: center; color: var(--muted); font-style: italic; cursor: default; }
+.task-card-top { display: flex; align-items: center; gap: 6px; }
+.task-card-ic { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
+.task-card-kind { flex: 1; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--primary); }
+.task-card-status { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border: 1px solid; border-radius: 999px; }
+.task-card-title { font-weight: 700; font-size: 14px; line-height: 1.35; }
+.task-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--muted); }
+.task-card-who { display: inline-flex; align-items: center; gap: 5px; color: var(--text); font-weight: 600; }
+.task-card-due { display: inline-flex; align-items: center; gap: 4px; }
+.task-card-due.late { color: var(--danger-ink); font-weight: 700; }
+.task-card-pri { font-weight: 700; }
+.task-card-open { display: inline-flex; align-items: center; gap: 4px; align-self: flex-end; font-size: 11.5px; font-weight: 700; color: var(--primary); }
+
+/* Polls. */
+.poll-card { padding: 4px 4px 0; color: var(--text); }
+.bubble.user .poll-card { color: #fff; }
+.poll-q { display: flex; align-items: flex-start; gap: 7px; font-weight: 700; font-size: 14.5px; line-height: 1.35; margin-bottom: 2px; }
+.poll-ic { margin-top: 2px; opacity: .8; }
+.poll-hint { font-size: 11.5px; opacity: .75; margin-bottom: 8px; }
+.poll-opts { display: flex; flex-direction: column; gap: 4px; }
+.poll-opt {
+  display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 6px 4px; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.poll-opt:hover { background: color-mix(in srgb, currentColor 7%, transparent); }
+.poll-check {
+  width: 20px; height: 20px; flex-shrink: 0; margin-top: 1px; display: grid; place-items: center; border-radius: 50%;
+  border: 2px solid currentColor; opacity: .6;
+}
+.poll-check.sq { border-radius: 5px; }
+.poll-opt.on .poll-check { opacity: 1; background: #16a34a; border-color: #16a34a; color: #fff; }
+.poll-opt-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.poll-opt-row { display: flex; align-items: center; gap: 6px; }
+.poll-opt-text { flex: 1; min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.poll-faces { display: inline-flex; }
+.poll-faces .avatar { margin-left: -5px; box-shadow: 0 0 0 1.5px var(--surface); }
+.poll-count { font-size: 12.5px; font-weight: 700; min-width: 12px; text-align: right; }
+.poll-bar { height: 5px; border-radius: 3px; background: color-mix(in srgb, currentColor 16%, transparent); overflow: hidden; }
+.poll-bar span { display: block; height: 100%; border-radius: 3px; background: #16a34a; transition: width .25s; }
+.bubble.user .poll-bar span, .bubble.user .poll-opt.on .poll-check { background: #fff; border-color: #fff; color: var(--primary); }
+.poll-view {
+  display: block; width: calc(100% + 8px); margin: 8px -4px 0; padding: 9px 0 3px; border: 0; border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.bubble.ai .poll-view { color: var(--primary); }
+.pv-q { font-weight: 700; font-size: 15px; margin-bottom: 10px; }
+.pv-opt { padding: 10px 0; border-top: 1px solid var(--border); }
+.pv-opt-head { display: flex; justify-content: space-between; gap: 10px; font-weight: 700; font-size: 13.5px; margin-bottom: 6px; }
+.pv-voter { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 13.5px; }
+.pv-none { font-size: 12.5px; color: var(--muted); }
+.pc-opt { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.pc-opt .ta-input { flex: 1; }
+.pc-multi { display: flex; align-items: center; gap: 9px; margin-top: 10px; font-size: 13.5px; cursor: pointer; }
+.pc-warn { font-size: 12.5px; color: var(--danger-ink); margin: 4px 0; }
+
+/* A shared place: three map tiles centred on the pin, and its name. */
+.loc-card { display: block; width: 264px; max-width: 100%; border-radius: 10px; overflow: hidden; color: inherit; text-decoration: none; background: var(--surface); border: 1px solid var(--border); }
+.loc-map { position: relative; display: block; overflow: hidden; background: #e5e7eb; max-width: 100%; }
+.loc-map img { position: absolute; width: 256px; height: 256px; max-width: none; user-select: none; }
+.loc-pin { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -92%); color: #7f1d1d; filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); line-height: 0; }
+.loc-pin svg { fill: #ef4444; }
+.loc-attr { position: absolute; right: 3px; bottom: 2px; font-size: 9px; color: #374151; background: rgba(255,255,255,.75); padding: 0 3px; border-radius: 3px; }
+.loc-label { display: flex; flex-direction: column; padding: 7px 10px; color: var(--text); }
+.loc-title { font-weight: 700; font-size: 13px; }
+.loc-sub { font-size: 11.5px; color: var(--muted); }
+.lp-map { display: flex; justify-content: center; margin-bottom: 10px; }
+
+/* A teammate's contact. */
+.contact-card { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 8px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+.contact-card.gone { color: var(--muted); font-style: italic; font-size: 12.5px; }
+.contact-card-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.contact-card-text { min-width: 0; display: flex; flex-direction: column; }
+.contact-card-name { font-weight: 700; font-size: 14px; }
+.contact-card-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contact-card-role { text-transform: capitalize; }
+.contact-card-btn { border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--primary); font: inherit; font-weight: 700; font-size: 13px; padding: 8px 0 2px; cursor: pointer; }
+
+/* A link's preview card. */
+.link-prev {
+  display: flex; flex-direction: column; margin: 2px 0 6px; border-radius: 9px; overflow: hidden; text-decoration: none; color: inherit;
+  background: color-mix(in srgb, currentColor 8%, transparent); border-left: 3px solid color-mix(in srgb, currentColor 35%, transparent); max-width: 300px;
+}
+.link-prev-img { width: 100%; max-height: 150px; object-fit: cover; display: block; }
+.link-prev-text { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; }
+.link-prev-title { font-weight: 700; font-size: 13px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link-prev-desc { font-size: 12px; opacity: .85; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link-prev-site { font-size: 11px; opacity: .7; }
+
+/* The summary a call leaves: who walked away with what. */
+.meeting-card { cursor: default; }
+.meeting-card:hover { border-color: var(--border); }
+.mc-spark { display: inline-flex; width: 22px; height: 22px; justify-content: center; align-items: center; border-radius: 6px; background: color-mix(in srgb, var(--primary) 15%, transparent); }
+button.meeting-card-sum { display: -webkit-box; width: 100%; border: 0; padding: 0; background: transparent; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; color: var(--text); }
+button.meeting-card-sum.open { display: block; -webkit-line-clamp: unset; }
+.mc-tasks { margin-top: 9px; border-top: 1px solid var(--border); padding-top: 7px; display: flex; flex-direction: column; gap: 2px; }
+.mc-tasks-head { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+.mc-task { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 4px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.mc-task:hover:not(:disabled) { background: var(--bg); }
+.mc-task:disabled { cursor: default; }
+.mc-task-check { width: 16px; height: 16px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: #16a34a; color: #fff; }
+.mc-task-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-task-who { flex-shrink: 0; font-weight: 700; color: var(--muted); }
+.mc-task-who.me { color: var(--primary); }
+button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--primary); cursor: pointer; }
+
+/* Group: only admins may write — the box gives way to a line saying so. */
+.composer.readonly-bar { text-align: center; color: var(--muted); font-size: 13px; padding: 14px 12px; border-top: 1px solid var(--border); background: var(--bg); }
+
+/* The attach sheet: WhatsApp's round coloured icons over their names. */
+.attach-pop.attach-grid { display: grid; grid-template-columns: repeat(4, 76px); gap: 4px; padding: 10px; min-width: 0; right: 0; }
+.attach-grid button { flex-direction: column; justify-content: flex-start; gap: 6px; padding: 8px 2px; font-size: 11.5px; text-align: center; border-radius: 10px; }
+.attach-grid .ag-ic { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+.attach-grid button svg { color: #fff; }
+.ag-ic.doc { background: #7c3aed; } .ag-ic.media { background: #db2777; } .ag-ic.cam { background: #e11d48; }
+.ag-ic.loc { background: #16a34a; } .ag-ic.contact { background: #0284c7; } .ag-ic.poll { background: #d97706; }
+.ag-ic.task { background: var(--primary); } .ag-ic.paste { background: #475569; }
+
+/* Sheets: a card in the middle on a wide screen, from the bottom on a phone. */
+.wa-sheet { max-width: 440px; padding: 0; overflow: hidden; }
+.wa-sheet-head { display: flex; align-items: center; gap: 8px; padding: 10px 8px 10px 16px; border-bottom: 1px solid var(--border); }
+.wa-sheet-head h3 { flex: 1; margin: 0; font-size: 16px; }
+.wa-sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 14px; }
+.wa-sheet-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); }
+@media (max-width: 720px) {
+  .wa-sheet-overlay { place-items: end stretch; padding: 0; }
+  .wa-sheet { max-width: none; max-height: 88dvh; border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+}
+
+/* The Assign-a-task sheet. */
+.ta-head-ic { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); }
+.ta-quote { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; margin-bottom: 10px; border-left: 3px solid var(--primary); border-radius: 6px; background: var(--bg); }
+.ta-quote-who { font-size: 11.5px; font-weight: 700; color: var(--primary); }
+.ta-quote-text { font-size: 12.5px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.ta-label { display: block; margin: 12px 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.ta-label:first-of-type { margin-top: 2px; }
+.ta-input { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.ta-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(242,98,46,.12); }
+.ta-notes { resize: vertical; min-height: 56px; }
+.ta-people { display: flex; flex-wrap: wrap; gap: 6px; }
+.ta-person {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px 4px 4px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.ta-person.on { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, var(--surface)); box-shadow: inset 0 0 0 1px var(--primary); }
+.ta-more { color: var(--muted); }
+.ta-more-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); }
+.ta-pick { display: flex; flex-direction: column; gap: 6px; }
+.ta-pick-list { max-height: 210px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.ta-pick-list.tall { max-height: 52dvh; margin-top: 8px; }
+.ta-pick-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.ta-pick-row:hover, .ta-pick-row.on { background: var(--bg); }
+.ta-pick-name { flex: 1; min-width: 0; display: flex; flex-direction: column; font-weight: 600; }
+.ta-pick-sub { font-size: 11.5px; font-weight: 500; color: var(--muted); text-transform: capitalize; }
+.ta-load { font-size: 11px; font-weight: 700; color: var(--muted); }
+.ta-load.late { color: var(--danger-ink); }
+.ta-loadline { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 12px; color: var(--muted); }
+.ta-loadline.late { color: var(--danger-ink); }
+.ta-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ta-chip { padding: 6px 11px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.ta-chip.on { border-color: var(--primary); color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
+.ta-date { padding: 5px 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; }
+.ta-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px; border-radius: 10px; background: var(--bg); }
+.ta-seg-btn { padding: 7px 4px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.ta-seg-btn.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+.ta-seg-btn.on.p-critical { color: var(--danger-ink); }
+.ta-seg-btn.on.p-high { color: var(--warning-ink); }
+.ta-seg-btn.on.p-medium { color: var(--info-ink); }
+.ta-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--muted); font-size: 13px; text-align: center; }
+
+/* Message info. */
+.mi-preview { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.mi-bubble { max-width: 90%; white-space: pre-wrap; }
+.mi-sec { padding: 8px 0; border-top: 1px solid var(--border); }
+.mi-sec-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 800; color: var(--muted); margin-bottom: 4px; }
+.mi-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.mi-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13.5px; }
+.mi-when { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.mi-none { font-size: 12.5px; color: var(--muted); padding: 4px 0; }
+.mi-sent { font-size: 11.5px; color: var(--muted); padding-top: 8px; border-top: 1px solid var(--border); }
+
+/* Delete for me / for everyone. */
+.del-dialog { max-width: 340px; padding: 18px 18px 10px; }
+.del-title { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
+.del-sub { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.del-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin-top: 8px; }
+.del-btn { border: 0; background: transparent; padding: 9px 10px; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 700; color: var(--primary); cursor: pointer; }
+.del-btn:hover { background: var(--bg); }
+.del-btn.danger { color: var(--danger-ink); }
+.del-btn.ghost { color: var(--muted); }
+
+/* The call log. */
+.calls-sheet .modal-tabs { margin-bottom: 6px; }
+.cl-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.cl-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 6px; border: 0; border-radius: 9px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.cl-main:hover { background: var(--bg); }
+.cl-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cl-name { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cl-name.missed { color: var(--danger-ink); }
+.cl-sub { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.cl-dir { display: inline-flex; }
+.cl-dir.out, .cl-dir.in { color: #16a34a; }
+.cl-dir.missed { color: var(--danger-ink); }
+.cl-sum { border: 1px solid var(--border); background: var(--surface); color: var(--primary); font: inherit; font-size: 11.5px; font-weight: 700; padding: 4px 9px; border-radius: 999px; cursor: pointer; }
+.cl-call { color: var(--primary); }
+
+/* The photo viewer: the picture on black, full screen, over everything. */
+.mv-overlay { position: fixed; inset: 0; z-index: 1400; display: flex; flex-direction: column; background: rgba(8,10,14,.96); color: #fff; animation: overlay-fade .16s ease; }
+.mv-head { display: flex; align-items: center; gap: 4px; padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px; }
+.mv-who { flex: 1; min-width: 0; }
+.mv-name { font-weight: 700; font-size: 14.5px; }
+.mv-when { font-size: 12px; opacity: .7; }
+.mv-btn { width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #fff; cursor: pointer; }
+.mv-btn:hover { background: rgba(255,255,255,.12); }
+.mv-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
+.mv-media { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+.mv-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
+.mv-nav:hover { background: rgba(255,255,255,.22); }
+.mv-nav.prev { left: 12px; } .mv-nav.next { right: 12px; }
+.mv-caption { padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); text-align: center; font-size: 14px; white-space: pre-wrap; background: rgba(0,0,0,.35); }
+@media (hover: none) { .mv-nav { display: none; } }
+
+/* Info panel: the group's description and who made it. */
+.ci-desc { display: flex; align-items: flex-start; gap: 6px; padding: 12px 16px 4px; }
+.ci-desc-text { flex: 1; min-width: 0; white-space: pre-wrap; font-size: 13.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.ci-add-desc .ci-row-text span { color: var(--primary); font-weight: 600; }
+.ci-created { padding: 6px 16px 12px; font-size: 12px; color: var(--muted); }
+
 /* ---- chat info: Group info / Contact info ------------------------------------
    WhatsApp's layout: white sections on the grey page, each a separate band —
    who it is, what was shared, the members, settings, the way out. A drawer

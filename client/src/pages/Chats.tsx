@@ -16,34 +16,17 @@ import { audioFilename } from '../lib/audioFile'
 import { startLiveSpeech, isSupported as speechSupported, LiveSpeech } from '../lib/liveSpeech'
 import { useSurface } from '../voice/uiRegistry'
 import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiController'
-
-// `role` is the person's role in this chat (admin / member); `job_role` is who
-// they are in the workspace (manager / employee), which is what a contact's
-// subtitle should say.
-interface Member { id: string; name: string; avatar_color?: string; avatar_file?: string | null; role: string; job_role?: string; status_text?: string; status_emoji?: string; dnd_until?: string | null }
-interface Conversation {
-  id: string; type: 'direct' | 'group'; name: string; avatar_color?: string; avatar_file?: string | null
-  other_user_id?: string | null; other_last_seen?: string | null; member_count: number; members: Member[]; role: string
-  last_message: string | null; last_sender_name: string | null; last_from_me: boolean; last_at: string | null; unread: number
-  muted?: boolean; pinned?: boolean; visibility?: 'private' | 'public'
-}
-interface Reaction { emoji: string; user_id: string }
-// Who a message named. Carried as ids + current names rather than re-parsed from
-// the body, so two teammates sharing a first name stay distinguishable.
-interface MentionRef { id: string; name: string }
-interface ReplyPreview { id: string; sender_id: string; sender_name: string; text: string }
-interface ChatFile { name: string; type?: string; size?: number }
-interface Msg {
-  id: string; conversation_id: string; sender_id: string; body: string; created_at: string
-  edited_at?: string | null; forwarded?: boolean; reply_to?: string | null; reply?: ReplyPreview | null; file?: ChatFile | null
-  reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; deleted?: boolean; uploading?: boolean
-  pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
-}
-// A finished call leaves a line in the thread instead of a chat bubble.
-interface CallInfo { id: string; kind: 'audio' | 'video'; status: string; started_by: string; duration_sec: number; joined: number }
-// The audit a transcribed call leaves behind, shown where the call happened.
-interface MeetingCard { id: string; title: string; summary: string; engine?: string; tasks: number; decisions: number; risks: number; blockers: number }
-interface OrgUser { id: string; name: string; email: string; role: string; avatar_color?: string; avatar_file?: string | null }
+import TaskDrawer from '../components/TaskDrawer'
+import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, LocationRef, Poll } from '../components/chat/types'
+import { fileUrl, isAudio, isEditable, isForwardable, isRecordLine } from '../components/chat/types'
+import {
+  CopyGlyph, Ticks, PollGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
+  ArchiveGlyph, InfoGlyph, SelectGlyph, ExportGlyph, PencilGlyph, ChevronDown, DotsV, SparkGlyph,
+} from '../components/chat/glyphs'
+import TaskAssignSheet, { Draft } from '../components/chat/TaskAssignSheet'
+import { TaskCard, PollCard, PollVotesSheet, LocationCard, ContactCard, LinkPreview, CallSummaryCard } from '../components/chat/MessageCards'
+import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPicker, CallsSheet, DescriptionEditor } from '../components/chat/ChatDialogs'
+import MediaViewer from '../components/chat/MediaViewer'
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 const MAX_FILE = 15 * 1024 * 1024
@@ -65,21 +48,31 @@ const TAP_SKIP = 'a, button, .vp, ' + PRESS_SKIP
 // menuId's value while the action bar's own ⋮ menu is open (not a message id).
 const SEL_MENU = '__selection__'
 // One action a message offers — shared by the desktop menu and the phone bar.
-interface MsgAction { key: string; label: string; icon?: React.ComponentProps<typeof Ic>['name']; bar?: boolean; on?: boolean; danger?: boolean; run: () => void }
+interface MsgAction { key: string; label: string; icon?: React.ComponentProps<typeof Ic>['name']; glyph?: 'copy' | 'pencil'; bar?: boolean; on?: boolean; danger?: boolean; run: () => void }
 // A file waiting above the composer for Send; `url` is a preview for pictures.
 interface StagedFile { id: string; file: File; url: string | null }
 // How many files can wait for one Send.
 const MAX_STAGED = 10
-// There is no copy glyph in the shared icon set; this matches its line style.
-function CopyGlyph({ size = 19 }: { size?: number }) {
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
-    </svg>
-  )
+// A message longer than this folds behind "Read more", as on WhatsApp — one
+// pasted log should not push a whole conversation off the screen.
+const FOLD_CHARS = 700
+const FOLD_LINES = 14
+// The folded part: whole lines up to the limit, then whole words, then "…".
+function foldText(text: string) {
+  let t = text.split('\n').slice(0, FOLD_LINES).join('\n')
+  if (t.length > FOLD_CHARS) {
+    t = t.slice(0, FOLD_CHARS)
+    const sp = t.lastIndexOf(' ')
+    if (sp > FOLD_CHARS * 0.7) t = t.slice(0, sp)
+  }
+  return t.replace(/\s+$/, '') + '…'
 }
-const isAudio = (f?: ChatFile | null) => !!f && ((f.type || '').startsWith('audio/') || /\.(webm|m4a|mp3|ogg|wav)$/i.test(f.name || ''))
-const fileUrl = (m: Msg, download = false) => `/api/chat/file/${m.id}?token=${getToken()}${download ? '&download=1' : ''}`
+// How far a finger drags a message right before letting go replies to it.
+const SWIPE_REPLY_PX = 56
+// Unsent text per chat, kept on this device (WhatsApp's "Draft:" in the list).
+const DRAFTS_KEY = 'chatDrafts'
+const readDrafts = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {} } catch { return {} } }
+const writeDrafts = (d: Record<string, string>) => { try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(d)) } catch { /* private mode: just not kept */ } }
 
 function relTime(iso: string | null) {
   if (!iso) return ''
@@ -194,10 +187,13 @@ function LoadPop({ name, load, canOpen, onOpen }: { name: string; load: { open: 
   )
 }
 
-// The list's three views. "Personal" is the one-to-one chats (type 'direct').
-type ListTab = 'all' | 'group' | 'direct'
+// The list's views, WhatsApp's filter chips. "Personal" is the one-to-one
+// chats (type 'direct'); "Unread" is anything with new messages or marked
+// unread by hand.
+type ListTab = 'all' | 'unread' | 'group' | 'direct'
 const LIST_TABS: { id: ListTab; label: string; empty: string }[] = [
   { id: 'all', label: 'All', empty: 'No chats yet' },
+  { id: 'unread', label: 'Unread', empty: 'You are all caught up' },
   { id: 'group', label: 'Groups', empty: 'No group chats yet' },
   { id: 'direct', label: 'Personal', empty: 'No personal chats yet' },
 ]
@@ -278,7 +274,27 @@ function renderInline(text: string, mentionNames: string[], meNames: Set<string>
   return out
 }
 
-function MessageText({ body, mentions, meId, fromMe }: { body: string; mentions?: MentionRef[]; meId: string; fromMe: boolean }) {
+// Mark every place the in-chat search matches, inside plain text only (a link
+// or a mention chip keeps its own look).
+function markMatches(nodes: React.ReactNode[], q: string): React.ReactNode[] {
+  const needle = q.trim().toLowerCase()
+  if (!needle) return nodes
+  return nodes.flatMap((n, i) => {
+    if (typeof n !== 'string') return [n]
+    const out: React.ReactNode[] = []
+    const low = n.toLowerCase()
+    let at = 0
+    for (let hit = low.indexOf(needle); hit >= 0; hit = low.indexOf(needle, at)) {
+      if (hit > at) out.push(n.slice(at, hit))
+      out.push(<mark key={`h${i}-${hit}`} className="msg-hit">{n.slice(hit, hit + needle.length)}</mark>)
+      at = hit + needle.length
+    }
+    if (at < n.length) out.push(n.slice(at))
+    return out
+  })
+}
+
+function MessageText({ body, mentions, meId, fromMe, highlight }: { body: string; mentions?: MentionRef[]; meId: string; fromMe: boolean; highlight?: string }) {
   const refs = mentions || []
   const names = refs.map((r) => r.name)
   // Which @names refer to ME — drives the stronger chip. @all counts, but not in
@@ -300,7 +316,7 @@ function MessageText({ body, mentions, meId, fromMe }: { body: string; mentions?
   }
   if (last < body.length) nodes.push(...renderInline(body.slice(last), names, meNames, `t${i}`))
 
-  return <span className="bubble-text">{nodes}</span>
+  return <span className="bubble-text">{highlight ? markMatches(nodes, highlight) : nodes}</span>
 }
 
 // Group avatar: uploaded photo if present, else a '#' tile.
@@ -415,7 +431,7 @@ export default function Chats() {
   // The message whose "who reacted" sheet is open.
   const [reactionsOf, setReactionsOf] = useState<string | null>(null)
   const [listTab, setListTab] = useState<ListTab>(() => {
-    try { const v = localStorage.getItem(LIST_TAB_KEY); return v === 'group' || v === 'direct' ? v : 'all' } catch { return 'all' }
+    try { const v = localStorage.getItem(LIST_TAB_KEY); return v === 'group' || v === 'direct' || v === 'unread' ? v : 'all' } catch { return 'all' }
   })
   useEffect(() => { try { localStorage.setItem(LIST_TAB_KEY, listTab) } catch { /* private mode: just not remembered */ } }, [listTab])
   const [slashQ, setSlashQ] = useState<string | null>(null)
@@ -426,7 +442,47 @@ export default function Chats() {
   const [transcribing, setTranscribing] = useState<string | null>(null)
   const [summarising, setSummarising] = useState<string | null>(null)
   const [flashId, setFlashId] = useState<string | null>(null)
-  const [forwardMsg, setForwardMsg] = useState<Msg | null>(null)
+  // Forward takes a list: one message from its menu, several from a selection.
+  const [forwardMsgs, setForwardMsgs] = useState<Msg[] | null>(null)
+  // Assign a task without leaving the chat (TaskAssignSheet): the message it
+  // came from, if any, and the server's pre-filled draft.
+  const [assignFor, setAssignFor] = useState<{ source: Msg | null; draft: Draft } | null>(null)
+  // A task opened from a card in the thread, over the chat.
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null)
+  const [infoFor, setInfoFor] = useState<Msg | null>(null)
+  // Delete asks "for me, or for everyone?" — for one message or a selection.
+  const [deleteFor, setDeleteFor] = useState<Msg[] | null>(null)
+  // WhatsApp's multi-select: null when off; otherwise the ids picked, in the
+  // order they were picked. Entered from a message's "Select", from ⋮, or (on a
+  // touch screen) by tapping a second message while one is selected.
+  const [multi, setMulti] = useState<string[] | null>(null)
+  const [pollOpen, setPollOpen] = useState(false)
+  const [votesFor, setVotesFor] = useState<string | null>(null)
+  const [locOpen, setLocOpen] = useState(false)
+  const [contactOpen, setContactOpen] = useState(false)
+  const [callsOpen, setCallsOpen] = useState(false)
+  const [viewerAt, setViewerAt] = useState<string | null>(null)
+  const [descOpen, setDescOpen] = useState(false)
+  // Older pages of a long chat, fetched on scrolling to the top.
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  // A call in this chat is being turned into its summary and tasks right now.
+  const [summarisingCall, setSummarisingCall] = useState<Record<string, boolean>>({})
+  // Who is typing (or recording a voice note) in each chat, for the list rows.
+  const [typingIn, setTypingIn] = useState<Record<string, { name: string; mode: string }>>({})
+  const [typingMode, setTypingMode] = useState<'typing' | 'recording'>('typing')
+  const [showArchived, setShowArchived] = useState(false)
+  const [drafts, setDrafts] = useState<Record<string, string>>(readDrafts)
+  // Messages opened past "Read more".
+  const [unfolded, setUnfolded] = useState<Set<string>>(new Set())
+  // The thread scrolled away from the bottom: the ⌄ button, and how many new
+  // messages arrived below while it was.
+  const [awayFromBottom, setAwayFromBottom] = useState(false)
+  const [newBelow, setNewBelow] = useState(0)
+  const [threadLoading, setThreadLoading] = useState(false)
+  // The message "Reply privately" is answering, carried across the switch to
+  // the direct chat (switching chats otherwise drops a pending reply).
+  const pendingReplyRef = useRef<Msg | null>(null)
   // @mention composer state: the open picker, its keyboard cursor, and everyone
   // picked so far in this draft (filtered against the text again at send time).
   const [mentionQ, setMentionQ] = useState<{ q: string; start: number } | null>(null)
@@ -438,6 +494,8 @@ export default function Chats() {
   const [convoMenu, setConvoMenu] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const mediaRef = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const voiceRecRef = useRef<MediaRecorder | null>(null)
   const voiceChunksRef = useRef<BlobPart[]>([])
@@ -452,6 +510,10 @@ export default function Chats() {
   const activeIdRef = useRef('')
   const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const typingSentRef = useRef(0)
+  const listTypingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const awayRef = useRef(false)
+  // Text that was in the box when an edit began, put back when the edit ends.
+  const editStashRef = useRef('')
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
 
   const active = useMemo(() => convos.find((c) => c.id === activeId) || null, [convos, activeId])
@@ -557,12 +619,15 @@ export default function Chats() {
   }, [])
   const loadPins = (cid: string) => api.get(`/chat/conversations/${cid}/pinned`).then((d) => setPinned(d.items)).catch(() => setPinned([]))
   const loadThread = (cid: string) => api.get(`/chat/conversations/${cid}`).then((d) => {
+    // The answer to a chat we have since left must not overwrite the one now open.
+    if (cid !== activeIdRef.current) return
     setMessages(d.messages)
+    setHasMore(!!d.has_more)
     setThreadLastRead(d.last_read_at || null)
     if (d.conversation.type === 'direct' && d.conversation.other_user_id && d.conversation.other_last_seen) {
       setLastSeen((s) => ({ ...s, [d.conversation.other_user_id]: d.conversation.other_last_seen }))
     }
-    setConvos((cs) => cs.map((c) => (c.id === cid ? { ...c, unread: 0, members: d.conversation.members, role: d.conversation.role, muted: d.conversation.muted, pinned: d.conversation.pinned } : c)))
+    setConvos((cs) => cs.map((c) => (c.id === cid ? { ...c, ...d.conversation, unread: 0, marked_unread: false } : c)))
     pingNav()
     // Arrived via a message link — land on that line rather than the bottom.
     const want = deepMsgRef.current
@@ -570,7 +635,38 @@ export default function Chats() {
       deepMsgRef.current = null
       requestAnimationFrame(() => scrollToMessage(want))
     }
+    // "Assign as task" from the Mentions inbox: the chat it lives in is open
+    // now, so the sheet can offer its people.
+    const assignId = pendingAssignRef.current
+    if (assignId) {
+      pendingAssignRef.current = null
+      // Older than the page that loaded: the sheet still opens, just without
+      // the quote of the message on screen.
+      const src = (d.messages as Msg[]).find((x) => x.id === assignId) || null
+      void toTask({ messageId: assignId }, src)
+    }
   }).catch(() => {})
+  const pendingAssignRef = useRef<string | null>(null)
+
+  // The page before the oldest message on screen, kept in place: the thread is
+  // re-anchored by the height it grew, so what you were reading does not jump.
+  const keepScrollRef = useRef<number | null>(null)
+  const loadOlder = () => {
+    const cid = activeIdRef.current
+    const first = messages.find((m) => !m.id.startsWith('tmp_'))
+    if (!cid || !first || loadingOlder || !hasMore) return
+    setLoadingOlder(true)
+    api.get(`/chat/conversations/${cid}?before=${encodeURIComponent(first.created_at)}`).then((d) => {
+      if (cid !== activeIdRef.current) return
+      keepScrollRef.current = logRef.current ? logRef.current.scrollHeight - logRef.current.scrollTop : null
+      setMessages((cur) => [...(d.messages as Msg[]).filter((x) => !cur.some((y) => y.id === x.id)), ...cur])
+      setHasMore(!!d.has_more)
+    }).catch(() => {}).finally(() => setLoadingOlder(false))
+  }
+  React.useLayoutEffect(() => {
+    const el = logRef.current
+    if (el && keepScrollRef.current !== null) { el.scrollTop = el.scrollHeight - keepScrollRef.current; keepScrollRef.current = null }
+  }, [messages])
 
   // Open a conversation and land on a specific message. The same-thread case has
   // to be handled explicitly: setActiveId to the value it already holds does not
@@ -593,6 +689,16 @@ export default function Chats() {
     setFlashId(id)
     setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1800)
     return true
+  }
+  // Tapping a quote shows what it quotes — in this chat, or (a private reply
+  // to a group message) in the group it came from.
+  const jumpToReply = (rep: { id: string; conversation_id?: string }) => {
+    if (rep.conversation_id && rep.conversation_id !== activeIdRef.current) {
+      if (convos.some((c) => c.id === rep.conversation_id)) openMessage(rep.conversation_id, rep.id)
+      return
+    }
+    if (inSearch) { setInSearch(''); setInSearchOpen(false) }
+    requestAnimationFrame(() => { if (!scrollToMessage(rep.id)) toast.info(hasMore ? 'That message is further back — scroll up to load earlier messages' : 'That message is no longer in this chat') })
   }
 
   useEffect(() => {
@@ -632,10 +738,22 @@ export default function Chats() {
   // taps a conversation to open it (and the back arrow returns to the list).
   useEffect(() => {
     setLoadOpen(false); setSelectedId(null); setReactionsOf(null); setHeadMenu(false); setJumpOpen(false); setAttachMenu(false)
+    setMulti(null); setUnfolded(new Set()); setAwayFromBottom(false); setNewBelow(0); setHasMore(false); setTypingName(null)
     // Files staged for one chat do not follow you into the next.
     if (stagedRef.current.length) { stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)); setStaged([]) }
+    // ...but what you were typing does: each chat keeps its own unsent text.
+    setInput(activeId ? (readDrafts()[activeId] || '') : '')
+    setPicked([]); setMentionQ(null); setSlashQ(null)
+    // The thread of the chat being left does not linger behind the list.
+    setMessages([])
     if (activeId) {
-      loadThread(activeId); loadPins(activeId); setReplyTo(null); setEditing(null); setInSearch(''); setInSearchOpen(false); setPinsOpen(false)
+      setThreadLoading(true)
+      loadThread(activeId).finally(() => setThreadLoading(false)); loadPins(activeId); setEditing(null); setInSearch(''); setInSearchOpen(false); setPinsOpen(false)
+      // "Reply privately" opened this chat to answer a message from a group.
+      const priv = pendingReplyRef.current
+      pendingReplyRef.current = null
+      setReplyTo(priv)
+      if (priv) requestAnimationFrame(() => inputRef.current?.focus())
       // A switch closes the info panel — unless the entry being shown is this
       // chat's own info entry (a reload with it open, Back or Forward onto it).
       if (!(navRef.current.chat === activeId && navRef.current.info)) setShowInfo(false)
@@ -646,17 +764,40 @@ export default function Chats() {
   // scrolled up to read history. Opening a thread always starts at the bottom.
   const forceScrollRef = useRef(true)
   useEffect(() => { forceScrollRef.current = true }, [activeId])
+  // Only a NEW last message of mine pulls the thread down — an older page
+  // arriving above, or a reaction on my last message, is not me sending.
+  const lastIdRef = useRef<string | null>(null)
   useEffect(() => {
     const el = logRef.current
     if (!el || inSearchOpen) return
     const last = messages[messages.length - 1]
-    const mine = !!last && last.sender_id === user?.id
+    const fresh = !!last && last.id !== lastIdRef.current
+    lastIdRef.current = last?.id || null
+    const mine = fresh && last.sender_id === user?.id
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
     if (forceScrollRef.current || mine || nearBottom) {
       el.scrollTo(0, el.scrollHeight)
       if (messages.length) forceScrollRef.current = false
     }
   }, [messages, busy, typingName, inSearchOpen])
+  // Watching the scroll: the ⌄ button once you are away from the bottom, and
+  // the next page of history once you reach the top.
+  const onLogScroll = () => {
+    const el = logRef.current
+    if (!el) return
+    const away = el.scrollHeight - el.scrollTop - el.clientHeight > 300
+    if (away !== awayRef.current) { awayRef.current = away; setAwayFromBottom(away); if (!away) setNewBelow(0) }
+    if (el.scrollTop < 120 && hasMore && !loadingOlder && !inSearch.trim()) loadOlder()
+  }
+  // From far back in a long chat, a jump (as WhatsApp does) — gliding past
+  // hundreds of messages takes long enough to look like nothing happened.
+  const toBottom = () => {
+    const el = logRef.current
+    if (!el) return
+    const far = el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight * 3
+    el.scrollTo({ top: el.scrollHeight, behavior: far ? 'auto' : 'smooth' })
+    setNewBelow(0)
+  }
   useEffect(() => { const h = () => { setMenuId(null); setReactFor(null); setConvoMenu(null); setJumpOpen(false); setEmojiFor(null); setHeadMenu(false); setLoadOpen(false); setSelectedId(null); setAttachMenu(false) }; document.addEventListener('click', h); return () => document.removeEventListener('click', h) }, [])
 
   // An open thread is a full-screen surface on a phone: the app's top bar (title,
@@ -700,22 +841,30 @@ export default function Chats() {
   // Android back button: close the top-most open layer (menu → modal → search →
   // conversation list) instead of leaving Chats / quitting the app.
   useEffect(() => pushBackHandler(() => {
+    if (viewerAt) { setViewerAt(null); return true }
+    if (openTaskId) { setOpenTaskId(null); return true }
     if (emojiFor) { setEmojiFor(null); return true }
     if (attachMenu) { setAttachMenu(false); return true }
     if (recording) { finishVoiceNote(true); return true }
     if (mentionQ) { setMentionQ(null); return true }
     if (reactionsOf) { setReactionsOf(null); return true }
+    if (assignFor || infoFor || deleteFor || pollOpen || votesFor || locOpen || contactOpen || callsOpen || descOpen) {
+      setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
+      return true
+    }
     if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen) { setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); return true }
+    if (multi) { setMulti(null); return true }
     if (selectedId) { setSelectedId(null); return true }
-    if (forwardMsg) { setForwardMsg(null); return true }
+    if (forwardMsgs) { setForwardMsgs(null); return true }
     if (showMentions) { setShowMentions(false); return true }
     if (showStarred) { setShowStarred(false); return true }
     if (showInfo) { setShowInfo(false); return true }
     if (showNew) { setShowNew(false); return true }
     if (inSearchOpen) { setInSearchOpen(false); setInSearch(''); return true }
     if (activeId) { setActiveId(''); return true } // open chat → back to the list
+    if (showArchived) { setShowArchived(false); return true }
     return false
-  }), [emojiFor, attachMenu, recording, mentionQ, reactionsOf, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, selectedId, forwardMsg, showMentions, showStarred, showInfo, showNew, inSearchOpen, activeId])
+  }), [viewerAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, showInfo, showNew, inSearchOpen, activeId, showArchived])
 
   // Escape closes the top-most of this page's own popups — a menu or picker,
   // then the selected message — one layer per press. Dialogs, the emoji picker
@@ -724,7 +873,7 @@ export default function Chats() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented || emojiFor || reactionsOf || showInfo) return
-      if (document.querySelector('.confirm-center, .modal-overlay')) return
+      if (document.querySelector('.confirm-center, .modal-overlay, .mv-overlay')) return
       if (attachMenu) { setAttachMenu(false); inputRef.current?.focus(); return }
       if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen) {
         const inPopup = (document.activeElement as HTMLElement | null)?.closest('.msg-menu-wrap, .msg-tools, .convo-menu-wrap')
@@ -732,11 +881,12 @@ export default function Chats() {
         inPopup?.querySelector<HTMLElement>('button')?.focus()
         return
       }
+      if (multi) { setMulti(null); return }
       if (selectedId) setSelectedId(null)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [emojiFor, attachMenu, reactionsOf, showInfo, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, selectedId])
+  }, [emojiFor, attachMenu, reactionsOf, showInfo, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, selectedId, multi])
   // When a selection ends with focus nowhere (the bar or tray button that had it
   // went away with the selection), hand focus back to the message itself rather
   // than to the top of the page. After the frame, so an action that moves focus
@@ -772,11 +922,35 @@ export default function Chats() {
         if (d.type === 'message' && d.message) {
           if (inActive) {
             mergeIncoming(d.message)
-            if (d.message.sender_id !== user.id) api.post(`/chat/conversations/${activeIdRef.current}/read`).catch(() => {})
+            if (d.message.sender_id !== user.id && d.message.kind !== 'system') {
+              // Read only if it is actually on screen: a tab in the background,
+              // or a reader scrolled up into history, has not seen it yet.
+              if (!document.hidden) api.post(`/chat/conversations/${activeIdRef.current}/read`).catch(() => {})
+              if (awayRef.current) setNewBelow((n) => n + 1)
+            }
           }
+          // A message ends that person's "typing…" in the list.
+          setTypingIn((t) => { if (!t[d.conversationId]) return t; const n = { ...t }; delete n[d.conversationId]; return n })
           loadConvos()
         } else if (d.type === 'edit') {
-          if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, body: d.body, edited_at: d.edited_at } : m)))
+          if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, body: d.body, edited_at: d.edited_at, mentions: d.mentions || m.mentions } : m)))
+          loadConvos()
+        } else if (d.type === 'receipts') {
+          // Where everyone else has got to: my messages up to there turn grey
+          // (delivered) or blue (read).
+          if (inActive) setMessages((p) => p.map((m) => {
+            if (m.sender_id !== user.id || m.id.startsWith('tmp_')) return m
+            const seen = !!d.read_upto && m.created_at <= d.read_upto
+            const delivered = seen || (!!d.delivered_upto && m.created_at <= d.delivered_upto)
+            return seen === m.seen && delivered === !!m.delivered ? m : { ...m, seen, delivered }
+          }))
+          setConvos((cs) => cs.map((c) => (c.id === d.conversationId && c.last_from_me && c.last_at
+            ? { ...c, last_seen: !!d.read_upto && c.last_at <= d.read_upto, last_delivered: (!!d.delivered_upto && c.last_at <= d.delivered_upto) || (!!d.read_upto && c.last_at <= d.read_upto) }
+            : c)))
+        } else if (d.type === 'poll') {
+          if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, poll: d.poll } : m)))
+        } else if (d.type === 'call-processing') {
+          setSummarisingCall((s) => ({ ...s, [d.conversationId]: !!d.on }))
         } else if (d.type === 'reaction') {
           if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, reactions: d.reactions } : m)))
         } else if (d.type === 'delete') {
@@ -786,13 +960,25 @@ export default function Chats() {
           }
           loadConvos()
         } else if (d.type === 'read') {
-          if (inActive && d.userId !== user.id) setMessages((p) => p.map((m) => (m.sender_id === user.id && m.created_at <= d.last_read_at ? { ...m, seen: true } : m)))
+          // Superseded by 'receipts', which knows whether EVERYONE has read it —
+          // one reader in a group used to turn the ticks blue for all.
         } else if (d.type === 'typing') {
-          if (inActive && d.userId !== user.id) {
+          if (d.userId === user.id) return
+          if (inActive) {
             setTypingName(d.isTyping ? d.name : null)
+            setTypingMode(d.mode === 'recording' ? 'recording' : 'typing')
             if (typingClearRef.current) clearTimeout(typingClearRef.current)
-            if (d.isTyping) typingClearRef.current = setTimeout(() => setTypingName(null), 4000)
+            if (d.isTyping) typingClearRef.current = setTimeout(() => setTypingName(null), d.mode === 'recording' ? 8000 : 4000)
           }
+          // ...and in the list, where WhatsApp says "typing…" in place of the preview.
+          const cid = d.conversationId
+          setTypingIn((t) => {
+            const n = { ...t }
+            if (d.isTyping) n[cid] = { name: d.name, mode: d.mode || 'typing' }; else delete n[cid]
+            return n
+          })
+          clearTimeout(listTypingTimers.current[cid])
+          if (d.isTyping) listTypingTimers.current[cid] = setTimeout(() => setTypingIn((t) => { const n = { ...t }; delete n[cid]; return n }), d.mode === 'recording' ? 8000 : 4500)
         } else if (d.type === 'conversation') {
           if (d.action === 'removed' && d.conversationId === activeIdRef.current) { setActiveId(''); setMessages([]) }
           loadConvos()
@@ -849,13 +1035,14 @@ export default function Chats() {
   }, [])
 
   // ---- composer actions ----
-  const sendTyping = (isTyping: boolean) => {
+  // mode 'recording' is "recording audio…", sent while a voice note is held open.
+  const sendTyping = (isTyping: boolean, mode: 'typing' | 'recording' = 'typing') => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !activeId) return
     const nowMs = Date.now()
-    if (isTyping && nowMs - typingSentRef.current < 1500) return
+    if (isTyping && mode === 'typing' && nowMs - typingSentRef.current < 1500) return
     typingSentRef.current = nowMs
-    try { ws.send(JSON.stringify({ type: 'typing', conversationId: activeId, isTyping })) } catch {}
+    try { ws.send(JSON.stringify({ type: 'typing', conversationId: activeId, isTyping, mode })) } catch {}
   }
 
   // ---- files: pasted, dropped or picked ----------------------------------
@@ -953,7 +1140,7 @@ export default function Chats() {
   const send = async () => {
     const body = input.trim()
     if (busy || !active) return
-    if (editing) { if (body) return saveEdit(); return }
+    if (editing) return saveEdit()
     if (stagedRef.current.length) return sendStaged()
     if (!body) return
     // A slash command is an instruction to the app, not a message to the room.
@@ -962,7 +1149,7 @@ export default function Chats() {
     const mentionRefs = picked.filter((p) => mentions.includes(p.id))
     setInput(''); setBusy(true); sendTyping(false); setPicked([]); setMentionQ(null)
     const rep = replyTo
-    const optimistic: Msg = { id: 'tmp_' + Date.now(), conversation_id: active.id, sender_id: user!.id, body, created_at: new Date().toISOString(), reactions: [], mentions: mentionRefs, starred: false, seen: false, reply: rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body } : null, reply_to: rep?.id || null }
+    const optimistic: Msg = { id: 'tmp_' + Date.now(), conversation_id: active.id, sender_id: user!.id, body, created_at: new Date().toISOString(), reactions: [], mentions: mentionRefs, starred: false, seen: false, reply: rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body, image: !!rep.file && (rep.file.type || '').startsWith('image/'), conversation_id: rep.conversation_id } : null, reply_to: rep?.id || null }
     setMessages((m) => [...m, optimistic]); setReplyTo(null)
     try {
       const saved = await api.post(`/chat/conversations/${active.id}/messages`, { body, replyTo: rep?.id, mentions })
@@ -981,6 +1168,7 @@ export default function Chats() {
   const stopVoiceTimer = () => { if (voiceTimerRef.current) { clearInterval(voiceTimerRef.current); voiceTimerRef.current = null } }
 
   const releaseVoice = () => {
+    if (voiceRecRef.current) sendTyping(false, 'recording')
     stopVoiceTimer()
     try { voiceSpeechRef.current?.stop() } catch {}
     voiceSpeechRef.current = null
@@ -1023,9 +1211,12 @@ export default function Chats() {
         : null
       setRecording(true)
       setRecSecs(0)
+      sendTyping(true, 'recording')
       voiceTimerRef.current = setInterval(() => setRecSecs((n) => {
         // Hard stop at two minutes: past that it is a call, not a note.
         if (n >= 119) { try { voiceRecRef.current?.stop() } catch {} }
+        // Keep "recording audio…" alive on the other end (it lapses after 8s).
+        if (n % 5 === 4) sendTyping(true, 'recording')
         return n + 1
       }), 1000)
     } catch {
@@ -1097,19 +1288,38 @@ export default function Chats() {
   }
 
   // ---- chat → task --------------------------------------------------------
-  // Hand the message (or the line still in the composer) to the Tasks page as a
-  // pre-filled draft. The draft is built server-side so it uses the same due-date
-  // and priority rules as the rest of the app. Nothing is created here: the real
-  // New task form opens filled and stops at the unpressed Create button, because
-  // handing someone work should stay a deliberate act — the same reason the voice
-  // assistant never submits a form either.
-  const toTask = async (payload: { messageId?: string; text?: string; mentions?: string[] }) => {
-    setMenuId(null)
+  // Turn the message (or the line still in the composer) into an assigned task
+  // without leaving the chat: TaskAssignSheet opens over the thread, filled in
+  // from a draft built server-side with the same due-date, priority and "who
+  // was named" rules as the rest of the app. Nothing is created until Assign is
+  // pressed, because handing someone work should stay a deliberate act — the
+  // same reason the voice assistant never submits a form either.
+  const toTask = async (payload: { messageId?: string; text?: string; mentions?: string[] }, source: Msg | null = null) => {
+    setMenuId(null); setSelectedId(null); setMulti(null)
     try {
       const draft = await api.post('/chat/task-draft', payload)
-      stashTaskDraft(draft)
-      navigate('/tasks?new=1')
+      // A group only its admins may write to cannot take the task's card, so
+      // the task is made on the full form instead of half-made here.
+      if (readOnly) { openFullTaskForm(draft); return }
+      setAssignFor({ source, draft })
     } catch (e: any) { toast.error('Could not build the task: ' + e.message) }
+  }
+  // The full New task form, for the task that needs a project or a category.
+  const openFullTaskForm = (d: Draft) => {
+    setAssignFor(null)
+    stashTaskDraft({ ...d, assignee_name: d.assignee_name || null })
+    navigate('/tasks?new=1')
+  }
+  // From the Mentions inbox: the message may live in another chat, which has
+  // to be open for the sheet to offer its people.
+  const taskFromAnywhere = (convId: string, messageId: string) => {
+    if (convId === activeIdRef.current) {
+      const src = messages.find((x) => x.id === messageId) || null
+      void toTask({ messageId }, src)
+      return
+    }
+    pendingAssignRef.current = messageId
+    openMessage(convId, messageId)
   }
   const draftFromComposer = () => {
     const text = input.trim()
@@ -1261,6 +1471,20 @@ export default function Chats() {
     if (el.value) el.style.height = Math.min(el.scrollHeight, 132) + 'px'
   }
   useEffect(() => { autoGrow(inputRef.current) }, [input])
+  // Each chat's unsent text, saved as it is typed — never an edit in progress,
+  // which is a different message's words.
+  useEffect(() => {
+    const cid = activeIdRef.current
+    if (!cid || editing) return
+    setDrafts((d) => {
+      const keep = input.trim() ? input : ''
+      if ((d[cid] || '') === keep) return d
+      const n = { ...d }
+      if (keep) n[cid] = keep; else delete n[cid]
+      writeDrafts(n)
+      return n
+    })
+  }, [input])
 
   const onComposerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value
@@ -1297,6 +1521,14 @@ export default function Chats() {
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applyMention(mentionOptions[mentionIdx]); return }
       if (e.key === 'Escape') { e.preventDefault(); setMentionQ(null); return }
     }
+    // ↑ in an empty box: edit your last message (WhatsApp Web). Escape while
+    // editing: leave the message as it was.
+    if (e.key === 'ArrowUp' && !input && !editing && !stagedRef.current.length) {
+      const m = lastEditable()
+      if (m) { e.preventDefault(); startEdit(m) }
+      return
+    }
+    if (e.key === 'Escape' && editing) { e.preventDefault(); e.stopPropagation(); endEdit(); return }
     // Shift+Enter is a newline — which is what makes multi-line messages and
     // ``` code blocks typable at all. Plain Enter still sends, because that is
     // what every chat app does and muscle memory is not negotiable.
@@ -1388,14 +1620,24 @@ export default function Chats() {
     },
   }
 
+  // Leave edit mode, giving the box back whatever was being typed before.
+  const endEdit = () => {
+    setEditing(null); setInput(editStashRef.current); editStashRef.current = ''; setPicked([]); setMentionQ(null)
+  }
   const saveEdit = async () => {
     if (!editing) return
-    const body = input.trim(); if (!body) return
+    const target = messages.find((m) => m.id === editing.id)
+    const body = input.trim()
+    // A photo's caption may be emptied; a text message may not.
+    if (!body && !target?.file) return
+    if (body === (target?.body || '').trim()) { endEdit(); return }
     setBusy(true)
     try {
-      await api.patch(`/chat/message/${editing.id}`, { body })
-      setMessages((p) => p.map((m) => (m.id === editing.id ? { ...m, body, edited_at: new Date().toISOString() } : m)))
-      setEditing(null); setInput('')
+      const mentions = active ? resolveMentions(body, [...picked, ...(target?.mentions || [])], active.members, user!.id) : []
+      const d = await api.patch(`/chat/message/${editing.id}`, { body, mentions })
+      setMessages((p) => p.map((m) => (m.id === editing.id ? { ...m, body: d.body, edited_at: d.edited_at, mentions: d.mentions } : m)))
+      endEdit()
+      loadConvos()
     } catch (e: any) { toast.error('Could not edit: ' + e.message) } finally { setBusy(false) }
   }
 
@@ -1410,14 +1652,52 @@ export default function Chats() {
     setMessages((p) => p.map((x) => (x.id === m.id ? { ...x, starred: next } : x)))
     try { if (next) await api.post(`/chat/message/${m.id}/star`); else await api.del(`/chat/message/${m.id}/star`) } catch {}
   }
-  const del = async (m: Msg) => {
-    setMenuId(null)
-    const mine = m.sender_id === user!.id
-    if (!(await confirmDialog({ message: mine ? 'Delete this message for everyone?' : 'Remove this message for you?', confirmText: mine ? 'Delete' : 'Remove', danger: true }))) return
+  // Delete asks first: "for everyone" (your own, still there) or "for me".
+  const del = (m: Msg) => { setMenuId(null); setDeleteFor([m]) }
+  const canDeleteForAll = (list: Msg[]) => list.length > 0 && list.every((m) => m.sender_id === user!.id && !m.deleted && !isRecordLine(m) && !m.id.startsWith('tmp_'))
+  const doDelete = async (list: Msg[], scope: 'me' | 'all') => {
+    setDeleteFor(null); setMulti(null); setSelectedId(null)
     const snap = messages
-    if (mine) setMessages((p) => p.map((x) => (x.id === m.id ? { ...x, deleted: true, body: '', file: null, reactions: [] } : x)))
-    else setMessages((p) => p.filter((x) => x.id !== m.id))
-    try { await api.del(`/chat/message/${m.id}`); loadConvos() } catch (e: any) { setMessages(snap); toast.error('Could not delete: ' + e.message) }
+    const ids = new Set(list.map((m) => m.id))
+    if (scope === 'all') setMessages((p) => p.map((x) => (ids.has(x.id) ? { ...x, deleted: true, body: '', file: null, reactions: [], poll: null, task: null, location: null, contact: null, kind: null } : x)))
+    else setMessages((p) => p.filter((x) => !ids.has(x.id)))
+    try {
+      for (const m of list) await api.del(`/chat/message/${m.id}${scope === 'me' ? '?scope=me' : ''}`)
+      loadConvos()
+      if (scope === 'all') loadPins(activeIdRef.current)
+    } catch (e: any) { setMessages(snap); toast.error('Could not delete: ' + e.message) }
+  }
+
+  // ---- several messages at once (WhatsApp's select mode) ----
+  const startMulti = (m: Msg) => { setMenuId(null); setSelectedId(null); setMulti([m.id]) }
+  const toggleMulti = (id: string) => setMulti((cur) => {
+    const next = !cur ? [id] : cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+    return next.length ? next : null
+  })
+  const multiMsgs = (multi || []).map((id) => messages.find((m) => m.id === id)).filter((m): m is Msg => !!m && !m.deleted)
+  // In thread order, so a copy or a forward reads the way it was said.
+  const inOrder = (list: Msg[]) => list.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))
+  const copyMany = async (list: Msg[]) => {
+    const lines = inOrder(list).map((m) => `[${fmtTime(m.created_at)}, ${new Date(m.created_at).toLocaleDateString()}] ${m.sender_id === user!.id ? user!.name : senderName(m.sender_id)}: ${m.body || m.transcript || m.file?.name || ''}`)
+    const text = list.length === 1 ? (list[0].body || list[0].transcript || '') : lines.join('\n')
+    try { await navigator.clipboard.writeText(text); toast.success(list.length === 1 ? 'Copied' : `${list.length} messages copied`) } catch { window.prompt('Copy:', text) }
+    setMulti(null)
+  }
+  const starMany = async (list: Msg[]) => {
+    const next = !list.every((m) => m.starred)
+    const ids = new Set(list.map((m) => m.id))
+    setMessages((p) => p.map((x) => (ids.has(x.id) ? { ...x, starred: next } : x)))
+    setMulti(null)
+    for (const m of list) { try { if (next) await api.post(`/chat/message/${m.id}/star`); else await api.del(`/chat/message/${m.id}/star`) } catch {} }
+  }
+
+  // WhatsApp's "Reply privately": answer a group message in a one-to-one with
+  // whoever wrote it, quoting it there.
+  const replyPrivately = (m: Msg) => {
+    setMenuId(null); setSelectedId(null)
+    api.post('/chat/conversations', { type: 'direct', userId: m.sender_id })
+      .then((conv: any) => { pendingReplyRef.current = m; loadConvos(); setActiveId(conv.id) })
+      .catch(() => toast.error("I couldn't open that conversation."))
   }
   const copy = async (m: Msg) => {
     setMenuId(null)
@@ -1470,37 +1750,56 @@ export default function Chats() {
     try { await navigator.clipboard.writeText(url); toast.success('Link copied') } catch { window.prompt('Copy:', url) }
   }
 
-  // Straight into the box with the caret at the end: choosing Edit means typing next.
+  // Straight into the box with the caret at the end: choosing Edit means typing
+  // next. Whatever was half-typed is set aside and comes back afterwards.
   const startEdit = (m: Msg) => {
-    setMenuId(null); setEditing({ id: m.id, body: m.body }); setInput(m.body); setReplyTo(null)
+    if (!isEditable(m) || m.sender_id !== user!.id) return
+    setMenuId(null); setSelectedId(null); setMulti(null)
+    if (!editing) editStashRef.current = input
+    setEditing({ id: m.id, body: m.body }); setInput(m.body); setReplyTo(null)
+    setPicked(m.mentions || [])
     requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(m.body.length, m.body.length) })
   }
   // Straight into the box: choosing Reply means the next thing is typing.
-  const startReply = (m: Msg) => { setMenuId(null); setReplyTo(m); setEditing(null); requestAnimationFrame(() => inputRef.current?.focus()) }
+  const startReply = (m: Msg) => { setMenuId(null); if (editing) endEdit(); setReplyTo(m); requestAnimationFrame(() => inputRef.current?.focus()) }
 
   // Every action a message offers, in one list, so the desktop's hover menu and
   // the phone's action bar cannot drift apart. `bar` marks the ones the phone
   // bar shows as icons; its ⋮ lists the rest. The order is the menu's.
+  //
+  // Edit is on the bar, not under ⋮: it was in the menu, fourteenth of fifteen,
+  // and "there is no edit option" was the result. Copy gives up its place when
+  // Edit takes it, so the bar fits a 360px phone either way.
   const msgActions = (m: Msg): MsgAction[] => {
     const mine = m.sender_id === user!.id
+    const record = isRecordLine(m)
+    const editable = mine && isEditable(m)
+    const fromGroupPeer = active?.type === 'group' && !mine && !record && active.members.some((x) => x.id === m.sender_id)
     const list: (MsgAction | false)[] = [
-      { key: 'reply', label: 'Reply', icon: 'reply', bar: true, run: () => startReply(m) },
-      { key: 'task', label: 'Assign as task', icon: 'taskAdd', bar: true, run: () => toTask({ messageId: m.id }) },
-      { key: 'remind', label: 'Remind me', run: () => setRemindFor(m) },
-      { key: 'pin', label: m.pinned_at ? 'Unpin' : 'Pin to top', run: () => togglePin(m) },
-      isManager && { key: 'fork', label: 'Fork to new chat', run: () => setForkFrom(m) },
-      { key: 'unread', label: 'Mark unread', run: () => markUnread(m) },
-      { key: 'forward', label: 'Forward', icon: 'forward', bar: true, run: () => setForwardMsg(m) },
-      { key: 'link', label: 'Copy link', run: () => copyLink(m) },
-      { key: 'copy', label: 'Copy', bar: true, run: () => copy(m) },
-      !!m.file && { key: 'download', label: 'Download', run: () => download(m) },
-      { key: 'share', label: 'Share', run: () => share(m) },
+      !record && { key: 'reply', label: 'Reply', icon: 'reply', bar: true, run: () => startReply(m) },
+      editable && { key: 'edit', label: 'Edit', glyph: 'pencil', bar: true, run: () => startEdit(m) },
+      !record && m.kind !== 'task' && { key: 'task', label: readOnly ? 'Make a task' : 'Assign as task', icon: 'taskAdd', bar: true, run: () => toTask({ messageId: m.id }, m) },
       { key: 'star', label: m.starred ? 'Unstar' : 'Star', icon: 'star', bar: true, on: m.starred, run: () => toggleStar(m) },
-      mine && !m.file && { key: 'edit', label: 'Edit', run: () => startEdit(m) },
-      { key: 'delete', label: mine ? 'Delete' : 'Remove for me', icon: 'trash', bar: true, danger: true, run: () => del(m) },
+      isForwardable(m) && { key: 'forward', label: 'Forward', icon: 'forward', bar: true, run: () => setForwardMsgs([m]) },
+      !record && { key: 'copy', label: 'Copy', glyph: 'copy', bar: !editable, run: () => copy(m) },
+      mine && !record && { key: 'info', label: 'Message info', run: () => setInfoFor(m) },
+      fromGroupPeer && { key: 'private', label: 'Reply privately', run: () => replyPrivately(m) },
+      { key: 'select', label: 'Select', run: () => startMulti(m) },
+      !record && { key: 'pin', label: m.pinned_at ? 'Unpin' : 'Pin', run: () => togglePin(m) },
+      !record && { key: 'remind', label: 'Remind me', run: () => setRemindFor(m) },
+      isManager && !record && { key: 'fork', label: 'Fork to new chat', run: () => setForkFrom(m) },
+      { key: 'unread', label: 'Mark unread', run: () => markUnread(m) },
+      { key: 'link', label: 'Copy link', run: () => copyLink(m) },
+      !!m.file && { key: 'download', label: 'Download', run: () => download(m) },
+      !record && { key: 'share', label: 'Share', run: () => share(m) },
+      { key: 'delete', label: 'Delete', icon: 'trash', bar: true, danger: true, run: () => del(m) },
     ]
     return list.filter(Boolean) as MsgAction[]
   }
+  const actionIcon = (a: MsgAction, size = 20) =>
+    a.glyph === 'copy' ? <CopyGlyph size={size} /> : a.glyph === 'pencil' ? <PencilGlyph size={size} /> : <Ic name={a.icon!} size={size} />
+  // ↑ in an empty box edits your last message, as on WhatsApp Web.
+  const lastEditable = () => [...messages].reverse().find((m) => m.sender_id === user!.id && isEditable(m))
 
   // Select a message (touch screens): highlight it, float the reactions where
   // they fit, and hand the header to its actions. The reactions need ~58px
@@ -1562,6 +1861,28 @@ export default function Chats() {
     })
   }, [showInfo])
   const cancelPress = () => { if (pressRef.current) { clearTimeout(pressRef.current.timer); pressRef.current = null } }
+  // Swipe right to reply. A drag that starts sideways is a swipe (the thread
+  // does not scroll sideways, so nothing is taken from scrolling); one that
+  // starts up or down is left to the scroll. The row follows the finger, and
+  // past SWIPE_REPLY_PX letting go replies.
+  const swipeRef = useRef<{ x: number; y: number; dx: number; on: boolean; wrap: HTMLElement | null } | null>(null)
+  const endSwipe = (m: Msg | null) => {
+    const s = swipeRef.current
+    swipeRef.current = null
+    if (!s?.on) return
+    s.wrap?.classList.remove('swiping', 'swipe-armed')
+    s.wrap?.style.removeProperty('--swipe')
+    longPressedRef.current = true // the click that ends a drag is not a tap
+    if (m && s.dx >= SWIPE_REPLY_PX) { try { navigator.vibrate?.(10) } catch { /* the reply banner says it */ } startReply(m) }
+  }
+  // While messages are being picked (touch), a tap adds or removes one; a tap
+  // on a second message while one is selected starts picking, as in WhatsApp.
+  const tapPick = (m: Msg, bubble: HTMLElement, y: number) => {
+    if (multi) { toggleMulti(m.id); return }
+    if (selectedId && selectedId !== m.id) { setMulti([selectedId, m.id]); setSelectedId(null); return }
+    if (selectedId === m.id) setSelectedId(null)
+    else selectMessage(m.id, bubble, y)
+  }
   // A bubble's handlers on a touch screen: a tap selects (or, on the selected
   // message, deselects); holding still for LONG_PRESS_MS selects too, with a
   // buzz, the way WhatsApp does. A finger that moves is scrolling, not
@@ -1577,34 +1898,56 @@ export default function Chats() {
       cancelPress()
       const bubble = e.currentTarget
       const y = e.clientY
+      // Swiping is for replying, which a picked selection or a deleted message is not.
+      swipeRef.current = !multi && !selectedId && !m.deleted && !isRecordLine(m)
+        ? { x: e.clientX, y, dx: 0, on: false, wrap: bubble.closest('.msg-wrap') as HTMLElement | null }
+        : null
       pressRef.current = {
         x: e.clientX, y,
         timer: setTimeout(() => {
           pressRef.current = null
+          swipeRef.current = null
           longPressedRef.current = true
           try { navigator.vibrate?.(12) } catch { /* not allowed here; the highlight says it */ }
-          selectMessage(m.id, bubble, y)
+          if (multi) toggleMulti(m.id)
+          else if (selectedId && selectedId !== m.id) { setMulti([selectedId, m.id]); setSelectedId(null) }
+          else selectMessage(m.id, bubble, y)
         }, LONG_PRESS_MS),
       }
     },
     onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
       const p = pressRef.current
       if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 10) cancelPress()
+      const s = swipeRef.current
+      if (!s) return
+      const dx = e.clientX - s.x, dy = e.clientY - s.y
+      if (!s.on) {
+        if (dx > 14 && dx > Math.abs(dy) * 1.5) { s.on = true; cancelPress(); try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* fine without */ } }
+        else if (Math.abs(dy) > 12 || dx < -14) { swipeRef.current = null; return }
+      }
+      if (s.on) {
+        s.dx = Math.max(0, Math.min(96, dx))
+        s.wrap?.classList.add('swiping')
+        s.wrap?.classList.toggle('swipe-armed', s.dx >= SWIPE_REPLY_PX)
+        s.wrap?.style.setProperty('--swipe', `${s.dx}px`)
+      }
     },
-    onPointerUp: cancelPress,
-    onPointerCancel: cancelPress,
+    onPointerUp: () => { cancelPress(); endSwipe(m) },
+    onPointerCancel: () => { cancelPress(); endSwipe(null) },
     onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => e.preventDefault(),
     // The click a long-press ends with (where the browser sends one) is the
     // same gesture: caught on the way down, before a link, the voice player or a
     // button inside the bubble can act on it.
     onClickCapture: (e: React.MouseEvent<HTMLDivElement>) => {
-      if (longPressedRef.current) { longPressedRef.current = false; e.preventDefault(); e.stopPropagation() }
+      if (longPressedRef.current) { longPressedRef.current = false; e.preventDefault(); e.stopPropagation(); return }
+      // Picking messages: every tap picks, even one on a link, a picture or
+      // the voice player — caught here, before any of them can act on it.
+      if (multi) { e.preventDefault(); e.stopPropagation(); toggleMulti(m.id) }
     },
     onClick: (e: React.MouseEvent<HTMLDivElement>) => {
       if ((e.target as HTMLElement).closest(TAP_SKIP)) return
       e.stopPropagation()
-      if (selectedId === m.id) setSelectedId(null)
-      else selectMessage(m.id, e.currentTarget, e.clientY)
+      tapPick(m, e.currentTarget, e.clientY)
     },
     // Without a finger to tap with — a keyboard on a tablet, Switch Access —
     // the bubble takes focus and Enter, Space or the menu key select it, then
@@ -1617,6 +1960,7 @@ export default function Chats() {
       if (e.target !== e.currentTarget) return
       if (!(e.key === 'Enter' || e.key === ' ' || e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) return
       e.preventDefault()
+      if (multi) { toggleMulti(m.id); return }
       if (selectedId === m.id) { setSelectedId(null); return }
       selectMessage(m.id, e.currentTarget)
       requestAnimationFrame(() => document.querySelector<HTMLElement>('.sel-bar .chat-peer-actions button')?.focus())
@@ -1645,6 +1989,109 @@ export default function Chats() {
     if (!(await confirmDialog({ title: 'Clear chat', message: 'Clear all messages in this chat? This only clears them for you.', confirmText: 'Clear' }))) return
     try { await api.post(`/chat/conversations/${c.id}/clear`); if (c.id === activeId) setMessages([]); loadConvos() }
     catch (e: any) { toast.error('Could not clear: ' + e.message) }
+  }
+
+  // Archive: out of the list (and out of the unread badge) until brought back.
+  const archive = async (c: Conversation, on: boolean) => {
+    setConvoMenu(null)
+    setConvos((cs) => cs.map((x) => (x.id === c.id ? { ...x, archived: on } : x)))
+    if (on && c.id === activeIdRef.current) setActiveId('')
+    try { await api.post(`/chat/conversations/${c.id}/prefs`, { archived: on }); toast.success(on ? 'Chat archived' : 'Chat unarchived'); loadConvos() }
+    catch (e: any) { toast.error(e.message); loadConvos() }
+  }
+  // "Mark as unread" leaves a dot; "Mark as read" clears the count and the dot.
+  const markChat = async (c: Conversation, unread: boolean) => {
+    setConvoMenu(null)
+    setConvos((cs) => cs.map((x) => (x.id === c.id ? { ...x, marked_unread: unread, unread: unread ? x.unread : 0 } : x)))
+    try {
+      if (unread) await api.post(`/chat/conversations/${c.id}/prefs`, { marked_unread: true })
+      else await api.post(`/chat/conversations/${c.id}/read`)
+      loadConvos()
+    } catch { loadConvos() }
+  }
+  // WhatsApp's "Delete chat" (one-to-one): gone from the list, cleared for you,
+  // back by itself with the next message.
+  const deleteChat = async (c: Conversation) => {
+    setConvoMenu(null)
+    if (!(await confirmDialog({ title: `Delete chat with ${c.name}?`, message: 'Messages are deleted for you only. The chat comes back if either of you writes again.', confirmText: 'Delete chat', danger: true }))) return
+    try {
+      await api.post(`/chat/conversations/${c.id}/remove`)
+      if (c.id === activeIdRef.current) { setShowInfo(false); setActiveId('') }
+      setDrafts((d) => { if (!d[c.id]) return d; const n = { ...d }; delete n[c.id]; writeDrafts(n); return n })
+      loadConvos()
+    } catch (e: any) { toast.error('Could not delete: ' + e.message) }
+  }
+  const exitGroup = async (c: Conversation) => {
+    setConvoMenu(null)
+    if (!(await confirmDialog({ title: 'Exit group?', message: `You will stop getting messages from "${c.name}".`, confirmText: 'Exit', danger: true }))) return
+    try { await api.del(`/chat/conversations/${c.id}/members/${user!.id}`); if (c.id === activeIdRef.current) setActiveId(''); loadConvos() }
+    catch (e: any) { toast.error(e.message) }
+  }
+
+  // Export chat: the whole conversation as a .txt in WhatsApp's own layout
+  // ("21/10/26, 4:05 pm - Priya: …"), in this device's time zone.
+  const exportChat = async (c: Conversation) => {
+    setHeadMenu(false)
+    try {
+      const d = await api.get(`/chat/conversations/${c.id}/export`)
+      const stamp = (iso: string) => {
+        const t = new Date(iso)
+        const dd = String(t.getDate()).padStart(2, '0'), mm = String(t.getMonth() + 1).padStart(2, '0'), yy = String(t.getFullYear()).slice(2)
+        return `${dd}/${mm}/${yy}, ${t.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+      }
+      const lines = (d.items as { at: string; sender: string; text: string; event: boolean }[])
+        .map((i) => `${stamp(i.at)} - ${i.event ? '' : i.sender + ': '}${i.text}`)
+      const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `VoTask chat with ${c.name.replace(/[\\/:*?"<>|]/g, '')}.txt`
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+      toast.success(`Exported ${lines.length} messages`)
+    } catch (e: any) { toast.error('Could not export: ' + e.message) }
+  }
+
+  // ---- polls, places, people: messages that are not just text ----
+  const sendPoll = async (question: string, options: string[], multiAnswers: boolean) => {
+    if (!active) return false
+    try {
+      const m = await api.post(`/chat/conversations/${active.id}/poll`, { question, options, multi: multiAnswers })
+      mergeIncoming(m); setPollOpen(false); loadConvos()
+      return true
+    } catch (e: any) { toast.error('Could not send the poll: ' + e.message); return false }
+  }
+  const vote = async (m: Msg, picks: number[]) => {
+    // Shown at once, put right by the server's answer (and everyone else's votes).
+    const prev = m.poll
+    if (prev) setMessages((p) => p.map((x) => (x.id === m.id ? { ...x, poll: { ...prev, options: prev.options.map((o, i) => ({ ...o, voters: picks.includes(i) ? [...o.voters.filter((u) => u !== user!.id), user!.id] : o.voters.filter((u) => u !== user!.id) })) } as Poll } : x)))
+    try {
+      const d = await api.post(`/chat/message/${m.id}/vote`, { options: picks })
+      setMessages((p) => p.map((x) => (x.id === m.id ? { ...x, poll: d.poll } : x)))
+    } catch (e: any) {
+      setMessages((p) => p.map((x) => (x.id === m.id ? { ...x, poll: prev } : x)))
+      toast.error('Could not vote: ' + e.message)
+    }
+  }
+  const sendLocation = async (loc: LocationRef) => {
+    if (!active) return false
+    try {
+      const m = await api.post(`/chat/conversations/${active.id}/messages`, { kind: 'location', meta: loc, replyTo: replyTo?.id })
+      mergeIncoming(m); setLocOpen(false); setReplyTo(null); loadConvos()
+      return true
+    } catch (e: any) { toast.error('Could not send your location: ' + e.message); return false }
+  }
+  const sendContact = async (u: OrgUser) => {
+    if (!active) return
+    setContactOpen(false)
+    try {
+      const m = await api.post(`/chat/conversations/${active.id}/messages`, { kind: 'contact', meta: { user_id: u.id }, replyTo: replyTo?.id })
+      mergeIncoming(m); setReplyTo(null); loadConvos()
+    } catch (e: any) { toast.error('Could not share the contact: ' + e.message) }
+  }
+  const messageUser = (uid: string) => {
+    api.post('/chat/conversations', { type: 'direct', userId: uid })
+      .then((conv: any) => { setShowInfo(false); loadConvos(); setActiveId(conv.id) })
+      .catch(() => toast.error("I couldn't open that conversation."))
   }
 
   const senderName = (uid: string) => (active?.members.find((mm) => mm.id === uid)?.name) || (uid === user?.id ? 'You' : 'Unknown')
@@ -1693,14 +2140,25 @@ export default function Chats() {
   }
   useEffect(() => { if (search.trim().length < 2) setHits(null) }, [search])
 
-  const inTab = (c: Conversation, tab: ListTab) => tab === 'all' || c.type === tab
-  const filteredConvos = convos.filter((c) => inTab(c, listTab) && c.name.toLowerCase().includes(search.toLowerCase()))
+  const hasUnread = (c: Conversation) => c.unread > 0 || !!c.marked_unread
+  // The open chat stays under "Unread" while it is open, though opening it
+  // just read it — otherwise it would vanish from under your finger.
+  const inTab = (c: Conversation, tab: ListTab) => tab === 'all' || (tab === 'unread' ? hasUnread(c) || c.id === activeId : c.type === tab)
+  const archivedConvos = convos.filter((c) => c.archived)
+  // A search looks everywhere, archived chats included; otherwise the archive
+  // is its own list.
+  const filteredConvos = convos.filter((c) => (search.trim()
+    ? c.name.toLowerCase().includes(search.trim().toLowerCase())
+    : showArchived ? !!c.archived : !c.archived && inTab(c, listTab)))
   // Per tab, how many chats have something unread — the number WhatsApp puts on
   // its filters. Muted chats are left out: muting means "don't call me over".
-  const tabUnread = (tab: ListTab) => convos.filter((c) => inTab(c, tab) && c.unread > 0 && !c.muted).length
+  const tabUnread = (tab: ListTab) => convos.filter((c) => !c.archived && inTab(c, tab) && hasUnread(c) && !c.muted).length
+  const archivedUnread = archivedConvos.filter(hasUnread).length
   const listEmpty = search.trim()
-    ? `No ${listTab === 'group' ? 'group ' : listTab === 'direct' ? 'personal ' : ''}chats match “${search.trim()}”`
-    : LIST_TABS.find((t) => t.id === listTab)!.empty
+    ? `No chats match “${search.trim()}”`
+    : showArchived ? 'No archived chats' : LIST_TABS.find((t) => t.id === listTab)!.empty
+  // Every photo and video loaded in the thread, oldest first: what the viewer steps through.
+  const mediaMsgs = messages.filter((m) => !m.deleted && !m.uploading && !!m.file && ((m.file.type || '').startsWith('image/') || (m.file.type || '').startsWith('video/')))
   // The person a direct chat is with, and what they are holding (for the header chip).
   const peerLoad = active?.type === 'direct' && active.other_user_id ? workload[active.other_user_id] : undefined
   const reactionsMsg = reactionsOf ? messages.find((x) => x.id === reactionsOf) || null : null
@@ -1712,20 +2170,25 @@ export default function Chats() {
   // spent letting go of a message no longer there.
   useEffect(() => { if (selectedId && !selMsg) setSelectedId(null) }, [selectedId, selMsg])
   const shownMessages = inSearch.trim()
-    ? messages.filter((m) => !m.deleted && (m.body || '').toLowerCase().includes(inSearch.toLowerCase()))
+    ? messages.filter((m) => !m.deleted && m.kind !== 'system' && `${m.body || ''} ${m.transcript || ''} ${m.file?.name || ''}`.toLowerCase().includes(inSearch.trim().toLowerCase()))
     : messages
-  // Interleave date separators (Today / Yesterday / date) + an "unread" divider.
-  const logItems: ({ sep: string } | { unread: true } | { m: Msg })[] = []
+  // Interleave date separators (Today / Yesterday / date) + an "unread" divider,
+  // which says how many, as WhatsApp's does.
+  const isUnreadForMe = (m: Msg) => !!threadLastRead && m.created_at > threadLastRead && m.sender_id !== user?.id && m.kind !== 'system'
+  const unreadCount = inSearch ? 0 : messages.filter(isUnreadForMe).length
+  const logItems: ({ sep: string } | { unread: number } | { m: Msg })[] = []
   let lastDay = ''
   let unreadShown = false
   for (const m of shownMessages) {
     const day = new Date(m.created_at).toDateString()
     if (day !== lastDay) { logItems.push({ sep: dayLabel(m.created_at) }); lastDay = day }
-    if (!unreadShown && !inSearch && threadLastRead && m.created_at > threadLastRead && m.sender_id !== user?.id) {
-      logItems.push({ unread: true }); unreadShown = true
+    if (!unreadShown && !inSearch && isUnreadForMe(m)) {
+      logItems.push({ unread: unreadCount }); unreadShown = true
     }
     logItems.push({ m })
   }
+  // Group: "Send messages — only admins" and I am not one.
+  const readOnly = !!active && active.type === 'group' && !!active.admins_only && active.role !== 'admin'
 
   if (loading) return <div className="card" style={{ display: 'grid', placeItems: 'center', height: 'calc(100vh - 160px)' }}><span className="spinner" /></div>
 
@@ -1734,8 +2197,16 @@ export default function Chats() {
       {/* ---- sidebar: conversations ---- */}
       <aside className="chat-history">
         <div className="chat-history-head">
-          <span className="ch-title">Chats</span>
+          {showArchived ? (
+            <span className="ch-title row" style={{ gap: 4 }}>
+              <button className="ic-btn" style={{ width: 30, height: 30 }} onClick={() => setShowArchived(false)} aria-label="Back to chats" title="Back to chats">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+              </button>
+              Archived
+            </span>
+          ) : <span className="ch-title">Chats</span>}
           <div className="row" style={{ gap: 2 }}>
+            <button className="ic-btn" onClick={() => setCallsOpen(true)} title="Calls" aria-label="Calls"><Ic name="phone" size={18} /></button>
             <button className="ic-btn" onClick={() => setShowMentions(true)} title="Messages that mention me" aria-label="Messages that mention me"><Ic name="at" size={18} /></button>
             <button className="ic-btn" onClick={() => setShowStarred(true)} title="Starred messages" aria-label="Starred messages"><Ic name="star" size={18} /></button>
             <button className="ic-btn" onClick={() => setShowLater(true)} title="Reminders & scheduled messages" aria-label="Reminders and scheduled messages"><Ic name="clock" size={18} /></button>
@@ -1772,53 +2243,85 @@ export default function Chats() {
             ))}
           </div>
         ) : (<>
-        {/* All / Groups / Personal: one list, three ways to read it. Sits right
-            above the list it filters. */}
-        <div className="chat-tabs" role="tablist" aria-label="Which chats to show">
-          {LIST_TABS.map((t) => {
-            const n = tabUnread(t.id)
+        {/* All / Unread / Groups / Personal: one list, four ways to read it.
+            Sits right above the list it filters. The archive is its own list. */}
+        {!showArchived && (
+          <div className="chat-tabs" role="tablist" aria-label="Which chats to show">
+            {LIST_TABS.map((t) => {
+              const n = tabUnread(t.id)
+              return (
+                <button key={t.id} role="tab" aria-selected={listTab === t.id} className={'chat-tab' + (listTab === t.id ? ' active' : '')} onClick={() => setListTab(t.id)}>
+                  {t.label}
+                  {n > 0 && <span className="chat-tab-badge" aria-label={`${n} with unread messages`}>{n > 9 ? '9+' : n}</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        <div className="convo-list">
+          {!showArchived && !search.trim() && archivedConvos.length > 0 && (
+            <button className="archived-row" onClick={() => setShowArchived(true)}>
+              <span className="archived-ic" aria-hidden="true"><ArchiveGlyph size={18} /></span>
+              <span className="archived-label">Archived</span>
+              <span className={'archived-count' + (archivedUnread ? ' on' : '')}>{archivedUnread || archivedConvos.length}</span>
+            </button>
+          )}
+          {filteredConvos.length === 0 && <div className="empty" style={{ padding: 16, fontSize: 13 }}>{listEmpty}</div>}
+          {filteredConvos.map((c) => {
+            const typing = typingIn[c.id]
+            const draft = c.id !== activeId ? drafts[c.id] : ''
+            // Ticks belong to something I sent — not to a call line or a call's summary.
+            const lastTicks = c.last_from_me && c.last_kind !== 'system' && c.last_kind !== 'call' && c.last_kind !== 'meeting' && c.last_message && !/deleted this message$/.test(c.last_message)
+              ? <Ticks state={c.last_seen ? 'read' : c.last_delivered ? 'delivered' : 'sent'} /> : null
             return (
-              <button key={t.id} role="tab" aria-selected={listTab === t.id} className={'chat-tab' + (listTab === t.id ? ' active' : '')} onClick={() => setListTab(t.id)}>
-                {t.label}
-                {n > 0 && <span className="chat-tab-badge" aria-label={`${n} with unread messages`}>{n > 9 ? '9+' : n}</span>}
-              </button>
+              <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '') + (hasUnread(c) && !c.muted ? ' has-unread' : '')} onClick={() => setActiveId(c.id)}>
+                {c.type === 'group'
+                  ? <GroupAvatar conv={c} size={38} />
+                  : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
+                <div className="convo-meta" style={{ minWidth: 0, flex: 1 }}>
+                  <div className="row spread" style={{ gap: 6 }}>
+                    <div className="convo-title row" style={{ gap: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.pinned && <span title="Pinned" style={{ display: 'inline-flex', color: 'var(--muted)' }}><Ic name="pin" size={12} /></span>}{c.name}</div>
+                    {c.last_at && <span className={'convo-time' + (hasUnread(c) && !c.muted ? ' fresh' : '')} style={{ flexShrink: 0 }}>{relTime(c.last_at)}</span>}
+                  </div>
+                  <div className="chat-contact-preview">
+                    {typing ? (
+                      <span className="typing-text">{c.type === 'group' ? `${typing.name.split(' ')[0]} is ` : ''}{typing.mode === 'recording' ? 'recording audio…' : 'typing…'}</span>
+                    ) : draft ? (
+                      <><span className="draft-tag">Draft:</span> {draft}</>
+                    ) : c.last_message ? (
+                      <>
+                        {lastTicks}
+                        {c.last_kind === 'system' ? '' : c.type === 'group' && c.last_sender_name ? `${c.last_from_me ? 'You' : c.last_sender_name.split(' ')[0]}: ` : ''}
+                        {c.last_message}
+                      </>
+                    ) : <span className="muted">{c.type === 'group' ? `${c.member_count} members` : 'Start a conversation'}</span>}
+                  </div>
+                </div>
+                <div className="convo-trailing">
+                  {c.muted && <span title="Muted" style={{ display: 'inline-flex', opacity: .6, color: 'var(--muted)' }}><Ic name="muteBell" size={13} /></span>}
+                  {c.unread > 0
+                    ? <span className={'chat-unread-badge' + (c.muted ? ' dim' : '')}>{c.unread > 9 ? '9+' : c.unread}</span>
+                    : c.marked_unread && <span className={'chat-unread-dot' + (c.muted ? ' dim' : '')} aria-label="Marked unread" />}
+                  <div className="convo-menu-wrap">
+                    <button className="convo-menu-btn" title="Options" aria-label={`Options for ${c.name}`} onClick={(e) => { e.stopPropagation(); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
+                    {convoMenu === c.id && (
+                      <div className="msg-menu mine" onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => archive(c, !c.archived)}>{c.archived ? 'Unarchive chat' : 'Archive chat'}</button>
+                        <button onClick={() => setPref(c, 'pinned')}>{c.pinned ? 'Unpin chat' : 'Pin chat'}</button>
+                        <button onClick={() => { setConvoMenu(null); if (c.muted) muteConversation(c, 0); else setMuteFor(c) }}>{c.muted ? 'Unmute notifications' : 'Mute notifications'}</button>
+                        <button onClick={() => markChat(c, !hasUnread(c))}>{hasUnread(c) ? 'Mark as read' : 'Mark as unread'}</button>
+                        <button onClick={() => { setConvoMenu(null); exportChat(c) }}>Export chat</button>
+                        <button className="danger" onClick={() => clearChat(c)}>Clear chat</button>
+                        {c.type === 'direct'
+                          ? <button className="danger" onClick={() => deleteChat(c)}>Delete chat</button>
+                          : <button className="danger" onClick={() => exitGroup(c)}>Exit group</button>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             )
           })}
-        </div>
-        <div className="convo-list">
-          {filteredConvos.length === 0 && <div className="empty" style={{ padding: 16, fontSize: 13 }}>{listEmpty}</div>}
-          {filteredConvos.map((c) => (
-            <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '')} onClick={() => setActiveId(c.id)}>
-              {c.type === 'group'
-                ? <GroupAvatar conv={c} size={38} />
-                : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
-              <div className="convo-meta" style={{ minWidth: 0, flex: 1 }}>
-                <div className="row spread" style={{ gap: 6 }}>
-                  <div className="convo-title row" style={{ gap: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.pinned && <span title="Pinned" style={{ display: 'inline-flex', color: 'var(--muted)' }}><Ic name="pin" size={12} /></span>}{c.name}</div>
-                  {c.last_at && <span className="convo-time" style={{ flexShrink: 0 }}>{relTime(c.last_at)}</span>}
-                </div>
-                <div className="chat-contact-preview">
-                  {c.last_message
-                    ? (c.type === 'group' && c.last_sender_name ? `${c.last_from_me ? 'You' : c.last_sender_name}: ` : (c.last_from_me ? 'You: ' : '')) + c.last_message
-                    : <span className="muted">{c.type === 'group' ? `${c.member_count} members` : 'Start a conversation'}</span>}
-                </div>
-              </div>
-              <div className="convo-trailing">
-                {c.muted && <span title="Muted" style={{ display: 'inline-flex', opacity: .6, color: 'var(--muted)' }}><Ic name="muteBell" size={13} /></span>}
-                {c.unread > 0 && <span className={'chat-unread-badge' + (c.muted ? ' dim' : '')}>{c.unread > 9 ? '9+' : c.unread}</span>}
-                <div className="convo-menu-wrap">
-                  <button className="convo-menu-btn" title="Options" aria-label={`Options for ${c.name}`} onClick={(e) => { e.stopPropagation(); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
-                  {convoMenu === c.id && (
-                    <div className="msg-menu mine" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => setPref(c, 'pinned')}>{c.pinned ? 'Unpin' : 'Pin to top'}</button>
-                      <button onClick={() => { setConvoMenu(null); if (c.muted) muteConversation(c, 0); else setMuteFor(c) }}>{c.muted ? 'Unmute' : 'Mute…'}</button>
-                      <button className="danger" onClick={() => clearChat(c)}>Clear chat</button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
         </div>
         </>)}
       </aside>
@@ -1836,7 +2339,30 @@ export default function Chats() {
           {/* Touch screens, a message selected: the header becomes its action
               bar, as in WhatsApp — ✕ to let go, the everyday actions as icons,
               the rest under ⋮. Every action ends the selection. */}
-          {active && selMsg && (
+          {/* Picking several messages (WhatsApp's select mode): how many, and
+              what can be done to all of them at once. */}
+          {active && multi && (() => {
+            const list = inOrder(multiMsgs)
+            const one = list.length === 1 ? list[0] : null
+            const allStarred = list.length > 0 && list.every((m) => m.starred)
+            return (
+              <div className="chat-peer-head sel-bar multi-bar" role="group" aria-label={`${list.length} messages selected`}>
+                <button className="ic-btn" title="Cancel" aria-label="Cancel selection" onClick={(e) => { e.stopPropagation(); setMulti(null) }}>
+                  <Ic name="close" size={21} />
+                </button>
+                <span className="sel-count" aria-live="polite">{list.length} selected</span>
+                <div className="chat-peer-actions">
+                  {one && !isRecordLine(one) && <button className="ic-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); setMulti(null); startReply(one) }}><Ic name="reply" size={20} /></button>}
+                  {one && one.sender_id === user!.id && isEditable(one) && <button className="ic-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); startEdit(one) }}><PencilGlyph size={20} /></button>}
+                  <button className={'ic-btn' + (allStarred ? ' on' : '')} title={allStarred ? 'Unstar' : 'Star'} aria-label={allStarred ? 'Unstar' : 'Star'} disabled={!list.length} onClick={(e) => { e.stopPropagation(); starMany(list) }}><Ic name="star" size={20} /></button>
+                  <button className="ic-btn" title="Copy" aria-label="Copy" disabled={!list.length || list.some(isRecordLine)} onClick={(e) => { e.stopPropagation(); copyMany(list) }}><CopyGlyph size={20} /></button>
+                  <button className="ic-btn" title="Forward" aria-label="Forward" disabled={!list.length || !list.every(isForwardable)} onClick={(e) => { e.stopPropagation(); setForwardMsgs(list); setMulti(null) }}><Ic name="forward" size={20} /></button>
+                  <button className="ic-btn danger" title="Delete" aria-label="Delete" disabled={!list.length} onClick={(e) => { e.stopPropagation(); setDeleteFor(list) }}><Ic name="trash" size={20} /></button>
+                </div>
+              </div>
+            )
+          })()}
+          {active && selMsg && !multi && (
             <div className="chat-peer-head sel-bar" role="group" aria-label="Actions for the selected message">
               <button className="ic-btn" title="Cancel" aria-label="Cancel selection" onClick={(e) => { e.stopPropagation(); setSelectedId(null) }}>
                 <Ic name="close" size={21} />
@@ -1850,7 +2376,7 @@ export default function Chats() {
                     aria-label={a.label}
                     onClick={(e) => { e.stopPropagation(); setSelectedId(null); a.run() }}
                   >
-                    {a.key === 'copy' ? <CopyGlyph size={20} /> : <Ic name={a.icon!} size={20} />}
+                    {actionIcon(a)}
                   </button>
                 ))}
                 <div className="msg-menu-wrap">
@@ -1868,7 +2394,7 @@ export default function Chats() {
               </div>
             </div>
           )}
-          {active && !selMsg && (() => { const otherOnline = active.type === 'direct' && !!active.other_user_id && online.has(active.other_user_id); return (
+          {active && !selMsg && !multi && (() => { const otherOnline = active.type === 'direct' && !!active.other_user_id && online.has(active.other_user_id); return (
             <div className="chat-peer-head">
               {/* Mobile-only: back to the conversation list (WhatsApp-style). */}
               <button className="chat-list-btn" onClick={() => setActiveId('')} title="Back to chats" aria-label="Back to chats">
@@ -1892,7 +2418,7 @@ export default function Chats() {
               >
                 <div className="chat-peer-name">{active.name}</div>
                 <div className="muted chat-peer-sub">
-                  {typingName ? <span className="typing-text">{typingName} is typing…</span>
+                  {typingName ? <span className="typing-text">{active.type === 'group' ? `${typingName.split(' ')[0]} is ` : ''}{typingMode === 'recording' ? 'recording audio…' : 'typing…'}</span>
                     : active.type === 'group' ? <span>{active.members.map((m) => m.name.split(' ')[0]).join(', ')}</span>
                       : otherOnline ? <span className="online-text">online</span>
                         : (active.other_user_id && lastSeen[active.other_user_id]) ? <span>{lastSeenLabel(lastSeen[active.other_user_id])}</span>
@@ -1929,12 +2455,17 @@ export default function Chats() {
                   </button>
                   {headMenu && (
                     <div className="msg-menu mine head-menu" onClick={(e) => e.stopPropagation()}>
-                      <button className="phone-only" onClick={() => { setHeadMenu(false); setInSearchOpen(true) }}><Ic name="search" size={15} /> Search in chat</button>
-                      <button onClick={() => { setHeadMenu(false); setJumpOpen(true) }}><Ic name="calendar" size={15} /> Jump to a date</button>
                       <button onClick={() => openInfo()}><Ic name="user" size={15} /> {active.type === 'group' ? 'Group info' : 'Contact info'}</button>
+                      <button className="phone-only" onClick={() => { setHeadMenu(false); setInSearchOpen(true) }}><Ic name="search" size={15} /> Search in chat</button>
+                      <button onClick={() => { setHeadMenu(false); setSelectedId(null); setMulti([]) }}><SelectGlyph size={15} /> Select messages</button>
+                      {!readOnly && <button onClick={() => { setHeadMenu(false); setAssignFor({ source: null, draft: { title: '' } }) }}><TaskGlyph size={15} /> Assign a task</button>}
                       <button onClick={() => openInfo('media')}><Ic name="attach" size={15} /> Media, links and docs</button>
-                      <button onClick={() => { setHeadMenu(false); setShowChannels(true) }}><Ic name="hash" size={15} /> Browse channels</button>
+                      <button onClick={() => { setHeadMenu(false); setJumpOpen(true) }}><Ic name="calendar" size={15} /> Jump to a date</button>
+                      <button onClick={() => { setHeadMenu(false); if (active.muted) muteConversation(active, 0); else setMuteFor(active) }}><Ic name={active.muted ? 'bell' : 'muteBell'} size={15} /> {active.muted ? 'Unmute notifications' : 'Mute notifications'}</button>
+                      <button onClick={() => { setHeadMenu(false); archive(active, !active.archived) }}><ArchiveGlyph size={15} /> {active.archived ? 'Unarchive chat' : 'Archive chat'}</button>
+                      <button onClick={() => exportChat(active)}><ExportGlyph size={15} /> Export chat</button>
                       <button onClick={() => { setHeadMenu(false); printConversation() }}><Ic name="doc" size={15} /> Print conversation</button>
+                      <button onClick={() => { setHeadMenu(false); setShowChannels(true) }}><Ic name="hash" size={15} /> Browse channels</button>
                     </div>
                   )}
                   {jumpOpen && <JumpToDate days={dayIndex} onPick={jumpToDay} onClose={() => setJumpOpen(false)} />}
@@ -1988,7 +2519,8 @@ export default function Chats() {
           {touchUI && <span id="msg-select-hint" className="sr-only">Select to react, reply or forward</span>}
           <div className="sr-only" aria-live="polite">{selMsg ? `Message from ${selMsg.sender_id === user!.id ? 'you' : senderName(selMsg.sender_id)} selected. Reactions are next to it; reply, forward and more are at the top.` : ''}</div>
 
-          <div className="chat-log" ref={logRef}>
+          <div className="chat-log-wrap">
+          <div className={'chat-log' + (multi ? ' picking' : '')} ref={logRef} onScroll={onLogScroll}>
             {/* The New chat button is offered whether or not there are existing
                 chats. Gating it on an empty list meant the one screen with room
                 for it lost the button the moment you had a single conversation,
@@ -2005,14 +2537,24 @@ export default function Chats() {
                 />
               </div>
             )}
-            {active && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}>{inSearch ? 'No matching messages' : <>No messages yet.<br />Say hello</>}</div>}
+            {active && hasMore && !inSearch.trim() && (
+              <div className="older-row">
+                {loadingOlder ? <span className="spinner" /> : <button className="btn btn-ghost btn-sm" onClick={loadOlder}>Load earlier messages</button>}
+              </div>
+            )}
+            {active && threadLoading && messages.length === 0 && <div style={{ margin: 'auto' }}><span className="spinner" /></div>}
+            {active && !threadLoading && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}>{inSearch ? 'No matching messages' : <>No messages yet.<br />Say hello</>}</div>}
             {logItems.map((it, idx) => {
               if ('sep' in it) return <div key={'sep' + idx} className="date-sep"><span>{it.sep}</span></div>
-              if ('unread' in it) return <div key={'unread' + idx} className="unread-sep"><span>Unread messages</span></div>
+              if ('unread' in it) return <div key={'unread' + idx} className="unread-sep"><span>{it.unread} unread message{it.unread === 1 ? '' : 's'}</span></div>
               const m = it.m
+              // A group event ("Priya added Ravi"): a centred line, nobody's message.
+              if (m.kind === 'system') return <div key={m.id} data-msg={m.id} className="sys-line"><span>{m.system}</span></div>
               const mine = m.sender_id === user!.id
               const isTemp = m.id.startsWith('tmp_')
               const isImage = !!m.file && (m.file.type || '').startsWith('image/')
+              const isVideo = !!m.file && (m.file.type || '').startsWith('video/')
+              const isCard = !!m.kind && !m.deleted
               const showSender = active?.type === 'group' && !mine && !m.deleted
               // A message that names me gets an accent stripe — in a busy group,
               // scrolling back for the one line that was actually aimed at you is
@@ -2029,25 +2571,54 @@ export default function Chats() {
               const rxTop = Object.keys(rxCount).sort((a, b) => rxCount[b] - rxCount[a]).slice(0, 3)
               const rxMine = rxs.some((rx) => rx.user_id === user!.id)
               const rxWho = rxs.map((rx) => (rx.user_id === user!.id ? 'You' : senderName(rx.user_id))).join(', ')
+              const picked = !!multi && multi.includes(m.id)
+              // The text itself: folded behind "Read more" when it is long, and
+              // shown whole while searching (the match may be further down).
+              const body = m.kind ? '' : (m.body || '')
+              const long = body.length > FOLD_CHARS || body.split('\n').length > FOLD_LINES
+              const folded = long && !unfolded.has(m.id) && !inSearch.trim()
+              const shownBody = folded ? foldText(body) : body
+              const tick = isTemp ? 'pending' : m.seen ? 'read' : m.delivered ? 'delivered' : 'sent'
+              const foot = (
+                <>
+                  {m.starred && <span title="Starred" style={{ display: 'inline-flex' }}><Ic name="star" size={11} /></span>}
+                  {m.edited_at && <span className="edited-tag">Edited</span>}
+                  <span className="bubble-time">{fmtTime(m.created_at)}</span>
+                  {mine && <Ticks state={tick} />}
+                </>
+              )
               return (
-                <div key={m.id} data-msg={m.id} className={'msg-wrap' + (flashId === m.id ? ' flash' : '') + (touchUI && selectedId === m.id && !m.deleted ? ' selected' : '')} style={{ alignItems: m.call ? 'center' : mine ? 'flex-end' : 'flex-start' }}>
-                  {m.meeting ? (
-                    <button className="meeting-card" onClick={() => navigate(`/meetings/${m.meeting!.id}`)}>
-                      <div className="meeting-card-head">
-                        <Ic name="doc" size={14} /> <span>{m.meeting.title}</span>
-                      </div>
-                      {m.meeting.summary && <div className="meeting-card-sum">{m.meeting.summary}</div>}
-                      <div className="meeting-card-meta">
-                        {m.meeting.tasks > 0 && <span className="mc-chip">{m.meeting.tasks} task{m.meeting.tasks === 1 ? '' : 's'} to review</span>}
-                        {m.meeting.decisions > 0 && <span className="mc-chip">{m.meeting.decisions} decision{m.meeting.decisions === 1 ? '' : 's'}</span>}
-                        {m.meeting.risks > 0 && <span className="mc-chip warn">{m.meeting.risks} risk{m.meeting.risks === 1 ? '' : 's'}</span>}
-                        <span className="mc-open">Open summary →</span>
-                      </div>
+                <div key={m.id} data-msg={m.id}
+                  className={'msg-wrap' + (flashId === m.id ? ' flash' : '') + (touchUI && selectedId === m.id && !m.deleted ? ' selected' : '') + (picked ? ' picked' : '') + (m.call || m.meeting ? ' centred' : mine ? ' mine' : '')}
+                  style={{ alignItems: m.call || m.meeting ? 'center' : mine ? 'flex-end' : 'flex-start' }}
+                  // Desktop, picking messages: a click anywhere on the row picks
+                  // it — caught on the way down, so a quote, a link or a button
+                  // inside the message does not do its own thing instead.
+                  onClickCapture={multi && !touchUI ? (e) => {
+                    if ((e.target as HTMLElement).closest('.pick-box')) return
+                    e.preventDefault(); e.stopPropagation(); toggleMulti(m.id)
+                  } : undefined}>
+                  {multi && (
+                    <button type="button" className={'pick-box' + (picked ? ' on' : '')} aria-pressed={picked}
+                      aria-label={picked ? 'Unselect this message' : 'Select this message'}
+                      onClick={(e) => { e.stopPropagation(); toggleMulti(m.id) }}>
+                      {picked && <Ic name="check" size={12} />}
                     </button>
+                  )}
+                  {touchUI && !multi && !m.call && !m.meeting && <span className="swipe-ic" aria-hidden="true"><Ic name="reply" size={16} /></span>}
+                  {m.meeting ? (
+                    <CallSummaryCard
+                      meeting={m.meeting}
+                      isManager={isManager}
+                      meId={user!.id}
+                      onOpenMeeting={() => navigate(`/meetings/${m.meeting!.id}`)}
+                      onOpenTask={(tid) => setOpenTaskId(tid)}
+                    />
                   ) : m.call ? (
                     <div className="call-line">
                       <Ic name={m.call.kind === 'video' ? 'video' : 'phone'} size={14} />
                       <span>{m.body}</span>
+                      <span className="call-line-time">{fmtTime(m.created_at)}</span>
                       <button className="call-line-back" onClick={() => startCall(active!.id, m.call!.kind, active!.name)}>Call back</button>
                     </div>
                   ) : (
@@ -2055,16 +2626,28 @@ export default function Chats() {
                     <div className="msg-body">
                       {showSender && <div className="msg-sender" style={{ color: senderColor(m.sender_id) }}>{senderName(m.sender_id)}</div>}
                       {m.deleted ? (
-                        <div className="bubble deleted row" style={{ gap: 6 }}><Ic name="block" size={13} /> This message was deleted<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
+                        <div className="bubble deleted row" style={{ gap: 6 }} {...bubbleTouch(m)}><Ic name="block" size={13} /> {mine ? 'You deleted this message' : 'This message was deleted'}<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
                       ) : (
                         <div
-                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !m.uploading ? ' pic-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
+                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !m.uploading ? ' pic-bubble' : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
                           {...bubbleTouch(m)}
                         >
                           {m.forwarded && <div className="forwarded-tag row" style={{ gap: 5 }}><Ic name="forward" size={12} /> Forwarded</div>}
                           {m.reply && (
-                            <div className="reply-quote"><span className="reply-quote-name">{m.reply.sender_id === user!.id ? 'You' : m.reply.sender_name}</span><span className="reply-quote-text">{m.reply.text}</span></div>
+                            <button type="button" className="reply-quote" onClick={(e) => { e.stopPropagation(); jumpToReply(m.reply!) }} aria-label={`Replying to ${m.reply.sender_id === user!.id ? 'yourself' : m.reply.sender_name}: ${m.reply.text}. Show it`}>
+                              <span className="reply-quote-main">
+                                <span className="reply-quote-name">{m.reply.sender_id === user!.id ? 'You' : m.reply.sender_name}{m.reply.from && <span className="reply-quote-from"> · {m.reply.from}</span>}</span>
+                                <span className="reply-quote-text">{m.reply.text}</span>
+                              </span>
+                              {m.reply.image && <img className="reply-quote-thumb" src={fileUrl({ id: m.reply.id })} alt="" loading="lazy" />}
+                            </button>
                           )}
+                          {m.kind === 'poll' && m.poll && (
+                            <PollCard msg={m} meId={user!.id} members={active?.members || []} onVote={(picks) => vote(m, picks)} onViewVotes={() => setVotesFor(m.id)} />
+                          )}
+                          {m.kind === 'task' && m.task && <TaskCard task={m.task} meId={user!.id} onOpen={() => setOpenTaskId(m.task!.id)} />}
+                          {m.kind === 'location' && m.location && <LocationCard loc={m.location} />}
+                          {m.kind === 'contact' && <ContactCard contact={m.contact || null} meId={user!.id} onMessage={messageUser} />}
                           {m.file && isAudio(m.file) && !m.uploading ? (
                             <div className="voice-note">
                               <VoicePlayer src={fileUrl(m)} id={m.id} mine={mine} />
@@ -2083,27 +2666,21 @@ export default function Chats() {
                               </div>
                             </div>
                           ) : m.file && (isImage && !m.uploading
-                            ? <a href={fileUrl(m)} target="_blank" rel="noreferrer"><img className="chat-image" src={fileUrl(m)} alt={m.file.name} /></a>
-                            : <div className="chat-file">
-                                <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <Ic name="attach" size={18} />}</span>
-                                <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? 'Sending…' : fmtSize(m.file?.size)}</span></span>
-                                {!m.uploading && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
-                              </div>)}
-                          {m.body && <MessageText body={m.body} mentions={m.mentions} meId={user!.id} fromMe={mine} />}
-                          {!m.file && (
-                            <span className="bubble-foot-spacer" aria-hidden="true">
-                              {m.starred && <span><Ic name="star" size={11} /></span>}
-                              {m.edited_at && <span className="edited-tag">edited</span>}
-                              <span>{fmtTime(m.created_at)}</span>
-                              {mine && <span className="ticks">{m.seen ? '✓✓' : '✓'}</span>}
-                            </span>
-                          )}
-                          <span className="bubble-foot">
-                            {m.starred && <span title="Starred" style={{ display: 'inline-flex' }}><Ic name="star" size={11} /></span>}
-                            {m.edited_at && <span className="edited-tag">edited</span>}
-                            <span className="bubble-time">{fmtTime(m.created_at)}</span>
-                            {mine && <span className="ticks" title={m.seen ? 'Seen' : 'Sent'}>{m.seen ? '✓✓' : '✓'}</span>}
-                          </span>
+                            ? <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
+                                <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
+                              </button>
+                            : isVideo && !m.uploading
+                              ? <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
+                              : <div className="chat-file">
+                                  <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <DocGlyph size={20} />}</span>
+                                  <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? 'Sending…' : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
+                                  {!m.uploading && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
+                                </div>)}
+                          {!m.file && !m.kind && !isTemp && /https?:\/\//i.test(body) && <LinkPreview messageId={m.id} version={m.edited_at || ''} />}
+                          {shownBody && <MessageText body={shownBody} mentions={m.mentions} meId={user!.id} fromMe={mine} highlight={inSearch} />}
+                          {folded && <button type="button" className="read-more" onClick={(e) => { e.stopPropagation(); setUnfolded((s) => new Set(s).add(m.id)) }}>Read more</button>}
+                          {!m.file && !isCard && <span className="bubble-foot-spacer" aria-hidden="true">{foot}</span>}
+                          <span className="bubble-foot">{foot}</span>
                         </div>
                       )}
                       {rxs.length > 0 && (
@@ -2121,12 +2698,15 @@ export default function Chats() {
                       )}
                     </div>
                     {/* Mouse devices: the tools beside the message, shown on hover.
-                        Touch screens select the message instead (bubbleTouch). */}
-                    {!touchUI && !isTemp && !m.deleted && (
+                        Touch screens select the message instead (bubbleTouch).
+                        Edit is one of them, for your own messages — it was only in
+                        the ⋯ menu before, and nobody found it there. */}
+                    {!touchUI && !isTemp && !m.deleted && !multi && (
                       <div className={'msg-tools' + (menuId === m.id || reactFor === m.id || emojiFor === m.id ? ' open' : '')}>
                         <button className="msg-tool-btn" title="React" aria-label="React" aria-expanded={reactFor === m.id} onClick={(e) => { e.stopPropagation(); setReactFor(reactFor === m.id ? null : m.id); setMenuId(null) }}><Ic name="smile" size={16} /></button>
                         <button className="msg-tool-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); startReply(m) }}><Ic name="reply" size={16} /></button>
-                        <button className="msg-tool-btn task-tool" title="Assign as task" aria-label="Assign as task" onClick={(e) => { e.stopPropagation(); toTask({ messageId: m.id }) }}><Ic name="taskAdd" size={16} /></button>
+                        {mine && isEditable(m) && <button className="msg-tool-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); startEdit(m) }}><PencilGlyph size={16} /></button>}
+                        {m.kind !== 'task' && <button className="msg-tool-btn task-tool" title="Assign as task" aria-label="Assign as task" onClick={(e) => { e.stopPropagation(); toTask({ messageId: m.id }, m) }}><Ic name="taskAdd" size={16} /></button>}
                         <div className="msg-menu-wrap">
                           <button className="msg-tool-btn" title="More" aria-label="More actions" aria-expanded={menuId === m.id} onClick={(e) => { e.stopPropagation(); setMenuId(menuId === m.id ? null : m.id); setReactFor(null) }}>⋯</button>
                           {menuId === m.id && (
@@ -2155,7 +2735,7 @@ export default function Chats() {
                       back; one picked from the full set joins the row so it can
                       be taken back too. ＋ opens every emoji (over the composer,
                       where a phone has the room). */}
-                  {touchUI && selectedId === m.id && !m.deleted && !isTemp && !m.call && !m.meeting && emojiFor !== m.id && (() => {
+                  {touchUI && selectedId === m.id && !multi && !m.deleted && !isTemp && !m.call && !m.meeting && emojiFor !== m.id && (() => {
                     const myEmoji = rxs.find((rx) => rx.user_id === user!.id)?.emoji
                     const quick = myEmoji && !EMOJIS.includes(myEmoji) ? [myEmoji, ...EMOJIS] : EMOJIS
                     return (
@@ -2173,20 +2753,54 @@ export default function Chats() {
                 </div>
               )
             })}
+            {/* The call that just ended is being turned into its summary and
+                tasks; the card replaces this line when it lands. */}
+            {active && summarisingCall[active.id] && (
+              <div className="sys-line ai-working"><span><SparkGlyph size={13} /> Summarising the call and assigning its tasks…</span></div>
+            )}
             {typingName && !inSearch && <div className="bubble ai typing-bubble"><span className="typing-dots"><i /><i /><i /></span></div>}
           </div>
+          {/* Scrolled up into history: back to the latest, with how many came in meanwhile. */}
+          {active && awayFromBottom && (
+            <button className="to-bottom" onClick={toBottom} aria-label={newBelow ? `${newBelow} new message${newBelow === 1 ? '' : 's'}. Go to the latest` : 'Go to the latest message'}>
+              <ChevronDown size={18} />
+              {newBelow > 0
+                ? <span><span className="to-bottom-count">{newBelow > 99 ? '99+' : newBelow}</span> new message{newBelow === 1 ? '' : 's'}</span>
+                : <span>Latest</span>}
+            </button>
+          )}
+          </div>
 
-          {/* composer */}
-          {active && (
+          {/* composer — or, in a group only its admins may write to, the line
+              that says so (WhatsApp's own wording). */}
+          {active && readOnly && (
+            <div className="composer readonly-bar" role="note">Only admins can send messages</div>
+          )}
+          {active && !readOnly && (
             <div className="composer">
-              {replyTo && (
-                <div className="reply-banner">
-                  <div className="reply-banner-body"><span className="reply-quote-name">Replying to {replyTo.sender_id === user!.id ? 'yourself' : senderName(replyTo.sender_id)}</span><span className="reply-quote-text row" style={{ gap: 5 }}>{replyTo.file ? <><Ic name="attach" size={12} /> {replyTo.file.name}</> : replyTo.body}</span></div>
-                  <button className="btn btn-ghost btn-sm" aria-label="Cancel reply" onClick={() => setReplyTo(null)}>✕</button>
-                </div>
-              )}
+              {replyTo && (() => {
+                const fromGroup = replyTo.conversation_id !== active.id ? convos.find((c) => c.id === replyTo.conversation_id) : null
+                const what = replyTo.kind === 'poll' ? `📊 ${replyTo.body}` : replyTo.kind === 'location' ? `📍 ${replyTo.body || 'Location'}` : replyTo.kind === 'contact' ? `👤 ${replyTo.body}` : replyTo.kind === 'task' ? `📋 ${replyTo.body}` : replyTo.body || replyTo.transcript
+                return (
+                  <div className="reply-banner">
+                    <div className="reply-banner-body">
+                      <span className="reply-quote-name">Replying to {replyTo.sender_id === user!.id ? 'yourself' : senderName(replyTo.sender_id) !== 'Unknown' ? senderName(replyTo.sender_id) : (replyTo.reply?.sender_name || 'them')}{fromGroup ? <span className="reply-quote-from"> · {fromGroup.name}</span> : null}</span>
+                      <span className="reply-quote-text row" style={{ gap: 5 }}>{replyTo.file && !what ? <><Ic name="attach" size={12} /> {replyTo.file.name}</> : what}</span>
+                    </div>
+                    {replyTo.file && (replyTo.file.type || '').startsWith('image/') && <img className="reply-quote-thumb" src={fileUrl(replyTo)} alt="" />}
+                    <button className="btn btn-ghost btn-sm" aria-label="Cancel reply" onClick={() => setReplyTo(null)}>✕</button>
+                  </div>
+                )
+              })()}
               {editing && (
-                <div className="reply-banner editing"><div className="reply-banner-body"><span className="reply-quote-name">Editing message</span></div><button className="btn btn-ghost btn-sm" aria-label="Cancel editing" onClick={() => { setEditing(null); setInput('') }}>✕</button></div>
+                <div className="reply-banner editing">
+                  <span className="edit-banner-ic" aria-hidden="true"><PencilGlyph size={15} /></span>
+                  <div className="reply-banner-body">
+                    <span className="reply-quote-name">Edit message</span>
+                    <span className="reply-quote-text">{editing.body || 'Caption'}</span>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" aria-label="Cancel editing" onClick={endEdit}>✕</button>
+                </div>
               )}
               {/* What will go with the next Send: pictures as thumbnails, other
                   files by name. ✕ takes one back out. */}
@@ -2245,13 +2859,26 @@ export default function Chats() {
                   return target ? <EmojiPicker autoFocus={false} onClose={() => setEmojiFor(null)} onPick={(e) => { setEmojiFor(null); react(target, e) }} /> : null
                 })()}
                 <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={onPickFile} />
+                <input ref={mediaRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }} onChange={onPickFile} />
+                <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onPickFile} />
+                {/* WhatsApp's attach sheet: files, pictures, the camera, a place,
+                    a teammate, a poll — and the one WhatsApp does not have, a
+                    task handed to someone in this chat. */}
                 {attachMenu && (
-                  <div className="attach-pop" role="menu" aria-label="Attach" onClick={(e) => e.stopPropagation()}>
-                    <button role="menuitem" onClick={() => { setAttachMenu(false); fileRef.current?.click() }}><Ic name="image" size={17} /> Photo or file</button>
-                    <button role="menuitem" onClick={pasteFromClipboard}>
-                      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /></svg>
-                      Paste from clipboard
-                    </button>
+                  <div className="attach-pop attach-grid" role="menu" aria-label="Attach" onClick={(e) => e.stopPropagation()}>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); fileRef.current?.click() }}><span className="ag-ic doc"><DocGlyph size={20} /></span>Document</button>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); mediaRef.current?.click() }}><span className="ag-ic media"><GalleryGlyph size={20} /></span>Photos &amp; videos</button>
+                    {touchUI && <button role="menuitem" onClick={() => { setAttachMenu(false); cameraRef.current?.click() }}><span className="ag-ic cam"><CameraGlyph size={20} /></span>Camera</button>}
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); setLocOpen(true) }}><span className="ag-ic loc"><PinDropGlyph size={20} /></span>Location</button>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); setContactOpen(true) }}><span className="ag-ic contact"><ContactGlyph size={20} /></span>Contact</button>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); setPollOpen(true) }}><span className="ag-ic poll"><PollGlyph size={20} /></span>Poll</button>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); setAssignFor({ source: null, draft: { title: input.trim() } }) }}><span className="ag-ic task"><TaskGlyph size={20} /></span>Task</button>
+                    {touchUI && canReadClipboardImages() && (
+                      <button role="menuitem" onClick={pasteFromClipboard}>
+                        <span className="ag-ic paste"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /></svg></span>
+                        Paste
+                      </button>
+                    )}
                   </div>
                 )}
                 {/* One box holds everything: emoji on the left, the text in the
@@ -2324,15 +2951,12 @@ export default function Chats() {
                     {!editing && (
                       <button
                         className="ic-btn cb-ic"
-                        title="Attach (or paste a screenshot with Ctrl+V)"
-                        aria-label="Attach a file"
-                        aria-haspopup={touchUI && canReadClipboardImages() ? 'menu' : undefined}
-                        aria-expanded={touchUI && canReadClipboardImages() ? attachMenu : undefined}
+                        title="Attach a file, photo, location, contact, poll or task (or paste a screenshot with Ctrl+V)"
+                        aria-label="Attach"
+                        aria-haspopup="menu"
+                        aria-expanded={attachMenu}
                         disabled={busy}
-                        onClick={(e) => {
-                          if (touchUI && canReadClipboardImages()) { e.stopPropagation(); setAttachMenu((o) => !o) }
-                          else fileRef.current?.click()
-                        }}
+                        onClick={(e) => { e.stopPropagation(); setAttachMenu((o) => !o); setEmojiFor(null) }}
                       ><Ic name="attach" size={19} /></button>
                     )}
                   </>)}
@@ -2399,19 +3023,100 @@ export default function Chats() {
             if (inSearch) { setInSearch(''); setInSearchOpen(false) }
             requestAnimationFrame(() => { if (!scrollToMessage(id)) toast.info('That message is further back than this chat has loaded') })
           }}
-          onMessageUser={(uid) => {
-            api.post('/chat/conversations', { type: 'direct', userId: uid })
-              .then((conv: any) => { setShowInfo(false); loadConvos(); setActiveId(conv.id) })
-              .catch(() => toast.error("I couldn't open that conversation."))
-          }}
+          onMessageUser={messageUser}
           onMute={() => { if (active.muted) muteConversation(active, 0); else setMuteFor(active) }}
           onClear={() => { setShowInfo(false); clearChat(active) }}
+          onDeleteChat={() => deleteChat(active)}
+          onExport={() => exportChat(active)}
+          onEditDescription={() => setDescOpen(true)}
           // No setShowInfo(false): the move to Tasks unmounts the panel anyway, and
           // Back from Tasks should find it open again.
           onViewTasks={() => navigate(`/tasks?assignee=${active.other_user_id}`)}
         />
       )}
-      {forwardMsg && <ForwardModal message={forwardMsg} convos={convos} onClose={() => setForwardMsg(null)} onDone={() => { setForwardMsg(null); loadConvos() }} />}
+      {forwardMsgs && <ForwardModal messages={forwardMsgs} convos={convos} onClose={() => setForwardMsgs(null)} onDone={() => { setForwardMsgs(null); loadConvos() }} />}
+      {assignFor && active && (
+        <TaskAssignSheet
+          conversation={active}
+          meId={user!.id}
+          source={assignFor.source}
+          draft={assignFor.draft}
+          workload={workload}
+          senderName={senderName}
+          onClose={() => setAssignFor(null)}
+          onDone={(card) => {
+            // Typed in the box and turned into a task: the words are the task
+            // now, so they leave the box.
+            const fromBox = !assignFor.source && !!input.trim() && input.trim() === (assignFor.draft.title || '').trim()
+            setAssignFor(null); mergeIncoming(card); loadConvos(); loadWorkload()
+            if (fromBox) setInput('')
+          }}
+          onMoreOptions={openFullTaskForm}
+        />
+      )}
+      {openTaskId && (
+        <TaskDrawer
+          taskId={openTaskId}
+          onClose={() => setOpenTaskId(null)}
+          onChange={(t) => {
+            // Keep the cards in the thread true to the task as it changes here.
+            if (t && t.id) setMessages((p) => p.map((x) => (x.task?.id === t.id ? { ...x, task: { ...x.task!, title: t.title, status: t.status, priority: t.priority, due_date: t.due_date, assignee_id: t.assignee_id } } : x)))
+            else if (activeIdRef.current) loadThread(activeIdRef.current)
+            loadWorkload()
+          }}
+        />
+      )}
+      {infoFor && (
+        <MessageInfoSheet
+          message={infoFor}
+          preview={<div className="bubble user mi-bubble">{infoFor.body || infoFor.file?.name || (infoFor.kind === 'location' ? '📍 Location' : '')}<span className="bubble-foot" style={{ position: 'static', marginLeft: 8 }}><span className="bubble-time">{fmtTime(infoFor.created_at)}</span><Ticks state={infoFor.seen ? 'read' : infoFor.delivered ? 'delivered' : 'sent'} /></span></div>}
+          onClose={() => setInfoFor(null)}
+        />
+      )}
+      {deleteFor && <DeleteDialog count={deleteFor.length} canEveryone={canDeleteForAll(deleteFor)} onPick={(scope) => doDelete(deleteFor, scope)} onClose={() => setDeleteFor(null)} />}
+      {pollOpen && <PollComposer onSend={sendPoll} onClose={() => setPollOpen(false)} />}
+      {votesFor && active && (() => {
+        const vm = messages.find((x) => x.id === votesFor)
+        return vm?.poll ? <PollVotesSheet msg={vm} members={active.members} meId={user!.id} onClose={() => setVotesFor(null)} /> : null
+      })()}
+      {locOpen && <LocationPicker onSend={sendLocation} onClose={() => setLocOpen(false)} />}
+      {contactOpen && <ContactPicker meId={user!.id} onPick={sendContact} onClose={() => setContactOpen(false)} />}
+      {descOpen && active && (
+        <DescriptionEditor
+          initial={active.description || ''}
+          onClose={() => setDescOpen(false)}
+          onSave={async (v) => {
+            try { await api.patch(`/chat/conversations/${active.id}`, { description: v }); setDescOpen(false); loadConvos(); return true }
+            catch (e: any) { toast.error(e.message); return false }
+          }}
+        />
+      )}
+      {callsOpen && (
+        <CallsSheet
+          isManager={isManager}
+          onClose={() => setCallsOpen(false)}
+          onCall={(cid, kind, name) => { setCallsOpen(false); startCall(cid, kind, name) }}
+          // A one-to-one deleted from the list is opened through its person,
+          // which brings it back; anything else is still in the list.
+          onOpenChat={(cid, otherId) => {
+            setCallsOpen(false); setShowArchived(false)
+            if (!convos.some((c) => c.id === cid) && otherId) messageUser(otherId)
+            else setActiveId(cid)
+          }}
+          onOpenSummary={(mid) => { setCallsOpen(false); navigate(`/meetings/${mid}`) }}
+        />
+      )}
+      {viewerAt && (
+        <MediaViewer
+          items={mediaMsgs}
+          startId={viewerAt}
+          senderName={senderName}
+          meId={user!.id}
+          onClose={() => setViewerAt(null)}
+          onForward={(m) => { setViewerAt(null); setForwardMsgs([m]) }}
+          onShowInChat={(m) => { setViewerAt(null); requestAnimationFrame(() => scrollToMessage(m.id)) }}
+        />
+      )}
       {showStarred && <StarredModal onClose={() => setShowStarred(false)} onOpen={(cid, mid) => { setShowStarred(false); openMessage(cid, mid) }} />}
       {remindFor && <RemindModal message={remindFor} onClose={() => setRemindFor(null)} />}
       {showChannels && <ChannelsModal onClose={() => setShowChannels(false)} onOpen={(cid) => { setShowChannels(false); loadConvos(); setActiveId(cid) }} />}
@@ -2436,31 +3141,41 @@ export default function Chats() {
           onDone={() => { setScheduleOpen(false); setInput(''); setPicked([]) }}
         />
       )}
-      {showMentions && <MentionsModal meId={user!.id} onClose={() => setShowMentions(false)} onOpen={(cid, mid) => { setShowMentions(false); openMessage(cid, mid) }} onTask={(mid) => { setShowMentions(false); toTask({ messageId: mid }) }} />}
+      {showMentions && <MentionsModal meId={user!.id} onClose={() => setShowMentions(false)} onOpen={(cid, mid) => { setShowMentions(false); openMessage(cid, mid) }} onTask={(cid, mid) => { setShowMentions(false); taskFromAnywhere(cid, mid) }} />}
     </div>
   )
 }
 
 // ---------- Forward modal ----------
-function ForwardModal({ message, convos, onClose, onDone }: { message: Msg; convos: Conversation[]; onClose: () => void; onDone: () => void }) {
+function ForwardModal({ messages, convos, onClose, onDone }: { messages: Msg[]; convos: Conversation[]; onClose: () => void; onDone: () => void }) {
   // A dialog: focus moves into it, Tab stays inside, Escape closes it, and
   // focus goes back to what opened it (lib/useDialog).
   const cardRef = useDialog<HTMLDivElement>(onClose)
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
-  const list = convos.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()))
+  // Groups only their admins may write to are left out for everyone else.
+  const list = convos.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()) && !(c.type === 'group' && c.admins_only && c.role !== 'admin'))
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  // Several messages go in the order they were said.
+  const ordered = messages.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))
   const go = async () => {
     if (!sel.size) return
     setBusy(true)
-    try { await api.post(`/chat/message/${message.id}/forward`, { conversationIds: [...sel] }); onDone() } catch (e: any) { toast.error(e.message); setBusy(false) }
+    try {
+      for (const m of ordered) await api.post(`/chat/message/${m.id}/forward`, { conversationIds: [...sel] })
+      toast.success(`Forwarded${ordered.length > 1 ? ` ${ordered.length} messages` : ''} to ${sel.size} chat${sel.size === 1 ? '' : 's'}`)
+      onDone()
+    } catch (e: any) { toast.error(e.message); setBusy(false) }
   }
+  const first = ordered[0]
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" ref={cardRef} role="dialog" aria-modal="true" aria-label="Forward message" onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>Forward to…</h3><button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button></div>
-        <div className="fwd-preview row" style={{ gap: 5 }}>{message.file ? <><Ic name="attach" size={13} /> {message.file.name}</> : message.body}</div>
+        <div className="fwd-preview row" style={{ gap: 5 }}>
+          {ordered.length > 1 ? `${ordered.length} messages` : first?.file ? <><Ic name="attach" size={13} /> {first.file.name}</> : first?.kind === 'location' ? `📍 ${first.body}` : first?.kind === 'contact' ? `👤 ${first.body}` : first?.body}
+        </div>
         <input className="chat-contact-search" placeholder="Search chats…" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="modal-list">
           {list.map((c) => (
@@ -2925,7 +3640,7 @@ function JumpToDate({ days, onPick, onClose }: { days: { iso: string; label: str
 // ---------- @ Mentions inbox ----------
 // Every message that named me, newest first. A mention in a group that moves fast
 // is otherwise indistinguishable from the rest of the unread count.
-function MentionsModal({ meId, onClose, onOpen, onTask }: { meId: string; onClose: () => void; onOpen: (convId: string, messageId?: string) => void; onTask: (messageId: string) => void }) {
+function MentionsModal({ meId, onClose, onOpen, onTask }: { meId: string; onClose: () => void; onOpen: (convId: string, messageId?: string) => void; onTask: (convId: string, messageId: string) => void }) {
   const [items, setItems] = useState<(Msg & { sender_name: string; conversation_name: string })[]>([])
   const [loaded, setLoaded] = useState(false)
   useEffect(() => { api.get('/chat/mentions').then((d) => setItems(d.items)).catch(() => {}).finally(() => setLoaded(true)) }, [])
@@ -2943,7 +3658,7 @@ function MentionsModal({ meId, onClose, onOpen, onTask }: { meId: string; onClos
                   {m.file ? <><Ic name="attach" size={13} /> {m.file.name}</> : <MessageText body={m.body} mentions={m.mentions} meId={meId} fromMe={false} />}
                 </div>
               </div>
-              <button className="btn btn-ghost btn-sm" title="Assign as task" aria-label="Assign as task" onClick={() => onTask(m.id)}><Ic name="taskAdd" size={15} /></button>
+              <button className="btn btn-ghost btn-sm" title="Assign as task" aria-label="Assign as task" onClick={() => onTask(m.conversation_id, m.id)}><Ic name="taskAdd" size={15} /></button>
             </div>
           ))}
         </div>
@@ -3065,12 +3780,13 @@ function byPeriod<T>(items: T[], at: (x: T) => string) {
   return out
 }
 
-function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManager, onClose, onChanged, onLeft, onCall, onSearch, onShowMessage, onMessageUser, onMute, onClear, onViewTasks }: {
+function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManager, onClose, onChanged, onLeft, onCall, onSearch, onShowMessage, onMessageUser, onMute, onClear, onViewTasks, onDeleteChat, onExport, onEditDescription }: {
   conv: Conversation; user: OrgUser; view: InfoView; setView: (v: InfoView) => void; online: Set<string>; lastSeen: Record<string, string>
   load?: { open: number; overdue: number }; isManager: boolean
   onClose: () => void; onChanged: () => void; onLeft: () => void
   onCall: (kind: 'audio' | 'video') => void; onSearch: () => void; onShowMessage: (messageId: string) => void
   onMessageUser: (userId: string) => void; onMute: () => void; onClear: () => void; onViewTasks: () => void
+  onDeleteChat: () => void; onExport: () => void; onEditDescription: () => void
 }) {
   const isGroup = conv.type === 'group'
   const isAdmin = isGroup && conv.role === 'admin'
@@ -3192,6 +3908,17 @@ function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManage
     try { await api.del(`/chat/conversations/${conv.id}`); onLeft() }
     catch (e: any) { toast.error(e.message) }
   }
+  // Make a member an admin, or dismiss one (admins only; the server keeps at
+  // least one admin in every group).
+  const setAdmin = async (m: Member, on: boolean) => {
+    try { await api.post(`/chat/conversations/${conv.id}/members/${m.id}/role`, { role: on ? 'admin' : 'member' }); setMemberOpen(null); onChanged() }
+    catch (e: any) { toast.error(e.message) }
+  }
+  const setAdminsOnly = async (on: boolean) => {
+    try { await api.post(`/chat/conversations/${conv.id}/settings`, { admins_only: on }); onChanged() }
+    catch (e: any) { toast.error(e.message) }
+  }
+  const creator = conv.created_by ? conv.members.find((x) => x.id === conv.created_by) : undefined
 
   const title = view === 'media' ? 'Media, links and docs' : view === 'add' ? 'Add members' : isGroup ? 'Group info' : 'Contact info'
   const SEP = ' · '
@@ -3266,6 +3993,27 @@ function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManage
               </div>
             </section>
 
+            {/* The group's description, and who started it when — WhatsApp's
+                second band. Admins write the description; it is the place for
+                "what this group is for". */}
+            {isGroup && (conv.description || isAdmin || conv.created_at) && (
+              <section className="ci-sec">
+                {conv.description ? (
+                  <div className="ci-desc">
+                    <div className="ci-desc-text">{conv.description}</div>
+                    {isAdmin && <button className="ic-btn ci-name-pen" aria-label="Edit group description" title="Edit group description" onClick={onEditDescription}><Ic name="edit" size={15} /></button>}
+                  </div>
+                ) : isAdmin ? (
+                  <button className="ci-row ci-add-desc" onClick={onEditDescription}><span className="ci-row-text"><span>Add group description</span></span></button>
+                ) : null}
+                {conv.created_at && (
+                  <div className="ci-created">
+                    Created by {creator ? (creator.id === user.id ? 'you' : creator.name) : 'a former member'}, {new Date(conv.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </div>
+                )}
+              </section>
+            )}
+
             {!isGroup && load && load.open > 0 && (
               <section className="ci-sec">
                 <div className="ci-row ci-static">
@@ -3318,6 +4066,7 @@ function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManage
                       {open && (
                         <div className="ci-member-actions">
                           <button className="btn btn-sm" onClick={() => onMessageUser(m.id)}><Ic name="chat" size={14} /> Message {m.name.split(' ')[0]}</button>
+                          {isAdmin && <button className="btn btn-sm" onClick={() => setAdmin(m, m.role !== 'admin')}><Ic name="user" size={14} /> {m.role === 'admin' ? 'Dismiss as admin' : 'Make group admin'}</button>}
                           {isAdmin && <button className="btn btn-sm ci-danger-btn" onClick={() => remove(m)}><Ic name="trash" size={14} /> Remove from group</button>}
                         </div>
                       )}
@@ -3332,6 +4081,25 @@ function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManage
               <button className="ci-row" onClick={onMute}>
                 <span className="ci-row-ic">{conv.muted ? <Ic name="muteBell" size={18} /> : <Ic name="bell" size={18} />}</span>
                 <span className="ci-row-text"><span>Notifications</span><span className="ci-row-sub">{conv.muted ? 'Muted — messages arrive quietly' : 'On'}</span></span>
+              </button>
+              {isGroup && (isAdmin ? (
+                <div className="ci-row ci-static">
+                  <span className="ci-row-ic"><Ic name="chat" size={18} /></span>
+                  <span className="ci-row-text">
+                    <span>Send messages</span>
+                    <span className="ci-row-sub">{conv.admins_only ? 'Only admins can send messages here' : 'All members can send messages'}</span>
+                  </span>
+                  <button className="btn btn-sm" onClick={() => setAdminsOnly(!conv.admins_only)}>{conv.admins_only ? 'Allow everyone' : 'Only admins'}</button>
+                </div>
+              ) : conv.admins_only ? (
+                <div className="ci-row ci-static">
+                  <span className="ci-row-ic"><Ic name="lock" size={18} /></span>
+                  <span className="ci-row-text"><span>Only admins can send messages</span></span>
+                </div>
+              ) : null)}
+              <button className="ci-row" onClick={onExport}>
+                <span className="ci-row-ic"><ExportGlyph size={18} /></span>
+                <span className="ci-row-text"><span>Export chat</span><span className="ci-row-sub">Every message, as a text file</span></span>
               </button>
               {isAdmin && (
                 <div className="ci-row ci-static">
@@ -3357,12 +4125,16 @@ function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManage
                     <span className="ci-row-text"><span>Delete group</span></span>
                   </button>
                 )}
-              </>) : (
+              </>) : (<>
                 <button className="ci-row ci-danger" onClick={onClear}>
-                  <span className="ci-row-ic"><Ic name="trash" size={18} /></span>
+                  <span className="ci-row-ic"><Ic name="block" size={18} /></span>
                   <span className="ci-row-text"><span>Clear chat</span></span>
                 </button>
-              )}
+                <button className="ci-row ci-danger" onClick={onDeleteChat}>
+                  <span className="ci-row-ic"><Ic name="trash" size={18} /></span>
+                  <span className="ci-row-text"><span>Delete chat</span></span>
+                </button>
+              </>)}
             </section>
           </>)}
 
