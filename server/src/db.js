@@ -477,6 +477,48 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_chat_scheduled_due ON chat_scheduled(sent, send_at);
 
+  -- A poll posted in a chat (WhatsApp's). The question is the message body; the
+  -- options are fixed once posted, because a vote is a vote FOR a particular
+  -- wording and editing an option under people's votes would change what they
+  -- said. One row per vote rather than a JSON blob, so two people voting at
+  -- the same moment cannot overwrite each other.
+  CREATE TABLE IF NOT EXISTS chat_polls (
+    message_id TEXT PRIMARY KEY,
+    options TEXT NOT NULL,               -- JSON array of option labels, in order
+    multi INTEGER DEFAULT 0,             -- 1 = people may pick more than one
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS chat_poll_votes (
+    message_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    option_idx INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, user_id, option_idx),
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  );
+
+  -- Every time someone's delivered / read position in a conversation moves
+  -- forward. chat_participants only holds where it is NOW; Message info has to
+  -- say WHEN a particular message was read, which is the first of these at or
+  -- after it was sent. One row per move, not per message, so a thread of a
+  -- thousand messages read in one go costs one row.
+  CREATE TABLE IF NOT EXISTS chat_receipt_marks (
+    conversation_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    kind TEXT NOT NULL,                  -- d = delivered | r = read
+    at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_receipt_marks ON chat_receipt_marks(conversation_id, user_id, kind, at);
+
+  -- Link previews, fetched once per address by the server and shared by every
+  -- message that carries it. data is NULL when the page had nothing to show,
+  -- which is remembered too so a dead link is not re-fetched on every render.
+  CREATE TABLE IF NOT EXISTS chat_link_previews (
+    url TEXT PRIMARY KEY,
+    data TEXT,
+    fetched_at TEXT NOT NULL
+  );
+
   -- AI Assistant chat history. One row per conversation thread; messages is a
   -- JSON array of {role, text, tasks?}. Scoped to the owning user so threads
   -- follow the manager across devices/browsers.
@@ -850,6 +892,35 @@ export function initSchema() {
   ensureColumn('users', 'status_emoji', "TEXT DEFAULT ''")
   ensureColumn('users', 'dnd_until', 'TEXT')
   ensureColumn('meetings', 'draft_seconds', 'INTEGER DEFAULT 0') // elapsed clock of an in-progress recording
+
+  // ---- WhatsApp parity for chat ----
+  // What a message IS when it is not plain text or a file: 'system' (a group
+  // event line — "Priya added Ravi"), 'poll', 'task' (a task assigned from the
+  // chat), 'location', 'contact'. NULL is an ordinary message. `meta` carries
+  // the kind's own data as JSON (who did what to whom, coordinates, …).
+  ensureColumn('chat_messages', 'kind', 'TEXT')
+  ensureColumn('chat_messages', 'meta', 'TEXT')
+  ensureColumn('chat_messages', 'task_id', 'TEXT')
+  // The second tick. Moves forward when a message reaches any of the person's
+  // devices — a live socket, or the app polling for unread counts.
+  ensureColumn('chat_participants', 'last_delivered_at', 'TEXT')
+  // The blue tick, kept apart from last_read_at on purpose: "Mark as unread"
+  // rewinds last_read_at, and that must not take back a read receipt the
+  // sender has already seen turn blue. This one only ever moves forward.
+  ensureColumn('chat_participants', 'read_receipt_at', 'TEXT')
+  ensureColumn('chat_participants', 'archived', 'INTEGER DEFAULT 0')
+  ensureColumn('chat_participants', 'marked_unread', 'INTEGER DEFAULT 0')
+  // "Delete chat": the conversation leaves your list until a message newer
+  // than this arrives, the way WhatsApp brings a deleted chat back.
+  ensureColumn('chat_participants', 'removed_at', 'TEXT')
+  ensureColumn('chat_conversations', 'description', "TEXT DEFAULT ''")
+  // Group setting "Send messages: only admins".
+  ensureColumn('chat_conversations', 'admins_only', 'INTEGER DEFAULT 0')
+  // Calls are transcribed for tasks unless someone in the call switches it off;
+  // meeting_id/processed_at make turning a finished call into tasks happen once.
+  ensureColumn('chat_calls', 'transcribe', 'INTEGER DEFAULT 1')
+  ensureColumn('chat_calls', 'meeting_id', 'TEXT')
+  ensureColumn('chat_calls', 'processed_at', 'TEXT')
 
   // Index on conversation_id — created here (not in the inline schema) so it runs
   // AFTER the column is ensured above; otherwise older DBs predating the column fail.

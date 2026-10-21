@@ -464,4 +464,4 @@ r.post('/:id/assign', requireRole('manager', 'admin'), (req, res) => {
 })
 
 export default r
-export { persistMeeting, attendeesFor }
+export { persistMeeting, attendeesFor, createTaskFromSuggestion }

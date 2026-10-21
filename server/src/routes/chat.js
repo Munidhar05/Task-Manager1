@@ -5,17 +5,23 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
 import { authRequired, requireRole, verifyToken } from '../auth.js'
-import { id, now, notify } from '../util.js'
-import { pushToUser, getOnlineUsers } from '../ws/chatHub.js'
+import { id, now, notify, audit } from '../util.js'
+import { pushToUser, getOnlineUsers, onUserOnline } from '../ws/chatHub.js'
 import { indexChatMessage, removeEmbedding } from '../ai/ragIndex.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 import { analyzeMeetingTranscript } from '../ai/extractor.js'
-import { persistMeeting, attendeesFor } from './meetings.js'
+import { persistMeeting, attendeesFor, createTaskFromSuggestion } from './meetings.js'
 import { parseDueDate } from '../ai/dates.js'
 import { detectPriority } from '../ai/rules.js'
+import { linkPreview } from '../chatLinkPreview.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
-// real-time delivery, replies, reactions, stars, edit, single-delete, read receipts.
+// real-time delivery, replies (also privately, from a group), reactions, stars,
+// edit, delete for me / for everyone, sent-delivered-read ticks with Message
+// info, polls, locations, contacts, group events and admin settings, archive —
+// plus the two things WhatsApp cannot do: a message becomes an assigned task
+// without leaving the chat, and a call becomes a summary with its tasks
+// already assigned.
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'data', 'chat_uploads')
 fs.mkdirSync(UPLOAD_DIR, { recursive: true })
@@ -80,35 +86,195 @@ function reactionsByMessage(ids) {
   return out
 }
 
-// One-line preview of a message for reply quotes / conversation lists.
-function snippet(row) {
+const parseMeta = (row) => { try { return row?.meta ? JSON.parse(row.meta) : {} } catch { return {} } }
+const nameOf = (uid) => db.prepare('SELECT name FROM users WHERE id=?').get(uid)?.name || 'Someone'
+
+// A group event line, worded for whoever reads it: "You added Ravi" to Priya,
+// "Priya added you" to Ravi — WhatsApp's own wording. Built at read time from
+// ids, so a teammate renamed since reads under their current name.
+function systemText(meta, viewerId) {
+  const who = (uid) => (uid === viewerId ? 'You' : nameOf(uid))
+  const whom = (uid) => (uid === viewerId ? 'you' : nameOf(uid))
+  const list = (ids = []) => {
+    const n = ids.map(whom)
+    return n.length <= 1 ? (n[0] || '') : `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`
+  }
+  const a = who(meta.actor)
+  switch (meta.action) {
+    case 'created': return `${a} created group "${meta.name || ''}"`
+    case 'added': return `${a} added ${list(meta.targets)}`
+    case 'removed': return `${a} removed ${list(meta.targets)}`
+    case 'left': return `${a} left`
+    case 'joined': return `${a} joined`
+    case 'renamed': return `${a} changed the group name from "${meta.from || ''}" to "${meta.to || ''}"`
+    case 'photo': return `${a} changed this group's icon`
+    case 'description': return meta.to ? `${a} changed the group description` : `${a} deleted the group description`
+    case 'admins_only': return meta.on
+      ? `${a} changed this group's settings to allow only admins to send messages`
+      : `${a} changed this group's settings to allow all members to send messages`
+    case 'visibility': return meta.to === 'public' ? `${a} opened this group to everyone in the workspace` : `${a} made this group private`
+    case 'admin': return meta.on ? `${a} made ${list(meta.targets)} a group admin` : `${a} dismissed ${list(meta.targets)} as admin`
+    default: return ''
+  }
+}
+
+// One-line preview of a message for reply quotes / conversation lists, in
+// WhatsApp's words ("📷 Photo", "🎤 Voice message"). viewerId only changes
+// whose voice a group event is told in, and "You deleted this message".
+function snippet(row, viewerId = null) {
   if (!row) return ''
-  if (row.deleted_for_all) return 'This message was deleted'
-  if (row.file_stored || row.file_name) return '📎 ' + (row.file_name || 'Attachment')
+  if (row.deleted_for_all) return row.sender_id === viewerId ? 'You deleted this message' : 'This message was deleted'
+  if (row.kind === 'system') return systemText(parseMeta(row), viewerId)
+  if (row.kind === 'poll') return '📊 ' + (row.body || 'Poll')
+  if (row.kind === 'task') return '📋 ' + (row.body || 'Task')
+  if (row.kind === 'location') return '📍 ' + (row.body || 'Location')
+  if (row.kind === 'contact') return '👤 ' + (row.body || 'Contact')
+  if (row.meeting_id) return '📝 ' + (row.body || 'Call summary')
+  if (row.file_stored || row.file_name) {
+    const t = row.file_type || ''
+    if (t.startsWith('audio/')) return '🎤 Voice message'
+    if (t.startsWith('image/')) return '📷 ' + (row.body || 'Photo')
+    if (t.startsWith('video/')) return '🎥 ' + (row.body || 'Video')
+    return '📄 ' + (row.file_name || 'Document')
+  }
   return row.body || ''
 }
 
-// Shape a message row for the client (viewer-specific: starred, reactions, seen).
+// ---------- ticks: sent ✓, delivered ✓✓, read (blue) ✓✓ ----------
+// Read position for receipts: read_receipt_at only ever moves forward (see
+// db.js); rows from before it existed fall back to last_read_at. Reading
+// implies delivery, so the delivered position is never behind the read one.
+// Someone added to a group counts as having read everything from before they
+// joined (they were never sent it) — without that fallback a new member's
+// empty position turned every earlier blue tick in the group grey again.
+const readPos = (p) => p.read_receipt_at || p.last_read_at || p.joined_at || null
+const deliveredPos = (p) => {
+  const r = readPos(p), d = p.last_delivered_at || null
+  return !r ? d : !d ? r : (d > r ? d : r)
+}
+const oldest = (vals) => (!vals.length || vals.some((v) => !v)) ? null : vals.reduce((m, v) => (v < m ? v : m))
+
+// Everyone else's positions, from the viewer's side. A message of mine is
+// delivered once it is older than ALL of their delivered positions and read
+// once it is older than all of their read ones — WhatsApp's rule in a group:
+// blue only when everyone has read it.
+function receiptCtx(convId, viewerId) {
+  const others = db.prepare('SELECT last_read_at, read_receipt_at, last_delivered_at, joined_at FROM chat_participants WHERE conversation_id=? AND user_id!=?').all(convId, viewerId)
+  if (!others.length) return { othersMinRead: null, othersMinDelivered: null }
+  return { othersMinRead: oldest(others.map(readPos)), othersMinDelivered: oldest(others.map(deliveredPos)) }
+}
+
+// Tell each participant where everyone else now is, so the ticks on their own
+// messages change colour without a reload. Each one gets their own numbers —
+// "everyone else" is a different set for every reader.
+function pushReceipts(convId) {
+  for (const uid of participantsOf(convId)) {
+    const c = receiptCtx(convId, uid)
+    pushToUser(uid, { type: 'receipts', conversationId: convId, read_upto: c.othersMinRead, delivered_upto: c.othersMinDelivered })
+  }
+}
+
+// Something from someone else newer than `since` — the only case in which a
+// position moving forward means anything to a sender, and so the only case
+// worth a row in chat_receipt_marks.
+const newerFromOthers = (convId, userId, since) =>
+  !!db.prepare('SELECT 1 FROM chat_messages WHERE conversation_id=? AND sender_id!=? AND created_at>? LIMIT 1').get(convId, userId, since || '')
+
+function markDelivered(convId, userId, ts = now()) {
+  const p = db.prepare('SELECT last_read_at, read_receipt_at, last_delivered_at, joined_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(convId, userId)
+  if (!p || !newerFromOthers(convId, userId, deliveredPos(p))) return false
+  db.prepare('UPDATE chat_participants SET last_delivered_at=? WHERE conversation_id=? AND user_id=?').run(ts, convId, userId)
+  db.prepare('INSERT INTO chat_receipt_marks (conversation_id, user_id, kind, at) VALUES (?,?,?,?)').run(convId, userId, 'd', ts)
+  return true
+}
+
+// Reading a conversation: the unread cursor moves (and a manual "unread" flag
+// clears) every time, the receipt positions only ever forward.
+function markRead(convId, userId, ts = now()) {
+  const p = db.prepare('SELECT last_read_at, read_receipt_at, last_delivered_at, joined_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(convId, userId)
+  if (!p) return false
+  const fresh = newerFromOthers(convId, userId, readPos(p))
+  db.prepare('UPDATE chat_participants SET last_read_at=?, marked_unread=0 WHERE conversation_id=? AND user_id=?').run(ts, convId, userId)
+  if (!fresh) return false
+  db.prepare('UPDATE chat_participants SET read_receipt_at=?, last_delivered_at=? WHERE conversation_id=? AND user_id=?').run(ts, ts, convId, userId)
+  db.prepare('INSERT INTO chat_receipt_marks (conversation_id, user_id, kind, at) VALUES (?,?,?,?)').run(convId, userId, 'r', ts)
+  return true
+}
+
+// A device of theirs is in touch (a socket opened, or the app polled for its
+// badge): everything waiting for them has now been delivered.
+function deliverPending(userId) {
+  const rows = db.prepare(`
+    SELECT p.conversation_id FROM chat_participants p
+    WHERE p.user_id=? AND EXISTS (
+      SELECT 1 FROM chat_messages m WHERE m.conversation_id=p.conversation_id AND m.sender_id!=?
+        AND m.created_at > COALESCE(p.last_delivered_at, p.read_receipt_at, p.last_read_at, p.joined_at, ''))`).all(userId, userId)
+  const ts = now()
+  for (const r0 of rows) if (markDelivered(r0.conversation_id, userId, ts)) pushReceipts(r0.conversation_id)
+}
+onUserOnline(deliverPending)
+
+// ---------- polls, task cards, contacts ----------
+function pollOf(messageId) {
+  const p = db.prepare('SELECT options, multi FROM chat_polls WHERE message_id=?').get(messageId)
+  if (!p) return null
+  let labels = []
+  try { labels = JSON.parse(p.options) } catch {}
+  const votes = db.prepare('SELECT user_id, option_idx FROM chat_poll_votes WHERE message_id=? ORDER BY created_at').all(messageId)
+  return {
+    multi: !!p.multi,
+    options: labels.map((text, i) => ({ text, voters: votes.filter((v) => v.option_idx === i).map((v) => v.user_id) })),
+  }
+}
+
+// A task assigned from the chat, read live from the tasks table so the card
+// shows where the work is NOW (In Progress, Done) rather than how it began. A
+// task deleted since leaves a card that says so instead of a broken link.
+function taskCard(taskId) {
+  if (!taskId) return null
+  const t = db.prepare(`
+    SELECT t.id, t.title, t.status, t.priority, t.due_date, t.assignee_id,
+           u.name AS assignee_name, u.avatar_color AS assignee_color, u.avatar_file AS assignee_avatar
+    FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?`).get(taskId)
+  return t || { id: taskId, deleted: true }
+}
+
+function contactCard(userId) {
+  const u = userId && db.prepare('SELECT id, name, email, role, avatar_color, avatar_file FROM users WHERE id=?').get(userId)
+  return u || null
+}
+
+// Shape a message row for the client (viewer-specific: starred, reactions, ticks).
 function shapeMessage(row, viewerId, ctx = {}) {
   const base = { id: row.id, conversation_id: row.conversation_id, sender_id: row.sender_id, created_at: row.created_at }
   if (row.deleted_for_all) return { ...base, deleted: true, body: '' }
   const reactions = (ctx.reactions && ctx.reactions[row.id]) || []
   let replyPreview = null
   if (row.reply_to) {
-    const rep = db.prepare('SELECT id, sender_id, body, file_name, deleted_for_all FROM chat_messages WHERE id=?').get(row.reply_to)
+    const rep = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(row.reply_to)
     if (rep) {
-      const u = db.prepare('SELECT name FROM users WHERE id=?').get(rep.sender_id)
-      replyPreview = { id: rep.id, sender_id: rep.sender_id, sender_name: u?.name || 'Unknown', text: snippet(rep) }
+      // Quoted from another chat ("Reply privately" to a group message): say which.
+      const elsewhere = rep.conversation_id !== row.conversation_id
+      const from = elsewhere ? db.prepare('SELECT type, name FROM chat_conversations WHERE id=?').get(rep.conversation_id) : null
+      replyPreview = {
+        id: rep.id, sender_id: rep.sender_id, sender_name: nameOf(rep.sender_id), text: snippet(rep, viewerId),
+        image: !rep.deleted_for_all && !!rep.file_stored && (rep.file_type || '').startsWith('image/'),
+        conversation_id: rep.conversation_id,
+        from: from && from.type === 'group' ? (from.name || 'Group') : null,
+      }
     }
   }
-  // "Seen" for my own messages: all other participants read past this message.
-  let seen = false
-  if (row.sender_id === viewerId && ctx.othersMinRead !== undefined) {
-    seen = ctx.othersMinRead !== null && ctx.othersMinRead >= row.created_at
+  // My own messages: delivered to / read by everyone else yet?
+  let seen = false, delivered = false
+  if (row.sender_id === viewerId) {
+    if (ctx.othersMinRead !== undefined) seen = ctx.othersMinRead !== null && ctx.othersMinRead >= row.created_at
+    if (ctx.othersMinDelivered !== undefined) delivered = seen || (ctx.othersMinDelivered !== null && ctx.othersMinDelivered >= row.created_at)
   }
+  const meta = row.kind ? parseMeta(row) : {}
   return {
     ...base,
     body: row.body,
+    kind: row.kind || null,
     edited_at: row.edited_at || null,
     forwarded: !!row.forwarded,
     reply_to: row.reply_to || null,
@@ -121,11 +287,19 @@ function shapeMessage(row, viewerId, ctx = {}) {
     transcript: row.transcript || null,
     call: row.call_id ? callSummary(row.call_id) : null,
     meeting: row.meeting_id ? meetingCard(row.meeting_id) : null,
+    system: row.kind === 'system' ? systemText(meta, viewerId) : null,
+    poll: row.kind === 'poll' ? pollOf(row.id) : null,
+    task: row.kind === 'task' ? taskCard(row.task_id) : null,
+    location: row.kind === 'location' ? { lat: meta.lat, lng: meta.lng, label: meta.label || '', accuracy: meta.accuracy || null } : null,
+    contact: row.kind === 'contact' ? contactCard(meta.user_id) : null,
     seen,
+    delivered,
   }
 }
 
-// The summary card a finished, transcribed call leaves in the thread.
+// The summary card a finished, transcribed call leaves in the thread — with
+// the tasks it has already handed out, by name, so everyone who was on the
+// call can see who walked away with what without opening anything.
 function meetingCard(meetingId) {
   const m = db.prepare('SELECT id, title, summary_json, engine FROM meetings WHERE id=?').get(meetingId)
   if (!m) return null
@@ -141,7 +315,11 @@ function meetingCard(meetingId) {
     }
   } catch {}
   const tasks = db.prepare("SELECT COUNT(*) c FROM suggested_tasks WHERE meeting_id=? AND status='pending'").get(meetingId).c
-  return { id: m.id, title: m.title, summary: exec, engine: m.engine, tasks, ...counts }
+  const assigned = db.prepare(`
+    SELECT s.title, s.created_task_id AS task_id, s.suggested_assignee_id AS assignee_id, u.name AS assignee_name
+    FROM suggested_tasks s LEFT JOIN users u ON u.id=s.suggested_assignee_id
+    WHERE s.meeting_id=? AND s.status='approved' ORDER BY s.created_at`).all(meetingId)
+  return { id: m.id, title: m.title, summary: exec, engine: m.engine, tasks, assigned, ...counts }
 }
 
 // The ledger line a finished call leaves in the thread.
@@ -177,20 +355,28 @@ function summarizeConvo(conv, viewerId) {
   const parts = db.prepare(`
     SELECT u.id, u.name, u.avatar_color, u.avatar_file, u.role, u.last_seen, u.status_text, u.status_emoji, u.dnd_until, p.role AS member_role
     FROM chat_participants p JOIN users u ON u.id=p.user_id WHERE p.conversation_id=?`).all(conv.id)
-  const me = db.prepare('SELECT last_read_at, muted, pinned, muted_until FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, viewerId)
+  const me = db.prepare('SELECT last_read_at, muted, pinned, muted_until, archived, marked_unread, removed_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, viewerId)
   const last = db.prepare(`
     SELECT * FROM chat_messages WHERE conversation_id=?
       AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
     ORDER BY created_at DESC LIMIT 1`).get(conv.id, viewerId)
+  // Group event lines ("Ravi joined") are not something to catch up on, so
+  // they never count as unread — as in WhatsApp.
   const unread = db.prepare(`
     SELECT COUNT(*) c FROM chat_messages
     WHERE conversation_id=? AND sender_id!=? AND deleted_for_all=0
+      AND COALESCE(kind,'')<>'system'
       AND created_at > ?
       AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)`)
     .get(conv.id, viewerId, me?.last_read_at || '', viewerId).c
   const others = parts.filter((p) => p.id !== viewerId)
   const isGroup = conv.type === 'group'
   const lastSender = last ? parts.find((p) => p.id === last.sender_id) : null
+  // The ticks beside "You: …" in the list.
+  const lastMine = !!last && last.sender_id === viewerId && !last.deleted_for_all && last.kind !== 'system' && !last.call_id && !last.meeting_id
+  const rc = lastMine ? receiptCtx(conv.id, viewerId) : null
+  const lastSeen = !!rc && rc.othersMinRead !== null && rc.othersMinRead >= last.created_at
+  const lastDelivered = lastSeen || (!!rc && rc.othersMinDelivered !== null && rc.othersMinDelivered >= last.created_at)
   return {
     id: conv.id,
     type: conv.type,
@@ -203,12 +389,23 @@ function summarizeConvo(conv, viewerId) {
     members: parts.map((p) => ({ id: p.id, name: p.name, avatar_color: p.avatar_color, avatar_file: p.avatar_file || null, role: p.member_role, job_role: p.role, status_text: p.status_text || '', status_emoji: p.status_emoji || '', dnd_until: p.dnd_until || null })),
     role: me ? (parts.find((p) => p.id === viewerId)?.member_role) : 'member',
     visibility: conv.visibility || 'private',
+    description: conv.description || '',
+    admins_only: !!conv.admins_only,
+    created_by: conv.created_by || null,
+    created_at: conv.created_at,
     muted: !!me?.muted && (!me?.muted_until || me.muted_until > now()),
     muted_until: me?.muted_until || null,
     pinned: !!me?.pinned,
-    last_message: last ? snippet(last) : null,
+    archived: !!me?.archived,
+    marked_unread: !!me?.marked_unread,
+    // Deleted from my list, and nothing newer has arrived since.
+    removed: !!me?.removed_at && (!last || last.created_at <= me.removed_at),
+    last_message: last ? snippet(last, viewerId) : null,
+    last_kind: last ? (last.kind || (last.call_id ? 'call' : last.meeting_id ? 'meeting' : null)) : null,
     last_sender_name: lastSender ? lastSender.name : null,
-    last_from_me: last ? last.sender_id === viewerId : false,
+    last_from_me: last ? last.sender_id === viewerId && last.kind !== 'system' : false,
+    last_seen: lastSeen,
+    last_delivered: lastDelivered,
     last_at: last?.created_at || conv.updated_at,
     unread,
   }
@@ -260,26 +457,30 @@ r.get('/presence', (req, res) => res.json({ online: getOnlineUsers() }))
 // ---------- conversations ----------
 r.get('/conversations', (req, res) => {
   const me = req.user
+  deliverPending(me.id)
   const convs = db.prepare(`
     SELECT c.* FROM chat_conversations c
     JOIN chat_participants p ON p.conversation_id=c.id
     WHERE p.user_id=? AND c.org_id=?`).all(me.id, me.org_id)
-  const list = convs.map((c) => summarizeConvo(c, me.id))
+  const list = convs.map((c) => summarizeConvo(c, me.id)).filter((c) => !c.removed)
   list.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.last_at || '').localeCompare(a.last_at || ''))
   res.json({ conversations: list })
 })
 
-// Total unread across conversations (nav badge).
+// Total unread across conversations (nav badge). Polled every few seconds by
+// every open copy of the app, which also makes it the moment messages count as
+// delivered to this person. Archived chats stay quiet, as WhatsApp keeps them.
 r.get('/unread', (req, res) => {
-  const convs = db.prepare('SELECT c.id FROM chat_conversations c JOIN chat_participants p ON p.conversation_id=c.id WHERE p.user_id=?').all(req.user.id)
+  deliverPending(req.user.id)
+  const convs = db.prepare('SELECT c.id, p.last_read_at FROM chat_conversations c JOIN chat_participants p ON p.conversation_id=c.id WHERE p.user_id=? AND COALESCE(p.archived,0)=0').all(req.user.id)
   let unread = 0
   for (const c of convs) {
-    const me = db.prepare('SELECT last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(c.id, req.user.id)
     unread += db.prepare(`
       SELECT COUNT(*) c FROM chat_messages
       WHERE conversation_id=? AND sender_id!=? AND deleted_for_all=0 AND created_at > ?
+        AND COALESCE(kind,'')<>'system'
         AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)`)
-      .get(c.id, req.user.id, me?.last_read_at || '', req.user.id).c
+      .get(c.id, req.user.id, c.last_read_at || '', req.user.id).c
   }
   res.json({ unread })
 })
@@ -292,6 +493,9 @@ r.post('/conversations', (req, res) => {
     const other = db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(req.body.userId, me.org_id)
     if (!other || other.id === me.id) return res.status(400).json({ error: 'Invalid user' })
     const cid = findOrCreateDirect(me.org_id, me.id, other.id)
+    // Opening the chat on purpose brings back one I deleted (empty — what was
+    // in it stays cleared), rather than leaving it hidden until they write.
+    db.prepare('UPDATE chat_participants SET removed_at=NULL WHERE conversation_id=? AND user_id=?').run(cid, me.id)
     return res.status(201).json(summarizeConvo(db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(cid), me.id))
   }
   if (type === 'group') {
@@ -315,6 +519,9 @@ r.post('/conversations', (req, res) => {
       .run(cid, me.org_id, 'group', name, colors[name.length % colors.length], me.id, visibility, ts, ts)
     db.prepare('INSERT INTO chat_participants (conversation_id, user_id, role, last_read_at, joined_at) VALUES (?,?,?,?,?)').run(cid, me.id, 'admin', ts, ts)
     for (const uid of valid) if (uid !== me.id) db.prepare('INSERT OR IGNORE INTO chat_participants (conversation_id, user_id, role, last_read_at, joined_at) VALUES (?,?,?,?,?)').run(cid, uid, 'member', null, ts)
+    const desc = String(req.body.description || '').trim().slice(0, 500)
+    if (desc) db.prepare('UPDATE chat_conversations SET description=? WHERE id=?').run(desc, cid)
+    postSystem(db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(cid), me.id, { action: 'created', name })
     pushToConversation(cid, { type: 'conversation', action: 'created', conversationId: cid })
     return res.status(201).json(summarizeConvo(db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(cid), me.id))
   }
@@ -322,38 +529,57 @@ r.post('/conversations', (req, res) => {
 })
 
 // Conversation detail + messages (marks read for me).
+//
+// The newest PAGE messages, oldest first — not the oldest 800 as it used to
+// be, which on a long chat meant the thread opened months in the past and
+// today's messages never loaded at all. ?before=<iso> fetches the page before
+// that point, for scrolling back (WhatsApp's endless scroll upwards); those
+// requests leave the read position alone.
+const PAGE = 300
 r.get('/conversations/:id', (req, res) => {
   const me = req.user
   if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Conversation not found' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  const before = typeof req.query.before === 'string' && req.query.before ? req.query.before : null
   const prevRead = db.prepare('SELECT last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, me.id)?.last_read_at || null
   const rows = db.prepare(`
-    SELECT * FROM chat_messages WHERE conversation_id=?
-      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
-    ORDER BY created_at ASC LIMIT 800`).all(conv.id, me.id)
+    SELECT * FROM (
+      SELECT * FROM chat_messages WHERE conversation_id=?
+        AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+        ${before ? 'AND created_at < ?' : ''}
+      ORDER BY created_at DESC LIMIT ${PAGE + 1}
+    ) ORDER BY created_at ASC`).all(conv.id, me.id, ...(before ? [before] : []))
+  const hasMore = rows.length > PAGE
+  if (hasMore) rows.shift()
   const ids = rows.map((m) => m.id)
   const reactions = reactionsByMessage(ids)
   const mentions = mentionsByMessage(ids)
   const stars = new Set(db.prepare(`SELECT message_id FROM chat_stars WHERE user_id=? AND message_id IN (${ids.map(() => '?').join(',') || "''"})`).all(me.id, ...ids).map((s) => s.message_id))
-  // others' minimum last_read_at → drives the "seen" tick on my messages
-  // Others' minimum last_read_at: if anyone hasn't read up to a message, it's not "seen".
-  const others = db.prepare('SELECT last_read_at FROM chat_participants WHERE conversation_id=? AND user_id!=?').all(conv.id, me.id)
-  const minRead = others.length === 0 ? null
-    : (others.some((o) => !o.last_read_at) ? null : others.reduce((m, o) => (o.last_read_at < m ? o.last_read_at : m), others[0].last_read_at))
-  const ctx = { reactions, mentions, stars, othersMinRead: minRead }
+  if (before) {
+    const ctx = { reactions, mentions, stars, ...receiptCtx(conv.id, me.id) }
+    return res.json({ messages: rows.map((row) => shapeMessage(row, me.id, ctx)), has_more: hasMore })
+  }
+  // Read first, so the ticks computed below and the ones pushed to everyone
+  // else agree on where I am.
+  const ts = now()
+  const moved = markRead(conv.id, me.id, ts)
+  const ctx = { reactions, mentions, stars, ...receiptCtx(conv.id, me.id) }
   const messages = rows.map((row) => shapeMessage(row, me.id, ctx))
-  // mark read
-  db.prepare('UPDATE chat_participants SET last_read_at=? WHERE conversation_id=? AND user_id=?').run(now(), conv.id, me.id)
-  pushToConversation(conv.id, { type: 'read', conversationId: conv.id, userId: me.id, last_read_at: now() }, me.id)
-  res.json({ conversation: summarizeConvo(conv, me.id), messages, last_read_at: prevRead })
+  pushToConversation(conv.id, { type: 'read', conversationId: conv.id, userId: me.id, last_read_at: ts }, me.id)
+  if (moved) pushReceipts(conv.id)
+  res.json({ conversation: summarizeConvo(conv, me.id), messages, last_read_at: prevRead, has_more: hasMore })
 })
 
-// Mute / pin a conversation (per-user preferences).
+// Mute / pin / archive / mark unread (per-user preferences).
 r.post('/conversations/:id/prefs', (req, res) => {
   if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Not found' })
   const sets = [], args = []
   if ('muted' in (req.body || {})) { sets.push('muted=?'); args.push(req.body.muted ? 1 : 0) }
   if ('pinned' in (req.body || {})) { sets.push('pinned=?'); args.push(req.body.pinned ? 1 : 0) }
+  if ('archived' in (req.body || {})) { sets.push('archived=?'); args.push(req.body.archived ? 1 : 0) }
+  // WhatsApp's "Mark as unread" on a whole chat: a dot on the row, no count,
+  // gone the moment the chat is opened. The read position is left alone.
+  if ('marked_unread' in (req.body || {})) { sets.push('marked_unread=?'); args.push(req.body.marked_unread ? 1 : 0) }
   // Mute "for 8 hours": store the expiry AND set the boolean, so every existing
   // muted check keeps working and the timer is what clears it.
   if ('mute_minutes' in (req.body || {})) {
@@ -380,6 +606,24 @@ r.post('/conversations/:id/clear', (req, res) => {
   res.json({ ok: true, cleared: ids.length })
 })
 
+// WhatsApp's "Delete chat" for a one-to-one: everything in it is cleared for
+// me and the chat leaves my list — coming back by itself, empty, with the next
+// message either of us sends. The other person keeps their copy. A group is
+// left with Exit group instead, as in WhatsApp.
+r.post('/conversations/:id/remove', (req, res) => {
+  const me = req.user
+  if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Not found' })
+  const conv = db.prepare('SELECT type FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (conv?.type !== 'direct') return res.status(400).json({ error: 'Exit the group instead' })
+  const ids = db.prepare('SELECT id FROM chat_messages WHERE conversation_id=?').all(req.params.id)
+  const ins = db.prepare('INSERT OR IGNORE INTO chat_message_hidden (message_id, user_id) VALUES (?,?)')
+  const ts = now()
+  db.transaction(() => { for (const m of ids) ins.run(m.id, me.id) })()
+  db.prepare('UPDATE chat_participants SET removed_at=?, last_read_at=?, archived=0, pinned=0, marked_unread=0 WHERE conversation_id=? AND user_id=?').run(ts, ts, req.params.id, me.id)
+  pushToUser(me.id, { type: 'conversation', action: 'removed', conversationId: req.params.id })
+  res.json({ ok: true })
+})
+
 // Set a group photo (admin only, images only).
 r.post('/conversations/:id/avatar', upload.single('file'), (req, res) => {
   const cleanup = () => { if (req.file) try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)) } catch {} }
@@ -392,26 +636,104 @@ r.post('/conversations/:id/avatar', upload.single('file'), (req, res) => {
   const old = conv.avatar_file
   db.prepare('UPDATE chat_conversations SET avatar_file=? WHERE id=?').run(req.file.filename, conv.id)
   if (old) try { fs.unlinkSync(path.join(UPLOAD_DIR, old)) } catch {}
+  postSystem(conv, req.user.id, { action: 'photo' })
   pushToConversation(conv.id, { type: 'conversation', action: 'updated', conversationId: conv.id })
   res.json({ ok: true })
 })
 
-// Mark a conversation read (lightweight; used on live inbound while open).
+// Mark a conversation read (lightweight; used on live inbound while open, and
+// by "Mark as read" on the chat list).
 r.post('/conversations/:id/read', (req, res) => {
   if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Not found' })
-  db.prepare('UPDATE chat_participants SET last_read_at=? WHERE conversation_id=? AND user_id=?').run(now(), req.params.id, req.user.id)
-  pushToConversation(req.params.id, { type: 'read', conversationId: req.params.id, userId: req.user.id, last_read_at: now() }, req.user.id)
+  const ts = now()
+  const moved = markRead(req.params.id, req.user.id, ts)
+  pushToConversation(req.params.id, { type: 'read', conversationId: req.params.id, userId: req.user.id, last_read_at: ts }, req.user.id)
+  if (moved) pushReceipts(req.params.id)
   res.json({ ok: true })
 })
 
-// Rename a group (admin only).
+// A group event line ("Priya added Ravi"), sent straight to everyone like the
+// call ledger line — never through deliver(): an admin tidying the member list
+// is not something to buzz every phone in the group about.
+function postSystem(conv, actorId, meta) {
+  if (!conv || conv.type !== 'group') return null
+  const mid = id('msg')
+  const full = { actor: actorId, ...meta }
+  // The body is the line in the third person ("Priya added Ravi"). This app
+  // words it per reader from `meta`; the body is for copies of the app from
+  // before group events existed — the Android build in people's pockets —
+  // which would otherwise show an empty bubble.
+  db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, kind, meta, read, created_at) VALUES (?,?,?,?,?,?,?,?,0,?)')
+    .run(mid, conv.org_id, conv.id, actorId, '', systemText(full, null), 'system', JSON.stringify(full), now())
+  touchConvo(conv.id)
+  const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
+  for (const uid of participantsOf(conv.id)) pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(row, uid, {}) })
+  return row
+}
+
+// Rename a group, or change its description (admin only).
 r.patch('/conversations/:id', (req, res) => {
   const m = member(req.params.id, req.user.id)
   if (!m) return res.status(404).json({ error: 'Not found' })
   if (m.role !== 'admin') return res.status(403).json({ error: 'Only the group admin can do this' })
-  const name = String(req.body?.name || '').trim()
-  if (!name) return res.status(400).json({ error: 'Name required' })
-  db.prepare("UPDATE chat_conversations SET name=? WHERE id=? AND type='group'").run(name, req.params.id)
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (conv.type !== 'group') return res.status(400).json({ error: 'Only groups have a name' })
+  const b = req.body || {}
+  if ('name' in b) {
+    const name = String(b.name || '').trim().slice(0, 80)
+    if (!name) return res.status(400).json({ error: 'Name required' })
+    if (name !== conv.name) {
+      db.prepare('UPDATE chat_conversations SET name=? WHERE id=?').run(name, conv.id)
+      postSystem(conv, req.user.id, { action: 'renamed', from: conv.name || '', to: name })
+    }
+  }
+  if ('description' in b) {
+    const description = String(b.description || '').trim().slice(0, 500)
+    if (description !== (conv.description || '')) {
+      db.prepare('UPDATE chat_conversations SET description=? WHERE id=?').run(description, conv.id)
+      postSystem(conv, req.user.id, { action: 'description', to: description ? 1 : 0 })
+    }
+  }
+  pushToConversation(req.params.id, { type: 'conversation', action: 'updated', conversationId: req.params.id })
+  res.json({ ok: true })
+})
+
+// Group settings (admin only). Today one: "Send messages — only admins", for
+// announcement groups where the room is for reading.
+r.post('/conversations/:id/settings', (req, res) => {
+  const m = member(req.params.id, req.user.id)
+  if (!m) return res.status(404).json({ error: 'Not found' })
+  if (m.role !== 'admin') return res.status(403).json({ error: 'Only a group admin can change this' })
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (conv.type !== 'group') return res.status(400).json({ error: 'Only groups have settings' })
+  if ('admins_only' in (req.body || {})) {
+    const on = req.body.admins_only ? 1 : 0
+    if (on !== (conv.admins_only ? 1 : 0)) {
+      db.prepare('UPDATE chat_conversations SET admins_only=? WHERE id=?').run(on, conv.id)
+      postSystem(conv, req.user.id, { action: 'admins_only', on: !!on })
+    }
+  }
+  pushToConversation(conv.id, { type: 'conversation', action: 'updated', conversationId: conv.id })
+  res.json({ ok: true })
+})
+
+// Make someone a group admin, or dismiss them as one (admin only). The last
+// admin cannot dismiss themselves — a group nobody can manage is stuck.
+r.post('/conversations/:id/members/:userId/role', (req, res) => {
+  const m = member(req.params.id, req.user.id)
+  if (!m) return res.status(404).json({ error: 'Not found' })
+  if (m.role !== 'admin') return res.status(403).json({ error: 'Only a group admin can do this' })
+  const target = member(req.params.id, req.params.userId)
+  if (!target) return res.status(404).json({ error: 'Not a member of this group' })
+  const role = req.body?.role === 'admin' ? 'admin' : 'member'
+  if (role === target.role) return res.json({ ok: true })
+  if (role === 'member') {
+    const admins = db.prepare("SELECT COUNT(*) n FROM chat_participants WHERE conversation_id=? AND role='admin'").get(req.params.id).n
+    if (admins <= 1) return res.status(400).json({ error: 'A group needs at least one admin' })
+  }
+  db.prepare('UPDATE chat_participants SET role=? WHERE conversation_id=? AND user_id=?').run(role, req.params.id, req.params.userId)
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  postSystem(conv, req.user.id, { action: 'admin', on: role === 'admin', targets: [req.params.userId] })
   pushToConversation(req.params.id, { type: 'conversation', action: 'updated', conversationId: req.params.id })
   res.json({ ok: true })
 })
@@ -423,8 +745,10 @@ r.post('/conversations/:id/members', (req, res) => {
   if (m.role !== 'admin') return res.status(403).json({ error: 'Only the group admin can add members' })
   const ids = Array.isArray(req.body?.userIds) ? req.body.userIds : []
   const valid = db.prepare(`SELECT id FROM users WHERE org_id=? AND id IN (${ids.map(() => '?').join(',') || "''"})`).all(req.user.org_id, ...ids).map((u) => u.id)
+  const fresh = valid.filter((uid) => !member(req.params.id, uid))
   const ts = now()
-  for (const uid of valid) db.prepare('INSERT OR IGNORE INTO chat_participants (conversation_id, user_id, role, last_read_at, joined_at) VALUES (?,?,?,?,?)').run(req.params.id, uid, 'member', null, ts)
+  for (const uid of fresh) db.prepare('INSERT OR IGNORE INTO chat_participants (conversation_id, user_id, role, last_read_at, joined_at) VALUES (?,?,?,?,?)').run(req.params.id, uid, 'member', null, ts)
+  if (fresh.length) postSystem(db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id), req.user.id, { action: 'added', targets: fresh })
   pushToConversation(req.params.id, { type: 'conversation', action: 'updated', conversationId: req.params.id })
   res.json({ ok: true })
 })
@@ -448,9 +772,12 @@ r.delete('/conversations/:id', (req, res) => {
       db.prepare('DELETE FROM chat_reactions WHERE message_id=?').run(mm.id)
       db.prepare('DELETE FROM chat_stars WHERE message_id=?').run(mm.id)
       db.prepare('DELETE FROM chat_message_hidden WHERE message_id=?').run(mm.id)
+      db.prepare('DELETE FROM chat_poll_votes WHERE message_id=?').run(mm.id)
+      db.prepare('DELETE FROM chat_polls WHERE message_id=?').run(mm.id)
       removeEmbedding('chat', mm.id) // drop RAG vector for each wiped message
     }
     db.prepare('DELETE FROM chat_messages WHERE conversation_id=?').run(conv.id)
+    db.prepare('DELETE FROM chat_receipt_marks WHERE conversation_id=?').run(conv.id)
     db.prepare('DELETE FROM chat_participants WHERE conversation_id=?').run(conv.id)
     db.prepare('DELETE FROM chat_conversations WHERE id=?').run(conv.id)
   })
@@ -465,7 +792,16 @@ r.delete('/conversations/:id/members/:userId', (req, res) => {
   if (!m) return res.status(404).json({ error: 'Not found' })
   const target = req.params.userId
   if (target !== req.user.id && m.role !== 'admin') return res.status(403).json({ error: 'Only the group admin can remove members' })
+  if (!member(req.params.id, target)) return res.json({ ok: true })
   db.prepare('DELETE FROM chat_participants WHERE conversation_id=? AND user_id=?').run(req.params.id, target)
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  // The last admin walked out: hand the group to whoever has been in it
+  // longest, as WhatsApp does, so it is never left with nobody able to run it.
+  if (conv?.type === 'group' && !db.prepare("SELECT 1 FROM chat_participants WHERE conversation_id=? AND role='admin'").get(conv.id)) {
+    const heir = db.prepare('SELECT user_id FROM chat_participants WHERE conversation_id=? ORDER BY joined_at ASC LIMIT 1').get(conv.id)
+    if (heir) db.prepare("UPDATE chat_participants SET role='admin' WHERE conversation_id=? AND user_id=?").run(conv.id, heir.user_id)
+  }
+  postSystem(conv, req.user.id, target === req.user.id ? { action: 'left' } : { action: 'removed', targets: [target] })
   pushToConversation(req.params.id, { type: 'conversation', action: 'updated', conversationId: req.params.id })
   pushToUser(target, { type: 'conversation', action: 'removed', conversationId: req.params.id })
   res.json({ ok: true })
@@ -476,7 +812,7 @@ function deliver(conv, msgRow, sender, mentioned = []) {
   touchConvo(conv.id)
   const others = participantsOf(conv.id).filter((u) => u !== sender.id)
   const label = conv.type === 'group' ? `${sender.name} in ${conv.name || 'Group'}` : sender.name
-  const preview = msgRow.file_name ? `📎 ${msgRow.file_name}` : (msgRow.body || '')
+  const preview = snippet(msgRow)
   const short = preview.length > 70 ? preview.slice(0, 70) + '…' : preview
   const pinged = new Set(mentioned)
   for (const uid of others) {
@@ -500,30 +836,73 @@ function deliver(conv, msgRow, sender, mentioned = []) {
     if (muteLive) continue // muted: deliver the message live, but no notification
     notify(conv.org_id, uid, 'chat_message', `${label}: ${short}`, null)
   }
-  // push the shaped message to everyone (each viewer computes their own ctx as null → fine for live append)
+  // Recipients with the app open have it now: that is the second tick. The
+  // rest get theirs when a device of theirs next checks in (deliverPending).
+  const online = new Set(getOnlineUsers())
+  const ts = now()
+  for (const uid of others) if (online.has(uid)) markDelivered(conv.id, uid, ts)
+  // Push the shaped message to everyone, each with their own view of the ticks.
   for (const uid of [sender.id, ...others]) {
-    pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, {}) })
+    pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receiptCtx(conv.id, uid)) })
   }
   indexChatMessage(msgRow.id) // RAG: index every delivered message (text/upload/forward)
 }
 
-// Send a text message.
+// "Send messages: only admins" — checked on every way into a thread, not just
+// the composer, because the UI hiding the box is not a permission.
+function canPost(conv, userId) {
+  if (!conv || conv.type !== 'group' || !conv.admins_only) return true
+  return member(conv.id, userId)?.role === 'admin'
+}
+const ADMINS_ONLY = 'Only admins can send messages to this group'
+
+// What a new message may quote. Normally a message in the same thread. A
+// different thread only for WhatsApp's "Reply privately": allowed when the
+// replier can see the original AND so can everyone in this thread, so a quote
+// can never carry a group's words to someone outside that group.
+function resolveReply(rawId, conv, userId) {
+  if (!rawId) return null
+  const src = db.prepare('SELECT id, conversation_id FROM chat_messages WHERE id=?').get(String(rawId))
+  if (!src) return null
+  if (src.conversation_id === conv.id) return src.id
+  if (!member(src.conversation_id, userId)) return null
+  return participantsOf(conv.id).every((uid) => member(src.conversation_id, uid)) ? src.id : null
+}
+
+// Send a message: text, or one of the kinds that need no file — a shared
+// location ({kind:'location', meta:{lat,lng,label?,accuracy?}}) or a
+// teammate's contact card ({kind:'contact', meta:{user_id}}).
 r.post('/conversations/:id/messages', (req, res) => {
   const me = req.user
   if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Conversation not found' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
-  const body = String(req.body?.body || '').trim()
-  if (!body) return res.status(400).json({ error: 'Message body required' })
+  if (!canPost(conv, me.id)) return res.status(403).json({ error: ADMINS_ONLY })
+  const kind = req.body?.kind === 'location' || req.body?.kind === 'contact' ? req.body.kind : null
+  let body = String(req.body?.body || '').trim()
+  let meta = null
+  if (kind === 'location') {
+    const lat = Number(req.body?.meta?.lat), lng = Number(req.body?.meta?.lng)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return res.status(400).json({ error: 'A valid location is required' })
+    const label = String(req.body?.meta?.label || '').trim().slice(0, 120)
+    const accuracy = Math.round(Number(req.body?.meta?.accuracy) || 0) || null
+    meta = { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, label, accuracy }
+    body = label || 'Location'
+  } else if (kind === 'contact') {
+    const u = db.prepare('SELECT id, name FROM users WHERE id=? AND org_id=?').get(String(req.body?.meta?.user_id || ''), me.org_id)
+    if (!u) return res.status(400).json({ error: 'Pick a teammate to share' })
+    meta = { user_id: u.id }
+    body = u.name
+  } else if (!body) return res.status(400).json({ error: 'Message body required' })
   if (body.length > 4000) return res.status(400).json({ error: 'Message too long' })
-  const replyTo = req.body?.replyTo && db.prepare('SELECT id FROM chat_messages WHERE id=? AND conversation_id=?').get(req.body.replyTo, conv.id) ? req.body.replyTo : null
+  const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
-  db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)')
-    .run(mid, conv.org_id, conv.id, me.id, '', body, replyTo, ts)
-  const mentioned = saveMentions(conv.id, mid, req.body?.mentions, me.id)
+  db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, kind, meta, read, created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?)')
+    .run(mid, conv.org_id, conv.id, me.id, '', body, replyTo, kind, meta ? JSON.stringify(meta) : null, ts)
+  const mentioned = kind ? [] : saveMentions(conv.id, mid, req.body?.mentions, me.id)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   deliver(conv, row, me, mentioned)
-  res.status(201).json(shapeMessage(row, me.id, {}))
+  res.status(201).json(shapeMessage(row, me.id, receiptCtx(conv.id, me.id)))
 })
 
 // Send a file (optional caption + replyTo).
@@ -533,8 +912,9 @@ r.post('/conversations/:id/upload', upload.single('file'), (req, res) => {
   if (!member(req.params.id, me.id)) { cleanup(); return res.status(404).json({ error: 'Conversation not found' }) }
   if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (!canPost(conv, me.id)) { cleanup(); return res.status(403).json({ error: ADMINS_ONLY }) }
   const caption = String(req.body?.body || '').trim().slice(0, 4000)
-  const replyTo = req.body?.replyTo && db.prepare('SELECT id FROM chat_messages WHERE id=? AND conversation_id=?').get(req.body.replyTo, conv.id) ? req.body.replyTo : null
+  const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
   db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at)
@@ -552,35 +932,51 @@ r.post('/conversations/:id/upload', upload.single('file'), (req, res) => {
   const mentioned = saveMentions(conv.id, mid, capMentions, me.id)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   deliver(conv, row, me, mentioned)
-  res.status(201).json(shapeMessage(row, me.id, {}))
+  res.status(201).json(shapeMessage(row, me.id, receiptCtx(conv.id, me.id)))
 })
 
-// Edit a message body (sender only; not files, not deleted).
+// Edit a message (sender only): the text, or the caption under a photo or
+// file, as WhatsApp allows. Not a call line, a summary, a poll, a group event
+// or a task card — those are records of something, not things someone typed.
+// The @mentions are re-read from the new text so a name taken out stops
+// counting, but nobody is notified again: an edit is a correction, not a
+// second message.
 r.patch('/message/:id', (req, res) => {
   const me = req.user
   const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
-  if (!m || m.sender_id !== me.id) return res.status(404).json({ error: 'Message not found' })
+  if (!m || m.sender_id !== me.id || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
   if (m.deleted_for_all) return res.status(400).json({ error: 'Cannot edit a deleted message' })
+  if (m.kind || m.call_id || m.meeting_id || (m.file_type || '').startsWith('audio/')) return res.status(400).json({ error: 'This message cannot be edited' })
   const body = String(req.body?.body || '').trim()
-  if (!body) return res.status(400).json({ error: 'Body required' })
+  if (!body && !m.file_stored) return res.status(400).json({ error: 'Body required' })
+  if (body.length > 4000) return res.status(400).json({ error: 'Message too long' })
+  if (body === (m.body || '')) return res.json({ ok: true, body, edited_at: m.edited_at || null, mentions: mentionsByMessage([m.id])[m.id] || [] })
   const ts = now()
   db.prepare('UPDATE chat_messages SET body=?, edited_at=? WHERE id=?').run(body, ts, m.id)
-  pushToConversation(m.conversation_id, { type: 'edit', conversationId: m.conversation_id, id: m.id, body, edited_at: ts })
+  if (Array.isArray(req.body?.mentions)) {
+    db.prepare('DELETE FROM chat_mentions WHERE message_id=?').run(m.id)
+    saveMentions(m.conversation_id, m.id, req.body.mentions, me.id)
+  }
+  const mentions = mentionsByMessage([m.id])[m.id] || []
+  pushToConversation(m.conversation_id, { type: 'edit', conversationId: m.conversation_id, id: m.id, body, edited_at: ts, mentions })
   indexChatMessage(m.id) // re-index edited body
-  res.json({ ok: true, body, edited_at: ts })
+  res.json({ ok: true, body, edited_at: ts, mentions })
 })
 
-// Forward a message to one or more conversations I'm a member of.
+// Forward a message to one or more conversations I'm a member of. Text,
+// files, locations and contacts travel; a poll, a task card, a call line or a
+// summary is a record of THIS chat and stays in it.
 r.post('/message/:id/forward', (req, res) => {
   const me = req.user
   const src = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
   if (!src || src.deleted_for_all || !member(src.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
+  if ((src.kind && src.kind !== 'location' && src.kind !== 'contact') || src.call_id || src.meeting_id) return res.status(400).json({ error: 'This message cannot be forwarded' })
   const targets = Array.isArray(req.body?.conversationIds) ? req.body.conversationIds : []
   const sent = []
   for (const cid of targets) {
     if (!member(cid, me.id)) continue
     const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(cid)
-    if (!conv) continue
+    if (!conv || !canPost(conv, me.id)) continue
     let storedName = null
     if (src.file_stored) {
       // copy the file so deleting one message doesn't affect the other
@@ -589,9 +985,10 @@ r.post('/message/:id/forward', (req, res) => {
     }
     const mid = id('msg')
     const ts = now()
-    db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, forwarded, read, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,1,0,?)`)
-      .run(mid, conv.org_id, cid, me.id, '', src.body, storedName ? src.file_name : null, storedName, storedName ? src.file_type : null, storedName ? src.file_size : null, ts)
+    db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, kind, meta, transcript, forwarded, read, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,?)`)
+      .run(mid, conv.org_id, cid, me.id, '', src.body, storedName ? src.file_name : null, storedName, storedName ? src.file_type : null, storedName ? src.file_size : null,
+        src.kind || null, src.kind ? src.meta : null, storedName ? (src.transcript || null) : null, ts)
     const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
     deliver(conv, row, me)
     sent.push(cid)
@@ -599,18 +996,25 @@ r.post('/message/:id/forward', (req, res) => {
   res.json({ ok: true, forwarded_to: sent })
 })
 
-// Single Delete: your own message → unsend for everyone (tombstone + file removed);
-// someone else's → hide for you only.
+// Delete. Your own message: ?scope=all (the default) unsends it for everyone
+// — a tombstone, the file removed — and ?scope=me only hides it from you, the
+// two choices WhatsApp offers. Someone else's message can only be removed for
+// you. A group event or call line is nobody's to unsend.
 r.delete('/message/:id', (req, res) => {
   const me = req.user
   const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
   if (!m || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
-  if (m.sender_id === me.id) {
-    db.prepare('UPDATE chat_messages SET deleted_for_all=1, body=?, file_name=NULL, file_stored=NULL, file_type=NULL, file_size=NULL WHERE id=?').run('', m.id)
+  const record = m.kind === 'system' || m.call_id || m.meeting_id
+  if (m.sender_id === me.id && req.query.scope !== 'me' && !record) {
+    db.prepare('UPDATE chat_messages SET deleted_for_all=1, body=?, file_name=NULL, file_stored=NULL, file_type=NULL, file_size=NULL, meta=NULL, transcript=NULL, pinned_at=NULL WHERE id=?').run('', m.id)
     db.prepare('DELETE FROM chat_reactions WHERE message_id=?').run(m.id)
+    db.prepare('DELETE FROM chat_poll_votes WHERE message_id=?').run(m.id)
+    db.prepare('DELETE FROM chat_polls WHERE message_id=?').run(m.id)
+    db.prepare('DELETE FROM chat_mentions WHERE message_id=?').run(m.id)
     removeEmbedding('chat', m.id) // unsent message leaves the RAG index
     if (m.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, m.file_stored)) } catch {}
     pushToConversation(m.conversation_id, { type: 'delete', conversationId: m.conversation_id, id: m.id, scope: 'all' })
+    if (m.pinned_at) pushToConversation(m.conversation_id, { type: 'pin', conversationId: m.conversation_id, id: m.id, pinned: false })
   } else {
     db.prepare('INSERT OR IGNORE INTO chat_message_hidden (message_id, user_id) VALUES (?,?)').run(m.id, me.id)
     pushToUser(me.id, { type: 'delete', conversationId: m.conversation_id, id: m.id, scope: 'me' })
@@ -618,20 +1022,147 @@ r.delete('/message/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+// Would a notification to this person about this conversation be welcome
+// right now? (Not muted, not on do-not-disturb.)
+function wantsPing(convId, uid) {
+  const p = db.prepare('SELECT muted, muted_until FROM chat_participants WHERE conversation_id=? AND user_id=?').get(convId, uid)
+  if (p?.muted && (!p.muted_until || p.muted_until > now())) return false
+  const dnd = db.prepare('SELECT dnd_until FROM users WHERE id=?').get(uid)?.dnd_until
+  return !(dnd && dnd > now())
+}
+
 // Toggle an emoji reaction (one reaction per user per message; same emoji = remove).
 r.post('/message/:id/reactions', (req, res) => {
   const me = req.user
   const emoji = String(req.body?.emoji || '').slice(0, 8)
   const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
-  if (!m || !member(m.conversation_id, me.id) || !emoji) return res.status(404).json({ error: 'Not found' })
+  if (!m || !member(m.conversation_id, me.id) || !emoji || m.deleted_for_all) return res.status(404).json({ error: 'Not found' })
   const existing = db.prepare('SELECT emoji FROM chat_reactions WHERE message_id=? AND user_id=?').get(m.id, me.id)
   db.prepare('DELETE FROM chat_reactions WHERE message_id=? AND user_id=?').run(m.id, me.id)
-  if (!existing || existing.emoji !== emoji) {
+  const added = !existing || existing.emoji !== emoji
+  if (added) {
     db.prepare('INSERT INTO chat_reactions (message_id, user_id, emoji, created_at) VALUES (?,?,?,?)').run(m.id, me.id, emoji, now())
   }
   const reactions = db.prepare('SELECT user_id, emoji FROM chat_reactions WHERE message_id=?').all(m.id)
   pushToConversation(m.conversation_id, { type: 'reaction', conversationId: m.conversation_id, id: m.id, reactions })
+  // WhatsApp tells you when someone reacts to your message. Only a fresh
+  // reaction, only to the author, and only if they have not muted the chat.
+  if (added && m.sender_id !== me.id && m.kind !== 'system' && member(m.conversation_id, m.sender_id) && wantsPing(m.conversation_id, m.sender_id)) {
+    const what = snippet(m)
+    notify(m.org_id, m.sender_id, 'chat_message', `${me.name} reacted ${emoji} to: "${what.length > 50 ? what.slice(0, 50) + '…' : what}"`, null)
+  }
   res.json({ reactions })
+})
+
+// Message info (your own messages): who has it, who has read it, and when —
+// WhatsApp's "Read by / Delivered to". The time is the first moment that
+// person's position passed the message (chat_receipt_marks); for messages from
+// before marks were kept, "read" is known but the moment is not, and says so.
+r.get('/message/:id/info', (req, res) => {
+  const me = req.user
+  const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
+  if (!m || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
+  if (m.sender_id !== me.id) return res.status(403).json({ error: 'Only for your own messages' })
+  const people = db.prepare(`
+    SELECT u.id, u.name, u.avatar_color, u.avatar_file, p.last_read_at, p.read_receipt_at, p.last_delivered_at, p.joined_at
+    FROM chat_participants p JOIN users u ON u.id=p.user_id
+    WHERE p.conversation_id=? AND p.user_id!=? ORDER BY u.name`).all(m.conversation_id, me.id)
+  const first = db.prepare(`SELECT MIN(at) at FROM chat_receipt_marks WHERE conversation_id=? AND user_id=? AND kind IN (SELECT value FROM json_each(?)) AND at>=?`)
+  const read = [], delivered = [], waiting = []
+  for (const p of people) {
+    // Added to the group after this was sent: it was never theirs to receive.
+    if (p.joined_at && p.joined_at > m.created_at) continue
+    const who = { id: p.id, name: p.name, avatar_color: p.avatar_color, avatar_file: p.avatar_file || null }
+    const readAt = first.get(m.conversation_id, p.id, '["r"]', m.created_at)?.at || null
+    const isRead = !!readAt || (readPos(p) || '') >= m.created_at
+    if (isRead) { read.push({ ...who, at: readAt }); continue }
+    const delAt = first.get(m.conversation_id, p.id, '["d","r"]', m.created_at)?.at || null
+    if (delAt || (deliveredPos(p) || '') >= m.created_at) delivered.push({ ...who, at: delAt })
+    else waiting.push(who)
+  }
+  res.json({ created_at: m.created_at, read, delivered, waiting })
+})
+
+// The preview card for the first link in a message. Asked by message rather
+// than by URL so this cannot be used as a general-purpose fetcher: the address
+// has to be in a message the asker can see.
+r.get('/message/:id/preview', async (req, res) => {
+  const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
+  if (!m || m.deleted_for_all || !member(m.conversation_id, req.user.id)) return res.status(404).json({ error: 'Not found' })
+  const url = linksIn(m.body)[0]
+  if (!url) return res.json({ preview: null })
+  try {
+    const data = await linkPreview(url)
+    res.json({ preview: data ? { url, ...data } : null })
+  } catch { res.json({ preview: null }) }
+})
+
+// ---------- polls ----------
+r.post('/conversations/:id/poll', (req, res) => {
+  const me = req.user
+  if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Conversation not found' })
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (!canPost(conv, me.id)) return res.status(403).json({ error: ADMINS_ONLY })
+  const question = String(req.body?.question || '').trim().slice(0, 300)
+  const options = [...new Set((Array.isArray(req.body?.options) ? req.body.options : [])
+    .map((o) => String(o || '').trim().slice(0, 100)).filter(Boolean))]
+  if (!question) return res.status(400).json({ error: 'Ask a question' })
+  if (options.length < 2) return res.status(400).json({ error: 'Add at least two options' })
+  if (options.length > 12) return res.status(400).json({ error: 'A poll can have up to 12 options' })
+  const mid = id('msg')
+  db.prepare("INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, kind, read, created_at) VALUES (?,?,?,?,?,?,'poll',0,?)")
+    .run(mid, conv.org_id, conv.id, me.id, '', question, now())
+  db.prepare('INSERT INTO chat_polls (message_id, options, multi) VALUES (?,?,?)').run(mid, JSON.stringify(options), req.body?.multi ? 1 : 0)
+  const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
+  deliver(conv, row, me)
+  res.status(201).json(shapeMessage(row, me.id, receiptCtx(conv.id, me.id)))
+})
+
+// Vote: `options` is the complete set of my choices now (empty takes my vote
+// back), so a change of mind is one request and can never leave a half-vote.
+r.post('/message/:id/vote', (req, res) => {
+  const me = req.user
+  const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
+  if (!m || m.kind !== 'poll' || m.deleted_for_all || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Poll not found' })
+  const p = db.prepare('SELECT options, multi FROM chat_polls WHERE message_id=?').get(m.id)
+  if (!p) return res.status(404).json({ error: 'Poll not found' })
+  let n = 0
+  try { n = JSON.parse(p.options).length } catch {}
+  let picks = [...new Set((Array.isArray(req.body?.options) ? req.body.options : []).map(Number))]
+    .filter((i) => Number.isInteger(i) && i >= 0 && i < n)
+  if (!p.multi) picks = picks.slice(0, 1)
+  const ts = now()
+  db.transaction(() => {
+    db.prepare('DELETE FROM chat_poll_votes WHERE message_id=? AND user_id=?').run(m.id, me.id)
+    for (const i of picks) db.prepare('INSERT INTO chat_poll_votes (message_id, user_id, option_idx, created_at) VALUES (?,?,?,?)').run(m.id, me.id, i, ts)
+  })()
+  const poll = pollOf(m.id)
+  pushToConversation(m.conversation_id, { type: 'poll', conversationId: m.conversation_id, id: m.id, poll })
+  res.json({ poll })
+})
+
+// ---------- a task assigned from the chat ----------
+// The task itself is created through POST /api/tasks — the one place a task is
+// made, with its categories, audit and assignment notification — and then
+// announced here as a card in the thread, quoting the message it came from.
+// Two requests rather than a second task-creating route that would drift.
+r.post('/conversations/:id/task-card', (req, res) => {
+  const me = req.user
+  if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Conversation not found' })
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  if (!canPost(conv, me.id)) return res.status(403).json({ error: ADMINS_ONLY })
+  // A private task (a personal to-do) is only posted by its own owner — a card
+  // shows its title, status and assignee to the whole chat.
+  const t = db.prepare(`SELECT id, title FROM tasks WHERE id=? AND org_id=?
+    AND (COALESCE(visible_to_manager, 1)=1 OR assignee_id=? OR assigned_by_id=?)`).get(String(req.body?.taskId || ''), me.org_id, me.id, me.id)
+  if (!t) return res.status(404).json({ error: 'Task not found' })
+  const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
+  const mid = id('msg')
+  db.prepare("INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, kind, task_id, reply_to, read, created_at) VALUES (?,?,?,?,?,?,'task',?,?,0,?)")
+    .run(mid, conv.org_id, conv.id, me.id, '', t.title, t.id, replyTo, now())
+  const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
+  deliver(conv, row, me)
+  res.status(201).json(shapeMessage(row, me.id, receiptCtx(conv.id, me.id)))
 })
 
 // Star / unstar (per user).
@@ -735,9 +1266,9 @@ r.post('/conversations/:id/call', (req, res) => {
   const label = conv.type === 'group' ? (conv.name || 'Group') : me.name
   pushToConversation(conv.id, {
     type: 'call-ring', callId: cid, conversationId: conv.id, kind,
-    from: { id: me.id, name: me.name }, conversationName: label, conversationType: conv.type,
+    from: { id: me.id, name: me.name }, conversationName: label, conversationType: conv.type, transcribe: 1,
   }, me.id)
-  res.status(201).json({ id: cid, conversation_id: conv.id, kind, status: 'ringing', started_by: me.id, peers: [] })
+  res.status(201).json({ id: cid, conversation_id: conv.id, kind, status: 'ringing', started_by: me.id, transcribe: 1, peers: [] })
 })
 
 // Everyone else already in the call, so a joiner knows who to offer to.
@@ -800,6 +1331,8 @@ r.post('/call/:id/end', (req, res) => {
     pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
     const sum = callSummary(call.id)
     postCallLine(conv, sum)
+    // Everyone is off the call: what was said becomes its summary and tasks.
+    if (status === 'ended') scheduleFinalize(call.id)
     if (status === 'missed') {
       for (const uid of participantsOf(conv.id)) {
         if (uid === call.started_by) continue
@@ -810,6 +1343,21 @@ r.post('/call/:id/end', (req, res) => {
   res.json({ ok: true })
 })
 
+// May this person add to the call's transcript? Only someone who actually
+// joined the call — a group member who never picked up must not be able to
+// put words in it, which would then be summarised and assigned in the
+// caller's name — and only while it runs, with a short grace for lines and
+// recording pieces still on their way when it ended. Not once someone has
+// switched transcription off: a line from before the switch does not sneak
+// in after it.
+function canTranscribe(call, userId) {
+  if (!call.transcribe || call.processed_at) return false
+  const p = db.prepare('SELECT joined_at FROM chat_call_participants WHERE call_id=? AND user_id=?').get(call.id, userId)
+  if (!p?.joined_at) return false
+  if (call.status === 'ringing' || call.status === 'active') return true
+  return call.status === 'ended' && !!call.ended_at && Date.now() - new Date(call.ended_at).getTime() < 90000
+}
+
 // One utterance, from one person's own browser, during a recorded call.
 // Deliberately tiny and unvalidated beyond membership: it is called every few
 // seconds by every participant, and a slow endpoint here would be felt as the
@@ -818,6 +1366,7 @@ r.post('/call/:id/segment', (req, res) => {
   const me = req.user
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
   if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
+  if (!canTranscribe(call, me.id)) return res.json({ ok: true, ignored: true })
   const text = String(req.body?.text || '').trim().slice(0, 2000)
   if (!text) return res.json({ ok: true })
   db.prepare('INSERT INTO chat_call_segments (id, call_id, user_id, text, created_at) VALUES (?,?,?,?,?)')
@@ -825,27 +1374,53 @@ r.post('/call/:id/segment', (req, res) => {
   res.json({ ok: true })
 })
 
-// Stitch the call's segments into a transcript and run it through the SAME
-// meeting pipeline an uploaded recording uses — extraction, suggestions, the
-// review screen, assignment. No audio leaves the browser and no speech key is
-// needed, because the speech-to-text already happened on each participant's
-// device while they were talking.
-r.post('/call/:id/to-tasks', requireRole('manager', 'admin'), async (req, res) => {
+// A browser that cannot recognise speech itself (Firefox, an iPhone app's
+// web view) records its owner's microphone in short pieces and sends each one
+// here; the server transcribes it and files it as that person's lines, so
+// their half of the call is in the transcript like everyone else's. Needs a
+// speech provider key — without one this says so and the call is summarised
+// from whoever's browser could listen.
+const pendingAudio = new Map()
+r.post('/call/:id/audio', upload.single('file'), async (req, res) => {
   const me = req.user
+  const drop = () => { if (req.file) try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)) } catch {} }
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
-  if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
+  if (!call || !member(call.conversation_id, me.id)) { drop(); return res.status(404).json({ error: 'Call not found' }) }
+  if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
+  if (!canTranscribe(call, me.id)) { drop(); return res.json({ ok: true, skipped: true }) }
+  pendingAudio.set(call.id, (pendingAudio.get(call.id) || 0) + 1)
+  try {
+    const buf = fs.readFileSync(path.join(UPLOAD_DIR, req.file.filename))
+    const { text } = await transcribeAudio(buf, req.file.originalname || 'call.webm', req.file.mimetype || 'audio/webm')
+    const clean = String(text || '').trim().slice(0, 8000)
+    if (clean) {
+      // Filed at the moment the piece STARTED, so it sits among everyone
+      // else's lines in the order things were said.
+      const at = new Date(String(req.body?.started_at || ''))
+      const when = isNaN(at.getTime()) || at.toISOString() < call.started_at ? now() : at.toISOString()
+      db.prepare('INSERT INTO chat_call_segments (id, call_id, user_id, text, created_at) VALUES (?,?,?,?,?)').run(id('seg'), call.id, me.id, clean, when)
+    }
+    res.json({ ok: true, captured: !!clean })
+  } catch (err) {
+    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+  } finally {
+    drop()
+    const n = (pendingAudio.get(call.id) || 1) - 1
+    if (n > 0) pendingAudio.set(call.id, n); else pendingAudio.delete(call.id)
+  }
+})
 
+// "Name: what they said", one line per turn — the shape the extractor already
+// expects from a meeting transcript, so attribution survives into the
+// suggested assignees. Each recognised utterance is punctuated before being
+// joined. The Web Speech API returns them bare, and the extractor splits on
+// sentence boundaries — so without this, everything one person said in a row
+// becomes one run-on sentence and two separate asks get merged into a single
+// unusable task.
+function callTranscript(callId) {
   const segs = db.prepare(`
     SELECT s.text, s.created_at, u.name FROM chat_call_segments s
-    JOIN users u ON u.id=s.user_id WHERE s.call_id=? ORDER BY s.created_at`).all(call.id)
-  if (!segs.length) return res.status(422).json({ error: 'Nothing was captured from this call', code: 'NO_SPEECH' })
-
-  // "Name: what they said" is the shape the extractor already expects from a
-  // meeting transcript, so attribution survives into the suggested assignees.
-  // Each recognised utterance is punctuated before being joined. The Web Speech
-  // API returns them bare, and the extractor splits on sentence boundaries — so
-  // without this, everything one person said in a row becomes one run-on
-  // sentence and two separate asks get merged into a single unusable task.
+    JOIN users u ON u.id=s.user_id WHERE s.call_id=? ORDER BY s.created_at`).all(callId)
   const punct = (t) => (/[.!?।]$/.test(t.trim()) ? t.trim() : t.trim() + '.')
   const lines = []
   let lastName = null
@@ -853,41 +1428,124 @@ r.post('/call/:id/to-tasks', requireRole('manager', 'admin'), async (req, res) =
     if (sg.name === lastName) lines[lines.length - 1] += ' ' + punct(sg.text)
     else { lines.push(`${sg.name}: ${punct(sg.text)}`); lastName = sg.name }
   }
-  const transcript = lines.join('\n')
+  return { transcript: lines.join('\n'), lines: lines.length }
+}
 
+// Run a call's transcript through the SAME meeting pipeline an uploaded
+// recording uses — extraction, summary, suggestions — and leave the summary
+// card where the call happened. With autoAssign (every call, once it ends)
+// each task whose owner was named goes straight to them, exactly as a manager
+// pressing "Assign" on the review screen would; a task nobody could be matched
+// to stays a suggestion for someone to settle. No audio leaves the browser and
+// no speech key is needed for the usual case, because the speech-to-text
+// already happened on each participant's device while they were talking.
+async function summariseCall(call, actorId, { autoAssign }) {
+  const { transcript, lines } = callTranscript(call.id)
+  if (!lines) return null
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
-  const participantIds = db.prepare('SELECT DISTINCT user_id FROM chat_call_participants WHERE call_id=? AND joined_at IS NOT NULL').all(call.id).map((x) => x.user_id)
-  const attendees = attendeesFor(me.org_id, participantIds)
-  const others = attendees.filter((a) => a.id !== me.id).map((a) => a.name)
-  const title = conv?.type === 'group'
-    ? `Call — ${conv.name || 'Group'}`
-    : `Call with ${others[0] || 'a teammate'}`
+  const joined = db.prepare('SELECT DISTINCT user_id FROM chat_call_participants WHERE call_id=? AND joined_at IS NOT NULL').all(call.id).map((x) => x.user_id)
+  // Who the work can go to: everyone on the call and, in a group call, the
+  // rest of the group — "Ravi will send the quote" is Ravi's even if he missed
+  // the call. Nobody outside the conversation can ever be handed anything.
+  const pool = [...new Set([...joined, ...(conv ? participantsOf(conv.id) : [])])]
+  const attendees = attendeesFor(call.org_id, pool)
+  const others = attendees.filter((a) => joined.includes(a.id) && a.id !== actorId).map((a) => a.name)
+  const title = conv?.type === 'group' ? `Call — ${conv.name || 'Group'}` : `Call with ${others[0] || 'a teammate'}`
+  const meetingDate = now().slice(0, 10)
+  const analysis = await analyzeMeetingTranscript(transcript, {
+    meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
+  })
+  const { mid, suggestionCount } = persistMeeting(
+    { orgId: call.org_id, userId: actorId, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds: pool },
+    analysis)
+  // These utterances are now a meeting with a transcript of their own, so
+  // drop them. Recording a SECOND stretch of the same call would otherwise
+  // re-file everything said in the first one.
+  db.prepare('DELETE FROM chat_call_segments WHERE call_id=?').run(call.id)
 
-  try {
-    const meetingDate = now().slice(0, 10)
-    const analysis = await analyzeMeetingTranscript(transcript, {
-      meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
-    })
-    const { mid, suggestionCount } = persistMeeting(
-      { orgId: me.org_id, userId: me.id, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds },
-      analysis)
-    // These utterances are now a meeting with a transcript of their own, so
-    // drop them. Recording a SECOND stretch of the same call would otherwise
-    // re-file everything said in the first one.
-    db.prepare('DELETE FROM chat_call_segments WHERE call_id=?').run(call.id)
+  let assigned = 0
+  if (autoAssign) {
+    const owned = db.prepare("SELECT * FROM suggested_tasks WHERE meeting_id=? AND status='pending' AND suggested_assignee_id IS NOT NULL").all(mid)
+    db.transaction(() => {
+      for (const s of owned) { createTaskFromSuggestion(s, { orgId: call.org_id, actorId, notifyAssignee: true }); assigned++ }
+    })()
+    if (assigned) audit(call.org_id, actorId, 'meeting.assign', 'meeting', mid, `assigned=${assigned}, automatically at the end of a call`)
+  }
+  const pending = db.prepare("SELECT COUNT(*) n FROM suggested_tasks WHERE meeting_id=? AND status='pending'").get(mid).n
+  db.prepare('UPDATE chat_calls SET meeting_id=? WHERE id=?').run(mid, call.id)
 
-    // Leave the audit where the conversation happened. A summary that lives only
-    // in the Meetings list is a summary nobody on the call ever sees again.
+  // Leave the audit where the conversation happened. A summary that lives only
+  // in the Meetings list is a summary nobody on the call ever sees again.
+  if (conv) {
     const lid = id('msg')
     db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, meeting_id, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)')
-      .run(lid, me.org_id, call.conversation_id, me.id, '', `Summary of ${title}`, mid, now())
-    touchConvo(call.conversation_id)
+      .run(lid, call.org_id, conv.id, actorId, '', `Summary of ${title}`, mid, now())
+    touchConvo(conv.id)
     const lrow = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(lid)
-    for (const uid of participantsOf(call.conversation_id)) {
-      pushToUser(uid, { type: 'message', conversationId: call.conversation_id, message: shapeMessage(lrow, uid, {}) })
+    for (const uid of participantsOf(conv.id)) {
+      pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(lrow, uid, {}) })
     }
-    res.status(201).json({ id: mid, suggestion_count: suggestionCount, engine: analysis.engine, lines: lines.length })
+  }
+  for (const uid of joined) pushToUser(uid, { type: 'call-summary', callId: call.id, conversationId: call.conversation_id, meetingId: mid, assigned, pending })
+  return { mid, suggestionCount, assigned, pending, engine: analysis.engine, lines }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// The end of every call that was answered. A short wait first: the last
+// lines spoken are still on their way from people's browsers when the last
+// person hangs up, and a recording piece may still be being transcribed.
+function scheduleFinalize(callId, delayMs = 4000, tries = 0) {
+  setTimeout(() => { finalizeCall(callId, tries).catch((e) => console.error('[chat] call summary failed:', e.message)) }, delayMs)
+}
+// Claimed in one statement, so the end-of-call path and the manual button
+// (older apps) can never both summarise the same call. A claim with no
+// meeting after ten minutes is one a crash or restart abandoned mid-way, and
+// may be taken again rather than leaving the call stuck for ever.
+const STALE_CLAIM_MS = 10 * 60000
+const claimCall = (callId) => db.prepare(`UPDATE chat_calls SET processed_at=? WHERE id=? AND meeting_id IS NULL
+  AND (processed_at IS NULL OR processed_at < ?)`).run(now(), callId, new Date(Date.now() - STALE_CLAIM_MS).toISOString()).changes > 0
+// What was said while transcription was ON is summarised even if someone
+// switched it off later — switching off stops capture from that moment, as
+// the call's button says; it does not unsay what everyone already heard.
+async function finalizeCall(callId, tries = 0) {
+  for (let i = 0; i < 120 && (pendingAudio.get(callId) || 0) > 0; i++) await sleep(1000)
+  if (!db.prepare('SELECT 1 FROM chat_call_segments WHERE call_id=? LIMIT 1').get(callId)) {
+    // A last recording piece can still be on its way; look once more.
+    if (tries < 2) scheduleFinalize(callId, 15000, tries + 1)
+    return
+  }
+  if (!claimCall(callId)) return
+  const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(callId)
+  pushToConversation(call.conversation_id, { type: 'call-processing', conversationId: call.conversation_id, callId, on: true })
+  try {
+    await summariseCall(call, call.started_by, { autoAssign: true })
+  } catch (e) {
+    console.error('[chat] call summary failed:', e.message)
+    db.prepare('UPDATE chat_calls SET processed_at=NULL WHERE id=?').run(callId) // let the manual route retry
+  } finally {
+    pushToConversation(call.conversation_id, { type: 'call-processing', conversationId: call.conversation_id, callId, on: false })
+  }
+}
+
+// The manual way in, kept for copies of the app from before calls were
+// summarised by themselves (their Record button calls this on hang-up). It
+// stops at suggestions for the review screen, as it always did.
+r.post('/call/:id/to-tasks', requireRole('manager', 'admin'), async (req, res) => {
+  const me = req.user
+  const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
+  if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
+  if (call.meeting_id) {
+    const n = db.prepare("SELECT COUNT(*) n FROM suggested_tasks WHERE meeting_id=? AND status='pending'").get(call.meeting_id).n
+    return res.status(201).json({ id: call.meeting_id, suggestion_count: n, existing: true })
+  }
+  if (!db.prepare('SELECT 1 FROM chat_call_segments WHERE call_id=? LIMIT 1').get(call.id)) return res.status(422).json({ error: 'Nothing was captured from this call', code: 'NO_SPEECH' })
+  if (!claimCall(call.id)) return res.status(409).json({ error: 'This call is already being summarised' })
+  try {
+    const out = await summariseCall(call, me.id, { autoAssign: false })
+    res.status(201).json({ id: out.mid, suggestion_count: out.suggestionCount, engine: out.engine, lines: out.lines })
   } catch (err) {
+    db.prepare('UPDATE chat_calls SET processed_at=NULL WHERE id=?').run(call.id)
     console.error('[chat] call-to-tasks failed:', err.message)
     res.status(502).json({ error: err.message })
   }
@@ -907,15 +1565,52 @@ r.post('/call/:id/kind', (req, res) => {
   res.json({ ok: true, kind })
 })
 
-// Announce that someone started or stopped recording. Everyone in the call is
-// told, always: a recording nobody was told about is not something this app is
-// going to make easy, whatever the local law says.
+// Switch the call's transcription on or off. Every call starts with it on —
+// that is what turns a call into its summary and tasks — and anyone on the
+// call may switch it off (or back on). Everyone in the call is told, always: a
+// recording nobody was told about is not something this app is going to make
+// easy, whatever the local law says.
 r.post('/call/:id/recording', (req, res) => {
   const me = req.user
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
   if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
-  pushToConversation(call.conversation_id, { type: 'call-recording', callId: call.id, on: !!req.body?.on, by: me.id, byName: me.name })
-  res.json({ ok: true })
+  const on = !!req.body?.on
+  db.prepare('UPDATE chat_calls SET transcribe=? WHERE id=?').run(on ? 1 : 0, call.id)
+  pushToConversation(call.conversation_id, { type: 'call-recording', callId: call.id, on, by: me.id, byName: me.name })
+  res.json({ ok: true, on })
+})
+
+// The call log — WhatsApp's Calls tab. Every finished call in a conversation
+// I am in, newest first: which way it went, whether I missed it, how long it
+// ran, and the summary it left behind.
+r.get('/calls', (req, res) => {
+  const me = req.user
+  const rows = db.prepare(`
+    SELECT c.*, cv.type AS conv_type, cv.name AS conv_name, cv.avatar_color AS conv_color, cv.avatar_file AS conv_avatar,
+      (SELECT joined_at FROM chat_call_participants cp WHERE cp.call_id=c.id AND cp.user_id=?) AS my_joined
+    FROM chat_calls c
+    JOIN chat_conversations cv ON cv.id=c.conversation_id
+    JOIN chat_participants p ON p.conversation_id=c.conversation_id AND p.user_id=?
+    WHERE c.org_id=? AND c.status NOT IN ('ringing','active')
+    ORDER BY c.started_at DESC LIMIT 150`).all(me.id, me.id, me.org_id)
+  const peerOf = db.prepare('SELECT u.id, u.name, u.avatar_color, u.avatar_file FROM chat_participants p JOIN users u ON u.id=p.user_id WHERE p.conversation_id=? AND p.user_id!=? LIMIT 1')
+  res.json({ items: rows.map((c) => {
+    const direct = c.conv_type === 'direct'
+    const peer = direct ? peerOf.get(c.conversation_id, me.id) : null
+    const outgoing = c.started_by === me.id
+    return {
+      id: c.id, conversation_id: c.conversation_id, type: c.conv_type,
+      name: direct ? (peer?.name || 'Unknown') : (c.conv_name || 'Group'),
+      avatar_color: direct ? (peer?.avatar_color || null) : c.conv_color,
+      avatar_file: direct ? (peer?.avatar_file || null) : (c.conv_avatar || null),
+      other_user_id: peer?.id || null,
+      kind: c.kind, status: c.status, outgoing,
+      missed: !outgoing && !c.my_joined,
+      started_at: c.started_at,
+      duration_sec: c.answered_at && c.ended_at ? Math.max(0, Math.round((new Date(c.ended_at) - new Date(c.answered_at)) / 1000)) : 0,
+      meeting_id: c.meeting_id || null,
+    }
+  }) })
 })
 
 // The call I am STILL IN, wherever I am. A browser that is closed, killed or
@@ -961,6 +1656,18 @@ function titleFromText(text, mentionNames = []) {
     }
   }
   t = t.replace(/@all\b/gi, ' ').replace(/\s+/g, ' ').trim()
+  // "Great, thanks. Can you write down what broke?" — the work is in the
+  // second sentence. A short opener of three words or fewer ("Great,
+  // thanks.", "Ok.", "Hi Ravi!") is courtesy, not the task, so it is dropped
+  // when something longer follows it.
+  // An @name still in the text (typed, not picked) is who it is for, not part
+  // of the opener, so it is not counted as one of its words.
+  const words = (s) => s.replace(/@\S+(\s+[A-Z][\p{L}]*)?/gu, ' ').trim().split(/\s+/).filter(Boolean).length
+  for (let i = 0; i < 3; i++) {
+    const m = /^([^.!?।]{1,50}[.!?।]+)\s+(\S[\s\S]*)$/.exec(t)
+    if (!m || words(m[1]) > 3 || words(m[2]) < 3) break
+    t = m[2].trim()
+  }
   // A name said out loud leads the sentence the same way an @mention does
   // ("Ravi, can you…"). It is already captured as the assignee, so leaving it
   // in the title just repeats it on every card.
@@ -974,6 +1681,12 @@ function titleFromText(text, mentionNames = []) {
   const LEAD = /^(hi|hey|hello|team|guys|folks|all|please|pls|plz|kindly|can you|could you|can u|would you|need you to|i need you to)\b[\s,:-]*/i
   for (let i = 0; i < 4 && LEAD.test(t); i++) t = t.replace(LEAD, '')
   t = t.trim()
+  // A title is one instruction: its first sentence, without the full stop or
+  // question mark ("Write down what broke?" is a request, not a question, by
+  // the time it is a task). The rest of the message stays in the description.
+  const stop = t.search(/[.!?।](\s|$)/)
+  if (stop > 12) t = t.slice(0, stop)
+  t = t.replace(/[.!?।]+$/, '').trim()
   // Long messages: keep the first sentence, else the first clause, else cut on a
   // word boundary. A title chopped mid-word reads like a bug, and one chopped
   // mid-clause ("…users cannot sign in on") reads like a truncated thought.
@@ -1124,8 +1837,39 @@ r.post('/conversations/:id/unread', (req, res) => {
   const m = db.prepare('SELECT created_at FROM chat_messages WHERE id=? AND conversation_id=?').get(req.body?.messageId, req.params.id)
   if (!m) return res.status(404).json({ error: 'Message not found' })
   const before = new Date(new Date(m.created_at).getTime() - 1).toISOString()
-  db.prepare('UPDATE chat_participants SET last_read_at=? WHERE conversation_id=? AND user_id=?').run(before, req.params.id, me.id)
+  // The read receipt keeps where it got to (read_receipt_at, filled in here for
+  // rows from before it existed): leaving something for later is not unreading
+  // it as far as the sender's blue ticks are concerned.
+  db.prepare('UPDATE chat_participants SET read_receipt_at=COALESCE(read_receipt_at, last_read_at), last_read_at=? WHERE conversation_id=? AND user_id=?').run(before, req.params.id, me.id)
   res.json({ ok: true, last_read_at: before })
+})
+
+// Export chat: every message I can still see, oldest first, as data — the
+// browser writes the .txt in WhatsApp's export layout, in the reader's own
+// time zone (this server runs on UTC).
+r.get('/conversations/:id/export', (req, res) => {
+  const me = req.user
+  if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Not found' })
+  const rows = db.prepare(`
+    SELECT * FROM chat_messages WHERE conversation_id=?
+      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+    ORDER BY created_at ASC`).all(req.params.id, me.id)
+  const names = {}
+  const who = (uid) => names[uid] || (names[uid] = nameOf(uid))
+  res.json({ items: rows.map((row) => {
+    let text
+    if (row.deleted_for_all) text = row.sender_id === me.id ? 'You deleted this message' : 'This message was deleted'
+    else if (row.kind === 'system') text = systemText(parseMeta(row), me.id)
+    else if (row.kind === 'poll') {
+      const p = pollOf(row.id)
+      text = `POLL:\n${row.body}\n` + (p?.options || []).map((o) => `OPTION: ${o.text} (${o.voters.length} vote${o.voters.length === 1 ? '' : 's'})`).join('\n')
+    } else if (row.kind === 'location') {
+      const g = parseMeta(row)
+      text = `location: https://maps.google.com/?q=${g.lat},${g.lng}`
+    } else if (row.file_stored) text = `${row.file_name} (file attached)${row.body ? '\n' + row.body : ''}`
+    else text = snippet(row, me.id)
+    return { at: row.created_at, sender: who(row.sender_id), text, event: row.kind === 'system' || !!row.call_id || !!row.meeting_id }
+  }) })
 })
 
 // ---------- reminders ----------
@@ -1193,6 +1937,7 @@ r.get('/search', (req, res) => {
     SELECT m.* FROM chat_messages m
     JOIN chat_participants p ON p.conversation_id=m.conversation_id AND p.user_id=?
     WHERE m.deleted_for_all=0 AND (m.body LIKE ? OR m.file_name LIKE ?)
+      AND COALESCE(m.kind,'')<>'system'
       AND m.id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
     ORDER BY m.created_at DESC LIMIT 60`).all(me.id, `%${q}%`, `%${q}%`, me.id)
   const names = {}
@@ -1289,6 +2034,7 @@ r.post('/channels/:id/join', (req, res) => {
   const ts = now()
   db.prepare('INSERT OR IGNORE INTO chat_participants (conversation_id, user_id, role, last_read_at, joined_at) VALUES (?,?,?,?,?)')
     .run(conv.id, me.id, 'member', ts, ts)
+  postSystem(conv, me.id, { action: 'joined' })
   pushToConversation(conv.id, { type: 'conversation', action: 'updated', conversationId: conv.id })
   res.status(201).json(summarizeConvo(conv, me.id))
 })
@@ -1301,7 +2047,9 @@ r.post('/conversations/:id/visibility', (req, res) => {
   if (!p) return res.status(404).json({ error: 'Not found' })
   if (p.role !== 'admin') return res.status(403).json({ error: 'Only a group admin can change this' })
   const visibility = req.body?.visibility === 'public' ? 'public' : 'private'
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
   db.prepare('UPDATE chat_conversations SET visibility=? WHERE id=?').run(visibility, req.params.id)
+  if ((conv.visibility || 'private') !== visibility) postSystem(conv, me.id, { action: 'visibility', to: visibility })
   pushToConversation(req.params.id, { type: 'conversation', action: 'updated', conversationId: req.params.id })
   res.json({ ok: true, visibility })
 })
@@ -1506,6 +2254,7 @@ export function runChatDue() {
         const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
         pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
         if (conv) postCallLine(conv, callSummary(call.id))
+        if (status === 'ended') scheduleFinalize(call.id, 500)
       }
     }
   } catch (e) { console.error('[chat] call reaper failed:', e.message) }
@@ -1532,7 +2281,7 @@ export function runChatDue() {
       // The sender may have been removed from the group between writing and
       // sending. Posting it anyway would put a message in a room they can no
       // longer see, so it just quietly doesn't go.
-      if (!conv || !sender || !member(conv.id, sender.id)) continue
+      if (!conv || !sender || !member(conv.id, sender.id) || !canPost(conv, sender.id)) continue
       const mid = id('msg')
       db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, read, created_at) VALUES (?,?,?,?,?,?,0,?)')
         .run(mid, conv.org_id, conv.id, sender.id, '', sch.body, now())
