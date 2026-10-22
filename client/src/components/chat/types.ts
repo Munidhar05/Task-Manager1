@@ -54,8 +54,20 @@ export type Workload = Record<string, { open: number; overdue: number }>
 // page is served from the phone itself and a bare /api path goes nowhere.
 export const fileUrl = (m: { id: string }, download = false) => `${API_BASE}/api/chat/file/${m.id}?token=${getToken()}${download ? '&download=1' : ''}`
 export const isImage = (f?: ChatFile | null) => !!f && (f.type || '').startsWith('image/')
-export const isVideo = (f?: ChatFile | null) => !!f && (f.type || '').startsWith('video/')
-export const isAudio = (f?: ChatFile | null) => !!f && ((f.type || '').startsWith('audio/') || /\.(webm|m4a|mp3|ogg|wav)$/i.test(f.name || ''))
+// The MIME decides; only a missing or generic type falls back to the name,
+// where a .webm is a recording if the app named it one (voice-note…,
+// call-recording…) and a video otherwise. So a clip a phone sent as
+// octet-stream still plays in the thread instead of sitting there as a file.
+export const isVideo = (f?: ChatFile | null) => {
+  if (!f) return false
+  const type = (f.type || '').split(';')[0].trim().toLowerCase()
+  if (type && type !== 'application/octet-stream') return type.startsWith('video/')
+  const name = (f.name || '').toLowerCase()
+  return /\.(mp4|mov|m4v|mkv|avi|3gp)$/.test(name) || (/\.webm$/.test(name) && !/^(voice-note|call-recording)/.test(name))
+}
+// MIME first here too: a video/webm clip is not a voice note just because of
+// its extension. The name only decides when the browser declared no type at all.
+export const isAudio = (f?: ChatFile | null) => !!f && !isVideo(f) && ((f.type || '').startsWith('audio/') || /\.(webm|m4a|mp3|ogg|wav)$/i.test(f.name || ''))
 
 // Something a person typed (and so may edit): not a record of an event.
 export const isEditable = (m: Msg) => !m.deleted && !m.kind && !m.call && !m.meeting && !isAudio(m.file) && !m.id.startsWith('tmp_')

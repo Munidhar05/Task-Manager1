@@ -193,15 +193,18 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
    instead of things you could press. Mixed against --surface rather than set to
    a flat orange, so the same rule works on both themes: pale on light, warm and
    clearly lifted on dark, and never the solid fill of .btn-primary, which has to
-   stay the one obviously-primary action in the row. */
-.btn:not(.btn-primary):not(.btn-danger),
+   stay the one obviously-primary action in the row. The confirm dialog's solid
+   red .btn-danger-solid is no secondary button either: at 0,3,0 this rule beat
+   its 0,1,0 and painted "Delete" like "Cancel". It joins .btn-danger in one
+   :not() list, which keeps the specificity every other button resolves at. */
+.btn:not(.btn-primary):not(.btn-danger, .btn-danger-solid),
 .toolbar select,
 .toolbar-filters select {
   background: color-mix(in srgb, var(--primary) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
   color: color-mix(in srgb, var(--primary) 55%, var(--text));
 }
-.btn:not(.btn-primary):not(.btn-danger):hover,
+.btn:not(.btn-primary):not(.btn-danger, .btn-danger-solid):hover,
 .toolbar select:hover,
 .toolbar-filters select:hover {
   background: color-mix(in srgb, var(--primary) 20%, var(--surface));
@@ -2859,6 +2862,21 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .btn-rec-stop:hover:not(:disabled) { background: linear-gradient(135deg, #dc2626, #b91c1c); border-color: #b91c1c; color: #fff; }
 /* A review this device holds unfinished edits for — see lib/reviewDraft.ts. */
 .mt-inprogress { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 7px 10px; border-radius: 8px; background: var(--warning-bg); color: var(--warning-ink); font-size: 12.5px; font-weight: 600; }
+/* Review & Assign (MeetingDetail's ReviewAssignModal). The task list is its one
+   scroller, so the heading and the footer with the bulk action are always in
+   view. On a tall screen the list stops at 70vh as before; on a short one it
+   gives way rather than pushing the footer out of the dialog behind a second
+   scrollbar. */
+.modal.rv-modal { width: 94%; max-width: 920px; display: flex; flex-direction: column; }
+.rv-head, .rv-foot { flex-shrink: 0; }
+.rv-list { flex: 0 1 auto; min-height: 0; max-height: 70vh; overflow: auto; overscroll-behavior: contain; }
+.rv-foot { border-top: 1px solid var(--border); }
+/* The floating Ask BTM pill (z 1200) sat over this dialog's footer and its
+   "Assign all remaining" button. It stands down while the review is up, and
+   only for this dialog: the assistant can fill in forms such as New task, and
+   the pill is how you start it there. An assistant that is already open is not
+   in .va-dock and stays. */
+body:has(.rv-center) .va-dock { display: none; }
 /* Banner at the top of Review & Assign after edits are restored from disk. */
 .rv-resumed { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--warning-border); border-radius: 10px; background: var(--warning-bg); color: var(--warning-ink); font-size: 13px; }
 /* Title + confidence chip on one review row. The chip is nowrap and ~190px, so
@@ -2902,6 +2920,21 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
      defeats AutoTextarea's grow-to-fit and clips a two-line title at min-height. */
   .rv-title-main { flex: none; }
   .rv-conf { padding-top: 0; align-self: flex-end; }
+  /* Review & Assign is the whole screen on a phone. Floating in the overlay's
+     gutter it left a 263px form, and its footer sat past the dialog's own edge
+     behind two scrollers, with "Assign all remaining" cut off. Now the sheet
+     fills the fixed overlay (so it tracks the browser bars, as 100dvh does),
+     the heading stays on top, the tasks scroll, and the footer is always whole,
+     clear of the home indicator. */
+  .modal-center.rv-center { padding: 0; place-items: stretch; }
+  .modal.rv-modal { width: 100%; max-width: none; max-height: none; border-radius: 0; box-shadow: none; }
+  .rv-head { padding: calc(8px + env(safe-area-inset-top, 0px)) 6px 8px 16px; }
+  /* The list is a grid, and a grid stretches its rows to fill a box taller than
+     they are: once reviewed rows fold into one-line strips, start them at the top. */
+  .rv-list { flex: 1 1 auto; max-height: none; padding: 12px 12px 16px; align-content: start; }
+  .rv-foot { flex-wrap: wrap; gap: 8px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .rv-foot > * { flex: 1 1 100%; }
+  .rv-modal .btn-sm { min-height: 42px; }
   .sidebar { position: fixed; z-index: 40; transform: translateX(-100%); transition: transform .22s ease; box-shadow: var(--shadow-lg); width: 250px; }
   .sidebar.open { transform: none; }
   .sidebar-backdrop { display: block; position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 39; animation: fadeIn .2s ease; }
@@ -3186,7 +3219,7 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
 .confirm-message { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; white-space: pre-line; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .btn-danger-solid { background: linear-gradient(135deg,#f05252,#dc2626); color: #fff; border-color: #dc2626; box-shadow: 0 2px 7px rgba(220,38,38,.3); }
-.btn-danger-solid:hover { background: linear-gradient(135deg,#dc2626,#b91c1c); border-color: #b91c1c; box-shadow: 0 5px 14px rgba(220,38,38,.4); transform: translateY(-1px); }
+.btn-danger-solid:hover { background: linear-gradient(135deg,#dc2626,#b91c1c); border-color: #b91c1c; color: #fff; box-shadow: 0 5px 14px rgba(220,38,38,.4); transform: translateY(-1px); }
 .btn-danger-solid:active { transform: translateY(0); }
 
 /* 8a. Loading skeletons — shimmer placeholders that mirror the real layout. */
