@@ -90,6 +90,9 @@ export interface Task {
   assignee_id?: string | null; assigned_by_id?: string | null
   project?: { id: string; name: string }; meeting_id?: string
   assigned_at?: string; submitted_at?: string; completed_at?: string; created_at?: string; updated_at?: string
+  // Who closed it — the person who marked it Done, or the approver. Null for
+  // tasks finished before this was recorded that the audit log couldn't name.
+  completed_by_id?: string | null; completedBy?: User | null
   visible_to_manager?: number; parent_task_id?: string | null
   subtasks?: Task[]; comments?: any[]; dependencies?: any[]; attachments?: Attachment[]
   // How this task reached its current owner — drives the badge on each card.

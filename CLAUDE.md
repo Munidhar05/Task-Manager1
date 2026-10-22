@@ -76,7 +76,9 @@ call `r.use(authRequired)` once at the top and then gate individual routes with
 to per-org isolation — **every other query must filter by `req.user.org_id`**.
 
 `util.js` is the shared kit: `id(prefix)` (nanoid), `now()` (ISO), `audit(...)` — call it on
-every mutation, the admin audit log and the leaderboard both read `audit_logs` — and
+every mutation; the admin audit log, the dashboard feed and the Tasks page's Activity view
+(`GET /tasks/activity`, which maps each task action to a kind) all read `audit_logs`, so a
+task change that skips it simply never happened as far as they show — and
 `notify()` / `notifyManagers()`, which write an in-app notification *and* fire FCM push.
 
 Two WebSocket hubs share the HTTP server: `ws/chatHub.js` (real-time chat) and

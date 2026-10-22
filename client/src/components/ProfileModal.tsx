@@ -36,7 +36,7 @@ export const SECTIONS: { id: SectionId; label: string; icon: IconName; hint: str
 
 const NOTIF_ROWS: { key: string; label: string; hint: string }[] = [
   { key: 'tasks', label: 'Tasks', hint: 'Assigned to you, or moved to someone else' },
-  { key: 'approvals', label: 'Approvals', hint: 'Work submitted, approved or reopened' },
+  { key: 'approvals', label: 'Approvals', hint: 'Work submitted, completed, approved or reopened' },
   { key: 'comments', label: 'Comments', hint: 'Replies on tasks you are part of' },
   { key: 'chat', label: 'Chat', hint: 'Direct and group messages' },
   { key: 'deadlines', label: 'Deadlines', hint: 'Reminders as a due date approaches' },

@@ -394,6 +394,22 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                 <div className="row" style={{ gap: 8 }}>{task.assignedBy ? <><Avatar name={task.assignedBy.name} size={24} /> {task.assignedBy.name}</> : '—'}</div>
               </div>
             </div>
+            {/* Who closed it, beside who asked for it. Without this a finished task
+                showed when it was completed but never by whom, and closing can be
+                done by the owner, any manager, or an approver. */}
+            {task.status === 'Done' && (
+              <div className="dr-field">
+                <span className="dr-field-label">Completed by</span>
+                <div className="dr-field-val">
+                  {task.completedBy ? (
+                    <div className="row" style={{ gap: 8 }}>
+                      <Avatar name={task.completedBy.name} color={task.completedBy.avatar_color} size={24} /> {task.completedBy.name}
+                      {task.approval_status === 'approved' && <span className="muted" style={{ fontWeight: 500, fontSize: 12.5 }}>· approved</span>}
+                    </div>
+                  ) : <span className="muted" style={{ fontWeight: 500 }}>Not recorded</span>}
+                </div>
+              </div>
+            )}
             <div className="dr-field">
               <span className="dr-field-label">Due date</span>
               <div className="dr-field-val">
@@ -410,7 +426,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="doc" size={14} /> Created</span><span>{fmtDateTime(task.created_at)}</span></div>
               <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="pin" size={14} /> Assigned</span><span>{fmtDateTime(task.assigned_at)}</span></div>
               {task.submitted_at && <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="send" size={14} /> Submitted</span><span>{fmtDateTime(task.submitted_at)}</span></div>}
-              <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="check" size={14} /> Completed</span><span style={{ color: task.completed_at ? 'var(--success-ink)' : 'inherit' }}>{fmtDateTime(task.completed_at)}</span></div>
+              <div className="spread"><span className="muted row" style={{ gap: 7 }}><Ic name="check" size={14} /> Completed</span><span style={{ color: task.completed_at ? 'var(--success-ink)' : 'inherit', textAlign: 'right' }}>{fmtDateTime(task.completed_at)}{task.completed_at && task.completedBy && <> · {task.completedBy.name}</>}</span></div>
             </div>
           </div>
 
@@ -492,7 +508,9 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               </>
             ) : task.status === 'Done' ? (
               <div className="card-pad" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, color: '#047857' }}>
-                ✓ Completed — the work was approved.
+                {task.completedBy
+                  ? `✓ Completed — ${task.approval_status === 'approved' ? 'approved' : 'marked done'} by ${task.completedBy.id === user?.id ? 'you' : task.completedBy.name}.`
+                  : '✓ Completed.'}
               </div>
             ) : task.approval_status === 'pending' ? (
               <div className="card-pad" style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 10 }}>

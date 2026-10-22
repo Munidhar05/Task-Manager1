@@ -8,6 +8,7 @@ import CategorySelect from '../components/CategorySelect'
 import PickerWithAdd from '../components/PickerWithAdd'
 import { UserForm } from '../components/UserManagement'
 import TaskBoard from '../components/TaskBoard'
+import TaskActivity from '../components/TaskActivity'
 import { TaskHandoverLine } from '../components/TaskOriginBadge'
 import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
@@ -412,7 +413,11 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // never from the URL: a 4000-character message does not belong in a query string.
   const [draft, setDraft] = useState<TaskDraft | null>(null)
   const [showTrash, setShowTrash] = useState(false)
-  const [view, setView] = useState<'list' | 'board'>('list')
+  // ?view=activity opens straight on the Activity feed; the quick views share the
+  // same param but never use this value, so the two can't collide.
+  const [view, setView] = useState<'list' | 'board' | 'activity'>(() => (searchParams.get('view') === 'activity' ? 'activity' : 'list'))
+  // Bumped when the drawer changes a task, so the Activity feed shows the change.
+  const [activityTick, setActivityTick] = useState(0)
   // Wide enough to show the list and one task side by side. Below this the
   // drawer stays a modal, because a pane would leave neither half usable.
   const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches)
@@ -794,7 +799,10 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         </td>
       )}
       <td data-label="Assigned">{fmtDateTime(givenOf(t))}</td>
-      <td data-label="Completed"><span style={{ color: '#10b981', fontWeight: 600 }}>{fmtDateTime(t.completed_at)}</span></td>
+      <td data-label="Completed">
+        <div style={{ color: '#10b981', fontWeight: 600 }}>{fmtDateTime(t.completed_at)}</div>
+        {t.completedBy && <div className="muted" style={{ fontSize: 11 }}>by {t.completedBy.id === user?.id ? 'you' : t.completedBy.name}</div>}
+      </td>
     </tr>
   )
 
@@ -878,6 +886,8 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         <div className="seg">
           <button className={'seg-btn row' + (effectiveView === 'list' && !assignedByMe ? ' active' : '')} style={{ gap: 6 }} onClick={() => { setView('list'); setScopeAssigned(false) }} title="List view"><Ic name="menu" size={14} /> List</button>
           <button className={'seg-btn row' + (effectiveView === 'board' ? ' active' : '')} style={{ gap: 6 }} onClick={() => { setView('board'); setScopeAssigned(false) }} title="Board view"><Ic name="board" size={14} /> Board</button>
+          <button className={'seg-btn row' + (effectiveView === 'activity' ? ' active' : '')} style={{ gap: 6 }} onClick={() => { setView('activity'); setScopeAssigned(false) }}
+            title="Everything that happened to tasks, newest first"><Ic name="clock" size={14} /> Activity</button>
           {!personal && (
             <button className={'seg-btn row' + (assignedByMe ? ' active' : '')} style={{ gap: 6 }} onClick={() => { setView('list'); setScopeAssigned(true) }}
               title="Tasks you assigned to others or split with them"><Ic name="send" size={14} /> Assigned by me</button>
@@ -921,7 +931,16 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
         </div>
       )}
 
-      {loadError ? (
+      {effectiveView === 'activity' ? (
+        <TaskActivity
+          filters={filters}
+          users={users}
+          personal={personal}
+          refreshKey={activityTick}
+          onOpen={setOpenId}
+          onClearPageFilters={() => setFilters({ q: '', priority: '', status: '', assignee: '' })}
+        />
+      ) : loadError ? (
         <div className="card">
           <EmptyState icon={<Ic name="warning" size={40} />} title="Couldn't load tasks" hint="Check your connection and try again."
             action={<button className="btn btn-primary btn-sm" onClick={load}>Retry</button>} />
@@ -1042,7 +1061,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {/* Drawer edits patch the single row in place when the mutation returned the
           updated task; anything else (delete, uploads) falls back to a reload. */}
-      {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />}
+      {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => { setActivityTick((n) => n + 1); return t && t.status ? patchTask(t) : load() }} />}
       {showNew && <NewTaskModal users={users} personal={personal} draft={draft} onUserCreated={(u) => setUsers((p) => [...p, u])} onClose={() => { setShowNew(false); setDraft(null) }} onCreated={() => { setShowNew(false); setDraft(null); load() }} />}
       {showTrash && <TrashModal onClose={() => setShowTrash(false)} onRestored={load} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}
