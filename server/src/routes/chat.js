@@ -13,7 +13,7 @@ import { transcribeAudio } from '../ai/transcribe.js'
 import { analyzeMeetingTranscript } from '../ai/extractor.js'
 import { persistMeeting, attendeesFor, createTaskFromSuggestion } from './meetings.js'
 import { parseDueDate } from '../ai/dates.js'
-import { detectPriority } from '../ai/rules.js'
+import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
@@ -389,7 +389,9 @@ function meetingCard(meetingId) {
   let counts = { decisions: 0, risks: 0, blockers: 0 }
   try {
     const s = JSON.parse(m.summary_json || '{}')
-    exec = String(s.executive_summary || '')
+    // Restated as on the Meetings page: an old rule-based summary says
+    // "3 assigned" about suggestions nobody had approved.
+    exec = restateRuleSummary(String(s.executive_summary || ''))
     counts = {
       decisions: (s.key_decisions || []).length,
       risks: (s.risks || []).length,
@@ -1556,7 +1558,7 @@ async function summariseCall(call, actorId, { autoAssign }) {
     meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
   })
   const { mid, suggestionCount } = persistMeeting(
-    { orgId: call.org_id, userId: actorId, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds: pool },
+    { orgId: call.org_id, userId: actorId, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds: pool, callKind: call.kind === 'video' ? 'video' : 'audio' },
     analysis)
   // These utterances are now a meeting with a transcript of their own, so
   // drop them. Recording a SECOND stretch of the same call would otherwise
@@ -2256,8 +2258,24 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
       meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
     })
     const title = conv?.type === 'group' ? `Call — ${conv.name || 'Group'}` : `Call with ${attendees.filter((a) => a.id !== me.id)[0]?.name || 'a teammate'}`
+    // Audio or video, for the review screen's heading. Only the app's own call
+    // recordings (older CallCenters posted them as call-recording-HHMM) can say,
+    // and the upload carries no call id, so the call is matched by time: the one
+    // call in this chat the recorder was on, with the recording posted between
+    // its start and fifteen minutes after its end. Two candidates is a guess, and
+    // a guess would name the wrong kind of call, so it is then left unnamed.
+    let callKind = null
+    if (/^call-recording/i.test(m.file_name || '')) {
+      const hits = db.prepare(`
+        SELECT k.kind FROM chat_calls k
+        JOIN chat_call_participants p ON p.call_id=k.id AND p.user_id=?
+        WHERE k.conversation_id=? AND k.org_id=?
+          AND julianday(?) BETWEEN julianday(k.started_at) AND julianday(COALESCE(k.ended_at, ?)) + 15.0/1440
+        LIMIT 2`).all(m.sender_id, m.conversation_id, me.org_id, m.created_at, m.created_at)
+      if (hits.length === 1) callKind = hits[0].kind === 'video' ? 'video' : 'audio'
+    }
     const { mid, suggestionCount } = persistMeeting(
-      { orgId: me.org_id, userId: me.id, title, description: 'Transcribed from a recording in the chat.', meetingDate, transcript, sourceType: 'call', participantIds },
+      { orgId: me.org_id, userId: me.id, title, description: 'Transcribed from a recording in the chat.', meetingDate, transcript, sourceType: 'call', participantIds, callKind },
       analysis)
 
     // Point the recording at its summary, and drop the audit card in the thread.
