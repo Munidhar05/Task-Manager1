@@ -12,6 +12,7 @@ type Tone = 'primary' | 'success' | 'warning' | 'info'
 const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone: Tone }> = {
   task_submitted: { name: 'send', tone: 'info' },
   task_approved: { name: 'check', tone: 'success' },
+  task_completed: { name: 'check', tone: 'success' },
   task_reopened: { name: 'refresh', tone: 'warning' },
   task_assigned: { name: 'user', tone: 'primary' },
   task_reassigned: { name: 'refresh', tone: 'warning' },

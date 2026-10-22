@@ -849,6 +849,39 @@ export function initSchema() {
   ensureColumn('tasks', 'reassigned_at', 'TEXT')
   ensureColumn('tasks', 'reassigned_by_id', 'TEXT')   // who moved it
   ensureColumn('tasks', 'previous_assignee_id', 'TEXT') // who it was taken from
+  // WHO CLOSED IT. completed_at said when a task was finished but not by whom,
+  // and a task can be closed by its owner (tick, board drag, the assistant), a
+  // manager, or an approver — so "who marked this done?" had no answer on screen.
+  // Kept in step with completed_at: set and cleared at the same moments.
+  ensureColumn('tasks', 'completed_by_id', 'TEXT')
+  // The Tasks page's Activity view reads the audit log per org newest-first, and
+  // looks up a task's own entries (its create row, its title once purged). The
+  // table had no index at all, so both were full scans of every org's history.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_org_time ON audit_logs(org_id, created_at);')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id, action);')
+  // Recover the name for tasks closed before the column existed. The audit log
+  // has always recorded the actor of every status move, approval and edit, so
+  // the latest completing action on a task that is Done now is the one that
+  // closed it — found in one ordered pass, later rows overwriting earlier ones.
+  // A task with no such row (seed data, or a split parent that rolled itself
+  // up) stays NULL, and the UI then names nobody rather than guessing.
+  runOnce('tasks_completed_by_backfill_v1', () => {
+    const rows = db.prepare(
+      `SELECT entity_id, actor_id FROM audit_logs
+       WHERE entity_type = 'task' AND actor_id IS NOT NULL AND (
+         (action = 'task.status' AND detail = 'Done') OR
+         (action = 'task.approval' AND detail = 'approved') OR
+         (action IN ('task.update', 'task.reassign')
+           AND CASE WHEN json_valid(detail) THEN json_extract(detail, '$.status') END = 'Done'))
+       ORDER BY created_at`
+    ).all()
+    const closer = new Map()
+    for (const r of rows) closer.set(r.entity_id, r.actor_id) // later rows win
+    const set = db.prepare("UPDATE tasks SET completed_by_id=? WHERE id=? AND status='Done' AND completed_by_id IS NULL")
+    let n = 0
+    db.transaction(() => { for (const [tid, uid] of closer) n += set.run(uid, tid).changes })()
+    if (n) console.log(`[migrate] named who completed ${n} finished task(s) from the audit log`)
+  })
 
   // Task attachments: the original table only had `filename`. Enrich it to store
   // the on-disk name, mime type, size and org (mirrors the chat_messages file

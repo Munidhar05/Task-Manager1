@@ -267,6 +267,8 @@ const TOOLS = [
         due_date: t.due_date, progress: t.progress,
         assignee: t.assignee?.name || t.assignee_name || null,
         assigned_by: t.assignedBy?.name || null,
+        completed_at: t.completed_at || null,
+        completed_by: t.completedBy?.name || null,
         from_meeting: t.meeting_id || null,
         comments: (t.comments || []).map((c) => ({
           comment_id: c.id, by: c.user_name || c.author_name, at: c.created_at,

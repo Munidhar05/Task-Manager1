@@ -118,6 +118,7 @@ function hydrate(t) {
   const assignedBy = userBrief(t.assigned_by_id)
   const reassignedBy = userBrief(t.reassigned_by_id)
   const previousAssignee = userBrief(t.previous_assignee_id)
+  const completedBy = userBrief(t.completed_by_id)
   const project = t.project_id ? db.prepare('SELECT id,name FROM projects WHERE id=?').get(t.project_id) : null
   const subtasks = db.prepare('SELECT * FROM tasks WHERE parent_task_id=? ORDER BY created_at').all(t.id)
   // A split part needs to name its parent — it's shown out of context in lists
@@ -129,17 +130,47 @@ function hydrate(t) {
   const deps = db.prepare(`SELECT d.depends_on_task_id AS id, t2.title, t2.status FROM task_dependencies d JOIN tasks t2 ON t2.id=d.depends_on_task_id WHERE d.task_id=?`).all(t.id)
   const attachments = db.prepare('SELECT * FROM attachments WHERE task_id=?').all(t.id)
   return {
-    ...t, assignee, assignedBy, reassignedBy, previousAssignee, parent, project,
+    ...t, assignee, assignedBy, reassignedBy, previousAssignee, completedBy, parent, project,
     subtasks, comments, dependencies: deps, attachments,
     origin: taskOrigin(t),
     is_split_parent: subtasks.length > 0,
   }
 }
 
+// WHO HEARS THAT A TASK IS DONE. Until this, finishing a task told nobody: only
+// "submitted for approval" and the approval verdict sent anything, so a task
+// closed directly — the ✓ tick, a board drag, the assistant — just turned green,
+// and the manager who had asked for it found out by stumbling on it.
+//
+// The assigner and the owner always hear, unless they closed it themselves.
+// When the closer is an employee, every manager hears too: closing work someone
+// else assigned skipped the review they would have been asked for, so this is
+// the audience "submitted for approval" reaches, told after the fact instead of
+// before. A manager's close goes to the assigner and owner only — fanning it out
+// to every other manager would bury the bell for no one's benefit.
+// A task you raised for yourself involves nobody else, so it tells nobody.
+function notifyCompleted(t, actor) {
+  if (isOwnSelfCreated(t, actor.id)) return
+  const msg = `${actor.name} marked "${t.title}" as done`
+  const told = new Set([actor.id])
+  const tell = (uid) => {
+    if (!uid || told.has(uid)) return
+    told.add(uid)
+    notify(t.org_id, uid, 'task_completed', msg, t.id)
+  }
+  tell(t.assigned_by_id)
+  tell(t.assignee_id)
+  if (actor.role === 'employee') {
+    for (const m of db.prepare("SELECT id FROM users WHERE org_id=? AND role IN ('manager','admin')").all(t.org_id)) tell(m.id)
+  }
+}
+
 // Roll a split parent's status up from its children: once every shared part is
 // Done the parent auto-completes; if a part is later reopened, the parent reopens
-// too — so the owner stays accountable and the roll-up stays honest.
-function syncParentStatus(parentId) {
+// too — so the owner stays accountable and the roll-up stays honest. `actor` is
+// whoever finished (or reopened) the part that tipped it, and is recorded as the
+// parent's closer: that is the action that completed it.
+function syncParentStatus(parentId, actor) {
   if (!parentId) return
   const parent = db.prepare('SELECT * FROM tasks WHERE id=?').get(parentId)
   if (!parent) return
@@ -147,13 +178,22 @@ function syncParentStatus(parentId) {
   if (!kids.length) return
   const allDone = kids.every((k) => k.status === 'Done')
   if (allDone && parent.status !== 'Done') {
-    db.prepare('UPDATE tasks SET status=?, progress=100, completed_at=?, updated_at=? WHERE id=?')
-      .run('Done', now(), now(), parentId)
-    notify(parent.org_id, parent.assignee_id, 'task_approved', `All parts of "${parent.title}" are done — task completed`, parentId)
+    db.prepare('UPDATE tasks SET status=?, progress=100, completed_at=?, completed_by_id=?, updated_at=? WHERE id=?')
+      .run('Done', now(), actor?.id || null, now(), parentId)
+    // Its own action rather than task.status: nobody pressed Done on the parent,
+    // and the Activity view should say it closed itself, not that they ticked it.
+    audit(parent.org_id, actor?.id || null, 'task.rollup', 'task', parentId, 'Done')
+    const msg = `All parts of "${parent.title}" are done — task completed`
+    notify(parent.org_id, parent.assignee_id, 'task_approved', msg, parentId)
+    // Whoever asked for the parent is waiting on it too, not only its owner.
+    if (parent.assigned_by_id && parent.assigned_by_id !== parent.assignee_id && parent.assigned_by_id !== actor?.id) {
+      notify(parent.org_id, parent.assigned_by_id, 'task_completed', msg, parentId)
+    }
     indexTask(parentId)
   } else if (!allDone && parent.status === 'Done') {
-    db.prepare('UPDATE tasks SET status=?, progress=?, completed_at=NULL, updated_at=? WHERE id=?')
+    db.prepare('UPDATE tasks SET status=?, progress=?, completed_at=NULL, completed_by_id=NULL, updated_at=? WHERE id=?')
       .run('Reopened', Math.min(parent.progress ?? 0, 80), now(), parentId)
+    audit(parent.org_id, actor?.id || null, 'task.rollup', 'task', parentId, 'Reopened')
     indexTask(parentId)
   }
 }
@@ -200,6 +240,197 @@ r.get('/', (req, res) => {
   sql += " ORDER BY CASE t.priority WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, t.due_date IS NULL, t.due_date"
   const rows = db.prepare(sql).all(...args)
   res.json(rows.map(hydrate))
+})
+
+// ---- activity feed ----------------------------------------------------------
+// Declared above `/:id` for the same reason as the recycle bin below.
+//
+// EVERYTHING THAT HAPPENED TO THE WORK: created, assigned, moved, completed,
+// reopened, edited, commented on, deleted, restored — by whom and when. The
+// audit log has recorded each of these with its author all along; until now
+// only the dashboard's last-25 strip and a task's own "Edited by" list read it.
+//
+// Each row is an audit entry read as the event a person would name (its kind),
+// joined to the task it touched: the live row, else its recycle-bin snapshot,
+// so a deleted task still has a title, owner and priority to filter on.
+//
+// Tasks approved out of a meeting never wrote a task.create row (meetings.js
+// logs meeting.assign on the meeting instead), so any task with no create or
+// split entry gets one made from the task itself — when it was created and who
+// asked for it. Without that, a meeting task's history would open at "completed".
+
+// The filter groups the UI offers, in lifecycle order, and the kinds each one
+// covers. Coarse on purpose: "Completed" must find a task whether it was ticked
+// or approved, "Deleted" whether it is still in the bin or purged.
+const ACTIVITY_GROUPS = {
+  created: ['created'],
+  assigned: ['assigned', 'reassigned', 'split'],
+  progress: ['started', 'todo'],
+  blocked: ['blocked'],
+  submitted: ['submitted'],
+  completed: ['completed', 'approved'],
+  reopened: ['reopened', 'rejected'],
+  edited: ['edited'],
+  commented: ['commented'],
+  attached: ['attached'],
+  deleted: ['deleted', 'purged'],
+  restored: ['restored'],
+}
+const STATUS_KIND = { 'Done': 'completed', 'Reopened': 'reopened', 'In Review': 'submitted', 'In Progress': 'started', 'Blocked': 'blocked', 'To Do': 'todo' }
+const ACTIVITY_SORTS = {
+  newest: 'ev.created_at DESC',
+  oldest: 'ev.created_at ASC',
+  task: 'ev.title COLLATE NOCASE ASC, ev.created_at DESC',
+  person: "COALESCE(u.name, '~') COLLATE NOCASE ASC, ev.created_at DESC",
+  type: `CASE ev.kind ${Object.values(ACTIVITY_GROUPS).flat().map((k, i) => `WHEN '${k}' THEN ${i}`).join(' ')} END, ev.created_at DESC`,
+  priority: "CASE ev.priority WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END, ev.created_at DESC",
+}
+
+// json_extract throws on malformed JSON, and old detail columns hold plain
+// strings too — CASE guarantees json_valid() is checked first.
+const jx = (col, path) => `(CASE WHEN json_valid(${col}) THEN json_extract(${col}, '${path}') END)`
+const jhas = (col, key) => `((CASE WHEN json_valid(${col}) THEN json_type(${col}, '$.${key}') END) IS NOT NULL)`
+const statusKind = (expr) => `(CASE ${expr} ${Object.entries(STATUS_KIND).map(([s, k]) => `WHEN '${s}' THEN '${k}'`).join(' ')} END)`
+
+// Built on first use: EDIT_FIELD_LABELS is declared further down this file.
+let activitySqlCache = null
+function activitySql() {
+  if (activitySqlCache) return activitySqlCache
+  // An edit only counts when it changed something a person would name. A bare
+  // progress save files a row per slider move and would bury everything else.
+  const editKeys = Object.keys(EDIT_FIELD_LABELS).filter((k) => k !== 'assignee_id')
+  const kind = `CASE
+    WHEN a.action = 'task.create' THEN 'created'
+    WHEN a.action = 'task.reassign' THEN 'reassigned'
+    WHEN a.action = 'task.split' THEN 'split'
+    WHEN a.action IN ('task.status', 'task.rollup') THEN ${statusKind('a.detail')}
+    WHEN a.action = 'task.approval' THEN CASE WHEN a.detail = 'approved' THEN 'approved' ELSE 'rejected' END
+    WHEN a.action = 'task.update' THEN COALESCE(
+      ${statusKind(jx('a.detail', '$.status'))},
+      CASE WHEN ${jhas('a.detail', 'assignee_id')} THEN 'assigned' END,
+      CASE WHEN ${editKeys.map((k) => jhas('a.detail', k)).join(' OR ')} THEN 'edited' END)
+    WHEN a.action IN ('task.comment', 'task.comment.edit', 'task.comment.delete') THEN 'commented'
+    WHEN a.action = 'task.attach' THEN 'attached'
+    WHEN a.action = 'task.delete' THEN 'deleted'
+    WHEN a.action = 'task.restore' THEN 'restored'
+    WHEN a.action = 'task.purge' THEN 'purged'
+  END`
+  const noCreateRow = (col) => `NOT EXISTS (SELECT 1 FROM audit_logs x WHERE x.entity_type = 'task' AND x.entity_id = ${col} AND x.action IN ('task.create', 'task.split'))`
+  const snap = (k) => jx('d.payload', `$.task.${k}`)
+  activitySqlCache = `
+    WITH raw AS (
+      SELECT a.id, a.action, a.detail, a.created_at, a.actor_id, a.entity_id AS task_id, ${kind} AS kind
+        FROM audit_logs a WHERE a.org_id = @org AND a.entity_type = 'task'
+      UNION ALL
+      SELECT 'made:' || t.id, 'task.made', NULL, t.created_at, t.assigned_by_id, t.id, 'created'
+        FROM tasks t WHERE t.org_id = @org AND ${noCreateRow('t.id')}
+      UNION ALL
+      SELECT 'made:' || d.id, 'task.made', NULL, ${snap('created_at')}, ${snap('assigned_by_id')}, d.id, 'created'
+        FROM deleted_tasks d WHERE d.org_id = @org AND ${noCreateRow('d.id')}
+    ),
+    ev AS (
+      SELECT raw.*,
+        COALESCE(t.title, d.title, (SELECT x.detail FROM audit_logs x WHERE x.entity_type = 'task' AND x.entity_id = raw.task_id
+          AND x.action IN ('task.create', 'task.purge') ORDER BY x.created_at LIMIT 1)) AS title,
+        CASE WHEN t.id IS NOT NULL THEN 'live' WHEN d.id IS NOT NULL THEN 'deleted' ELSE 'gone' END AS state,
+        COALESCE(t.priority, ${snap('priority')}) AS priority,
+        t.status AS status,
+        COALESCE(t.category, ${snap('category')}) AS category,
+        CASE WHEN t.id IS NOT NULL THEN t.assignee_id ELSE ${snap('assignee_id')} END AS assignee_id,
+        CASE WHEN t.id IS NOT NULL THEN t.assigned_by_id ELSE ${snap('assigned_by_id')} END AS assigned_by_id,
+        t.reassigned_by_id, t.previous_assignee_id, t.visible_to_manager,
+        COALESCE(t.meeting_id, ${snap('meeting_id')}) AS meeting_id,
+        CASE WHEN raw.action IN ('task.update', 'task.reassign') THEN ${jx('raw.detail', '$.assignee_id')}
+             WHEN raw.action = 'task.split' THEN COALESCE(t.assignee_id, ${snap('assignee_id')}) END AS target_id,
+        CASE WHEN raw.action IN ('task.status', 'task.rollup') THEN raw.detail
+             WHEN raw.action = 'task.update' THEN ${jx('raw.detail', '$.status')} END AS status_to
+      FROM raw
+      LEFT JOIN tasks t ON t.id = raw.task_id
+      LEFT JOIN deleted_tasks d ON d.id = raw.task_id
+    )`
+  return activitySqlCache
+}
+
+r.get('/activity', (req, res) => {
+  const me = req.user
+  const isManager = me.role === 'manager' || me.role === 'admin'
+  const { actor, assignee, priority, status, q, since, until, mine } = req.query
+  const sort = ACTIVITY_SORTS[req.query.sort] ? req.query.sort : 'newest'
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200)
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0)
+  const groups = String(req.query.types || '').split(',').filter((g) => ACTIVITY_GROUPS[g])
+
+  const params = { org: me.org_id, me: me.id }
+  // Same visibility as the task list. A manager sees the org, minus an
+  // employee's private draft; an employee sees work they own, handed out, or
+  // were moved off — and anything they did themselves.
+  const where = ['ev.kind IS NOT NULL', isManager
+    ? "NOT (ev.state = 'live' AND ev.visible_to_manager = 0 AND COALESCE(ev.assignee_id, '') != @me)"
+    : '(ev.actor_id = @me OR ev.assignee_id = @me OR ev.assigned_by_id = @me OR ev.reassigned_by_id = @me OR ev.previous_assignee_id = @me)']
+  if (mine) where.push('ev.assignee_id = @me') // My Tasks: my own work only
+  if (actor) { where.push('ev.actor_id = @actor'); params.actor = actor }
+  if (assignee === 'unassigned') where.push('ev.assignee_id IS NULL')
+  else if (assignee) { where.push('ev.assignee_id = @assignee'); params.assignee = assignee }
+  if (priority) { where.push('ev.priority = @priority'); params.priority = priority }
+  // The task's status NOW. A deleted task has none, so it drops out.
+  if (status) { where.push('ev.status = @status'); params.status = status }
+  if (q) { where.push('(ev.title LIKE @q OR u.name LIKE @q OR ow.name LIKE @q)'); params.q = `%${q}%` }
+  // Bounds come from the browser as full ISO instants, so "today" is the
+  // viewer's today, not the server's — Render runs in UTC.
+  if (since) { where.push('ev.created_at >= @since'); params.since = String(since) }
+  if (until) { where.push('ev.created_at < @until'); params.until = String(until) }
+
+  const people = 'LEFT JOIN users u ON u.id = ev.actor_id LEFT JOIN users ow ON ow.id = ev.assignee_id'
+  // Counts per group ignore the group filter itself, so each chip says what
+  // picking it would show.
+  const byKind = db.prepare(`${activitySql()}
+    SELECT ev.kind, COUNT(*) AS n FROM ev ${people}
+    WHERE ${where.join(' AND ')} GROUP BY ev.kind`).all(params)
+  const counts = Object.fromEntries(Object.keys(ACTIVITY_GROUPS).map((g) => [g, 0]))
+  const kindToGroup = Object.fromEntries(Object.entries(ACTIVITY_GROUPS).flatMap(([g, ks]) => ks.map((k) => [k, g])))
+  for (const r0 of byKind) if (kindToGroup[r0.kind]) counts[kindToGroup[r0.kind]] += r0.n
+  const all = Object.values(counts).reduce((s, n) => s + n, 0)
+  const total = groups.length ? groups.reduce((s, g) => s + counts[g], 0) : all
+
+  if (groups.length) {
+    const kinds = groups.flatMap((g) => ACTIVITY_GROUPS[g])
+    where.push(`ev.kind IN (${kinds.map((_, i) => `@k${i}`).join(', ')})`)
+    kinds.forEach((k, i) => { params[`k${i}`] = k })
+  }
+  const rows = db.prepare(`${activitySql()}
+    SELECT ev.id, ev.action, ev.detail, ev.created_at, ev.kind, ev.task_id, ev.title, ev.state,
+      ev.priority, ev.status, ev.category, ev.status_to, ev.actor_id, u.name AS actor_name, u.avatar_color AS actor_color,
+      ev.assignee_id, ow.name AS assignee_name, ow.avatar_color AS assignee_color,
+      ev.target_id, tg.name AS target_name, ev.meeting_id, m.title AS meeting_title
+    FROM ev ${people}
+    LEFT JOIN users tg ON tg.id = ev.target_id
+    LEFT JOIN meetings m ON m.id = ev.meeting_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY ${ACTIVITY_SORTS[sort]}
+    LIMIT @limit OFFSET @offset`).all({ ...params, limit, offset })
+
+  const items = rows.map((r0) => {
+    let fields = []
+    if (r0.kind === 'edited') {
+      let body = {}
+      try { body = JSON.parse(r0.detail || '{}') } catch { body = {} }
+      fields = [...new Set(Object.keys(body).filter((k) => k in EDIT_FIELD_LABELS && k !== 'assignee_id').map((k) => EDIT_FIELD_LABELS[k]))]
+    }
+    return {
+      id: r0.id, kind: r0.kind, action: r0.action, at: r0.created_at,
+      status_to: r0.status_to || null, fields,
+      file: r0.action === 'task.attach' ? r0.detail || null : null,
+      actor: r0.actor_id ? { id: r0.actor_id, name: r0.actor_name || 'Someone', avatar_color: r0.actor_color } : null,
+      target: r0.target_id ? { id: r0.target_id, name: r0.target_name || 'someone' } : null,
+      meeting: r0.meeting_id ? { id: r0.meeting_id, title: r0.meeting_title || 'a meeting' } : null,
+      task: {
+        id: r0.task_id, title: r0.title || 'Untitled task', state: r0.state,
+        priority: r0.priority, status: r0.status, category: r0.category,
+        assignee: r0.assignee_id ? { id: r0.assignee_id, name: r0.assignee_name || 'Former member', avatar_color: r0.assignee_color } : null,
+      },
+    }
+  })
+  res.json({ items, total, all, counts, offset, limit })
 })
 
 // ---- recycle bin ------------------------------------------------------------
@@ -512,10 +743,13 @@ r.patch('/:id', (req, res) => {
       }
     }
   }
+  // Stamped on the way INTO Done only — see the same rule in POST /:id/status.
+  const finishing = b.status === 'Done' && (t.status !== 'Done' || !t.completed_at)
   if ('status' in b) {
     if (!VALID_STATUS.includes(b.status)) return res.status(400).json({ error: 'invalid status' })
     sets.push('status=?'); args.push(b.status)
-    if (b.status === 'Done') { sets.push('progress=?'); args.push(100); sets.push('completed_at=?'); args.push(now()) }
+    if (b.status === 'Done') { sets.push('progress=?'); args.push(100) }
+    if (finishing) { sets.push('completed_at=?'); args.push(now()); sets.push('completed_by_id=?'); args.push(req.user.id) }
     if (b.status === 'In Review') { sets.push('submitted_at=?'); args.push(now()) }
   }
   // Auto-fill a due date from priority when assigning or (re)prioritizing a task
@@ -537,9 +771,11 @@ r.patch('/:id', (req, res) => {
   if (takenFrom && takenFrom !== req.user.id) {
     notify(t.org_id, takenFrom, 'task_reassigned', `${req.user.name} reassigned "${t.title}" to someone else`, t.id)
   }
-  if (t.parent_task_id && 'status' in b) syncParentStatus(t.parent_task_id)
+  const fresh = db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)
+  if (finishing) notifyCompleted(fresh, req.user) // fresh: this same edit may have changed the owner
+  if (t.parent_task_id && 'status' in b) syncParentStatus(t.parent_task_id, req.user)
   indexTask(t.id) // re-index on edit (title/desc/assignee/status may have changed)
-  res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+  res.json(hydrate(fresh))
 })
 
 // STATUS transitions with workflow semantics
@@ -552,18 +788,28 @@ r.post('/:id/status', (req, res) => {
   let progress = t.progress
   let submittedAt = t.submitted_at
   let completedAt = t.completed_at
+  let completedBy = t.completed_by_id
   let visible = t.visible_to_manager
   // Your own self-created task has no approver, so it never enters the approval
   // flow: completing it is final, and a stray "submit for review" just marks it
   // done rather than parking it in a queue nobody is watching.
   const ownWork = isOwnSelfCreated(t, req.user.id)
   if (ownWork && status === 'In Review') status = 'Done'
+  // Completion is stamped on the way INTO Done only. Pressing Done on a task that
+  // is already Done (the assistant can) used to restamp completed_at; now it
+  // would also hand the credit to whoever pressed it and notify everyone again.
+  const finishing = status === 'Done' && (t.status !== 'Done' || !t.completed_at)
   if (status === 'In Review') { approval = 'pending'; submittedAt = now(); visible = 1 } // surface private drafts on submit
-  if (status === 'Done') { progress = 100; completedAt = now(); if (ownWork) approval = 'none' }
-  if (status === 'Reopened') { approval = 'none'; progress = Math.min(progress, 80); completedAt = null }
-  db.prepare('UPDATE tasks SET status=?, approval_status=?, progress=?, submitted_at=?, completed_at=?, visible_to_manager=?, updated_at=? WHERE id=?')
-    .run(status, approval, progress, submittedAt, completedAt, visible, now(), t.id)
+  if (status === 'Done') {
+    progress = 100
+    if (finishing) { completedAt = now(); completedBy = req.user.id }
+    if (ownWork) approval = 'none'
+  }
+  if (status === 'Reopened') { approval = 'none'; progress = Math.min(progress, 80); completedAt = null; completedBy = null }
+  db.prepare('UPDATE tasks SET status=?, approval_status=?, progress=?, submitted_at=?, completed_at=?, completed_by_id=?, visible_to_manager=?, updated_at=? WHERE id=?')
+    .run(status, approval, progress, submittedAt, completedAt, completedBy, visible, now(), t.id)
   audit(req.user.org_id, req.user.id, 'task.status', 'task', t.id, status)
+  if (finishing) notifyCompleted(t, req.user)
   // Employee submitted work for approval → ping the managers, and the assigner
   // (who can now approve it too — e.g. the colleague who split this part off).
   // Managers were all covered by the first call, so only an EMPLOYEE assigner
@@ -577,7 +823,7 @@ r.post('/:id/status', (req, res) => {
       }
     }
   }
-  if (t.parent_task_id) syncParentStatus(t.parent_task_id) // a shared part changed → re-roll the parent
+  if (t.parent_task_id) syncParentStatus(t.parent_task_id, req.user) // a shared part changed → re-roll the parent
   indexTask(t.id) // status change updates the embedded metadata
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
@@ -644,8 +890,8 @@ r.post('/:id/approve', (req, res) => {
     return res.status(403).json({ error: 'Only a manager or the person who assigned this task can approve it.' })
   }
   const approved = decision === 'approved'
-  db.prepare('UPDATE tasks SET approval_status=?, status=?, completed_at=?, updated_at=? WHERE id=?')
-    .run(approved ? 'approved' : 'rejected', approved ? 'Done' : 'Reopened', approved ? now() : null, now(), t.id)
+  db.prepare('UPDATE tasks SET approval_status=?, status=?, completed_at=?, completed_by_id=?, updated_at=? WHERE id=?')
+    .run(approved ? 'approved' : 'rejected', approved ? 'Done' : 'Reopened', approved ? now() : null, approved ? req.user.id : null, now(), t.id)
   audit(req.user.org_id, req.user.id, 'task.approval', 'task', t.id, decision)
   // Tell the assignee the verdict.
   notify(
@@ -654,10 +900,15 @@ r.post('/:id/approve', (req, res) => {
     approved ? `✓ "${t.title}" was approved by ${req.user.name}` : `↩ "${t.title}" needs changes — reopened by ${req.user.name}`,
     t.id,
   )
+  // Any manager can approve, so the person who asked for the work is often not
+  // the one who signs it off — and was never told it had been finished.
+  if (approved && t.assigned_by_id && t.assigned_by_id !== req.user.id && t.assigned_by_id !== t.assignee_id) {
+    notify(t.org_id, t.assigned_by_id, 'task_approved', `✓ "${t.title}" is done — approved by ${req.user.name}`, t.id)
+  }
   // Approving a shared part is how a split normally completes now, so the parent
   // must re-roll here just like on a direct status change — without this the
   // last part's approval left the parent container open forever.
-  if (t.parent_task_id) syncParentStatus(t.parent_task_id)
+  if (t.parent_task_id) syncParentStatus(t.parent_task_id, req.user)
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
 
