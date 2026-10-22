@@ -117,15 +117,18 @@ function createTaskFromSuggestion(s, { orgId, actorId, notifyAssignee = true }) 
 // PENDING SUGGESTIONS for manager review (they are not assigned yet).
 // opts.autoApprove (used by the seed) immediately assigns them so demo
 // dashboards stay populated.
-// callKind: 'audio' | 'video' when the meeting is a call, NULL otherwise.
-function persistMeeting({ orgId, userId, title, description, meetingDate, transcript, sourceType, audioFilename, participantIds = [], callKind = null }, analysis, opts = {}) {
+// conversationId / callId / callKind: the chat (and the call in it) a meeting
+// was filed from, so that chat can list its meetings and show each call's
+// summary. NULL for a meeting made on the Meetings page. Callers pass only links
+// they have already checked against the user — this function trusts them.
+function persistMeeting({ orgId, userId, title, description, meetingDate, transcript, sourceType, audioFilename, participantIds = [], conversationId = null, callId = null, callKind = null }, analysis, opts = {}) {
   const mid = id('mtg')
   db.prepare(`INSERT INTO meetings
-    (id, org_id, title, description, meeting_date, uploaded_by, source_type, audio_filename, raw_transcript, detected_languages, status, summary_json, engine, call_kind, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    (id, org_id, title, description, meeting_date, uploaded_by, source_type, audio_filename, raw_transcript, detected_languages, status, summary_json, engine, conversation_id, call_id, call_kind, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     mid, orgId, title, description || '', meetingDate, userId, sourceType || 'transcript', audioFilename || null,
     transcript, JSON.stringify(filterLanguages(analysis.detected_languages)), 'processed',
-    JSON.stringify(analysis.summary || {}), analysis.engine || 'rule-based', callKind, now())
+    JSON.stringify(analysis.summary || {}), analysis.engine || 'rule-based', conversationId, callId, callKind, now())
 
   // Attendees — only these users can be suggested as task owners.
   const attendeeIds = []

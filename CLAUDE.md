@@ -92,6 +92,11 @@ answered call is summarised server-side when the last person leaves (`finalizeCa
 `summariseCall`, claimed once via `chat_calls.processed_at`), which assigns the tasks whose
 owner was named; the client only streams each person's own speech up as
 `chat_call_segments`. Group event lines are `kind='system'` messages, never `deliver()`ed.
+A meeting filed from a chat records which chat and which call it came from
+(`meetings.conversation_id` / `call_id`, passed to `persistMeeting`): the info panel
+(`components/ChatInfoPanel`, `ChatMedia`, `ChatMeetings` over `lib/chatInfo.ts`, read from
+`/conversations/:id/info`, `/meetings` and `/media?kind=`) lists a chat's calls and summaries
+by them, so a new path that files a meeting from a chat must pass them too.
 
 `scheduler.js` is a one-minute `setInterval`, not cron. It sends the daily digest, guarded
 by an `app_meta` row so a restart can't double-send. Nothing else is scheduled — the

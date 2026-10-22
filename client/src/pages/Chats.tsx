@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom'
 import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
-import { confirmDialog } from '../lib/confirm'
+import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
 import { clipboardFiles, droppedFiles, dragHasFiles, canReadClipboardImages, readClipboardImages } from '../lib/pasteFiles'
 import { stashTaskDraft } from '../lib/taskDraft'
@@ -27,6 +27,8 @@ import TaskAssignSheet, { Draft } from '../components/chat/TaskAssignSheet'
 import { TaskCard, PollCard, PollVotesSheet, LocationCard, ContactCard, LinkPreview, CallSummaryCard } from '../components/chat/MessageCards'
 import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPicker, CallsSheet, DescriptionEditor } from '../components/chat/ChatDialogs'
 import MediaViewer from '../components/chat/MediaViewer'
+import ChatInfoPanel from '../components/ChatInfoPanel'
+import type { InfoView, Me } from '../lib/chatInfo'
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 const MAX_FILE = 1024 * 1024 * 1024 // 1 GB — the server's limit for a chat file
@@ -395,10 +397,27 @@ export default function Chats() {
   const isManager = user?.role === 'manager' || user?.role === 'admin'
   const [emojiFor, setEmojiFor] = useState<string | null>(null)   // message id, or '__composer__'
   const [showChannels, setShowChannels] = useState(false)
-  // Which page of the info panel is showing: its main page, "Media, links and
-  // docs", or Add members. Kept here rather than in the panel so that Back can
-  // step from a sub-page to the main page (the history effects).
-  const [infoView, setInfoView] = useState<InfoView>('main')
+  // Where the info panel opens: its main page, or a view inside it that what
+  // opened it asked for (media, a meeting summary). A new object restarts the
+  // panel's own stack of views, which the panel walks itself; infoStepRef is
+  // its one step back (a view, or an inline editor on the main page), false
+  // when there is nothing left to step out of. The history effects use it so
+  // Back leaves a sub-view before it closes the panel.
+  const [infoStart, setInfoStart] = useState<InfoView>({ view: 'info' })
+  const infoStepRef = useRef<(() => boolean) | null>(null)
+  // "Open that chat AND its info" (a list avatar): the info entry goes on top
+  // of the chat's own history entry, so it waits for that entry to land.
+  const pendingInfoRef = useRef<InfoView | null>(null)
+  // Docked beside the thread (from 1400px, the CSS breakpoint) rather than
+  // covering it: the thread stays usable, so its own keys and pickers do too.
+  const [infoDocks, setInfoDocks] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1400px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1400px)')
+    const sync = () => setInfoDocks(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
   const [headMenu, setHeadMenu] = useState(false)
   const [loadOpen, setLoadOpen] = useState(false)
   // WhatsApp's long-press, for touch screens (which have no hover to show the
@@ -517,6 +536,10 @@ export default function Chats() {
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
 
   const active = useMemo(() => convos.find((c) => c.id === activeId) || null, [convos, activeId])
+  // The signed-in user as the info panel reads them (the ORG role: it gates
+  // reviewing meeting tasks). One object per account rather than one per
+  // render, so nothing in the panel keyed on it re-runs on every keystroke.
+  const infoMe = useMemo<Me | null>(() => (user ? { id: user.id, name: user.name, role: user.role } : null), [user?.id, user?.name, user?.role])
 
   // Opening a chat is a step Back should undo, as in WhatsApp: Back from a thread
   // (browser, phone gesture, Android button) lands on the chat list, not on
@@ -568,22 +591,20 @@ export default function Chats() {
   }, [activeId, wantInfo])
   // ...and Back / Forward moving through those entries moves the chat (and the
   // panel) with them — after two smaller steps that Back takes first, the way
-  // the panel's arrow and Android's back button already do: a sub-page of the
-  // panel (Media, Add) goes back to its main page, and a selected message (touch)
-  // is let go while the chat stays. Neither has an entry of its own (a tap
-  // selects, often by accident), so the entry Back just took is put back.
+  // the panel's arrow and Android's back button already do: a view inside the
+  // panel (media, meetings, a summary) goes back one view, and a selected
+  // message (touch) is let go while the chat stays. Neither has an entry of its
+  // own (a tap selects, often by accident), so the entry Back just took is put
+  // back.
   const navType = useNavigationType()
   const showInfoRef = useRef(showInfo)
   showInfoRef.current = showInfo
-  const infoViewRef = useRef(infoView)
-  infoViewRef.current = infoView
   const selRef = useRef(selectedId)
   selRef.current = selectedId
   useEffect(() => {
     const was = activeIdRef.current
     if (navType === 'POP' && was) {
-      if (!navInfo && showInfoRef.current && navChat === was && infoViewRef.current !== 'main') {
-        setInfoView('main')
+      if (!navInfo && showInfoRef.current && navChat === was && infoStepRef.current?.()) {
         navigate(loc.pathname, { state: { chat: was, info: true, pushed: navPushed } })
         return
       }
@@ -594,7 +615,13 @@ export default function Chats() {
       }
     }
     if (navChat !== activeIdRef.current) setActiveId(navChat)
-    if (navInfo !== showInfoRef.current) { if (navInfo) setInfoView('main'); setShowInfo(navInfo) }
+    if (navInfo !== showInfoRef.current) { if (navInfo) setInfoStart({ view: 'info' }); setShowInfo(navInfo) }
+    else if (pendingInfoRef.current && navChat && navChat === activeIdRef.current && !navInfo) {
+      // The chat a list avatar opened has its entry now: its info goes on top.
+      setInfoStart(pendingInfoRef.current)
+      pendingInfoRef.current = null
+      setShowInfo(true)
+    }
   }, [navChat, navInfo])
 
   const pingNav = () => window.dispatchEvent(new Event('chat-unread-changed'))
@@ -841,6 +868,10 @@ export default function Chats() {
   // Android back button: close the top-most open layer (menu → modal → search →
   // conversation list) instead of leaving Chats / quitting the app.
   useEffect(() => pushBackHandler(() => {
+    // A confirm is the top-most layer (the info panel raises several: exit,
+    // remove, delete), and ConfirmHost has no back handler of its own — without
+    // this, back would step the panel and leave the question hanging.
+    if (document.querySelector('.confirm-center')) { resolveConfirm(false); return true }
     if (viewerAt) { setViewerAt(null); return true }
     if (openTaskId) { setOpenTaskId(null); return true }
     if (emojiFor) { setEmojiFor(null); return true }
@@ -858,13 +889,16 @@ export default function Chats() {
     if (forwardMsgs) { setForwardMsgs(null); return true }
     if (showMentions) { setShowMentions(false); return true }
     if (showStarred) { setShowStarred(false); return true }
-    if (showInfo) { setShowInfo(false); return true }
+    // The mute picker opens over the info panel (its Mute row), so it goes first.
+    if (muteFor) { setMuteFor(null); return true }
+    // The panel walks its own views (summary → meetings → info) before it closes.
+    if (showInfo) { if (!infoStepRef.current?.()) setShowInfo(false); return true }
     if (showNew) { setShowNew(false); return true }
     if (inSearchOpen) { setInSearchOpen(false); setInSearch(''); return true }
     if (activeId) { setActiveId(''); return true } // open chat → back to the list
     if (showArchived) { setShowArchived(false); return true }
     return false
-  }), [viewerAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, showInfo, showNew, inSearchOpen, activeId, showArchived])
+  }), [viewerAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
 
   // Escape closes the top-most of this page's own popups — a menu or picker,
   // then the selected message — one layer per press. Dialogs, the emoji picker
@@ -872,8 +906,11 @@ export default function Chats() {
   // Focus that was inside a closing menu goes back to the button that opened it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || emojiFor || reactionsOf || showInfo) return
-      if (document.querySelector('.confirm-center, .modal-overlay, .mv-overlay')) return
+      if (e.key !== 'Escape' || e.defaultPrevented || emojiFor || reactionsOf) return
+      // The info panel handles its own Escape: always while it covers the
+      // thread, and while docked beside it whenever focus is in the panel.
+      if (showInfo && (!infoDocks || (document.activeElement as HTMLElement | null)?.closest('.ci-panel'))) return
+      if (document.querySelector('.confirm-center, .modal-overlay, .mv-overlay, .ci-lb')) return
       if (attachMenu) { setAttachMenu(false); inputRef.current?.focus(); return }
       if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen) {
         const inPopup = (document.activeElement as HTMLElement | null)?.closest('.msg-menu-wrap, .msg-tools, .convo-menu-wrap')
@@ -886,7 +923,7 @@ export default function Chats() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [emojiFor, attachMenu, reactionsOf, showInfo, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, selectedId, multi])
+  }, [emojiFor, attachMenu, reactionsOf, showInfo, infoDocks, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, selectedId, multi])
   // When a selection ends with focus nowhere (the bar or tray button that had it
   // went away with the selection), hand focus back to the message itself rather
   // than to the top of the page. After the frame, so an action that moves focus
@@ -1301,8 +1338,23 @@ export default function Chats() {
     setSummarising(m.id)
     try {
       const d = await api.post(`/chat/message/${m.id}/to-meeting`)
-      toast.success(d.existing ? 'Opening the summary' : `${d.suggestion_count || 0} task${d.suggestion_count === 1 ? '' : 's'} found — review and assign`)
-      navigate(`/meetings/${d.id}`)
+      const found = Number(d.suggestion_count) || 0
+      const tasks = `${found} task${found === 1 ? '' : 's'}`
+      // Transcribing takes seconds to minutes, and the reader may have moved on.
+      // The summary belongs to the chat the recording is in, so it opens only if
+      // that chat is still the one on screen and nothing sits over it — not a
+      // dialog, and not the info panel, where whatever they opened meanwhile
+      // stays put. Otherwise it waits under that chat's Meeting summaries.
+      const busy = !!document.querySelector('.ci-panel, .modal-center, .confirm-center, .modal-overlay, .ci-lb')
+      if (activeIdRef.current !== m.conversation_id || busy) {
+        const where = convos.find((c) => c.id === m.conversation_id)?.name
+        toast.success(`Summary ready${where ? ` in ${where}` : ''}${!d.existing && found ? ` — ${tasks} to review` : ''} — under Meeting summaries in its info`)
+        return
+      }
+      toast.success(d.existing ? 'Opening the summary' : found ? `${tasks} found — review and assign` : 'Summary ready — no tasks were found in this recording')
+      // Opened in this chat's info panel, where the chat's meetings live:
+      // freshly summarised with something to assign goes straight to the review.
+      openInfo({ view: 'summary', meetingId: d.id, review: !d.existing && found > 0 })
     } catch (e: any) {
       toast.error(/provider|NO_PROVIDER/i.test(e.message)
         ? 'Transcription needs a speech provider key on the server before a recording can be summarised.'
@@ -1607,7 +1659,10 @@ export default function Chats() {
       if (e.defaultPrevented || !activeIdRef.current) return
       const t = e.target as HTMLElement | null
       if (t?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
-      if (document.querySelector('.modal-overlay, .modal-center, .ci-overlay')) return
+      if (document.querySelector('.modal-overlay, .modal-center, .ci-lb')) return
+      // The info panel: pasted into it, or while it covers the thread (it makes
+      // the thread inert then), the paste is not for the composer.
+      if (t?.closest?.('.ci-panel') || document.querySelector('.chat-pane > .chat[inert]')) return
       const files = clipboardFiles(e.clipboardData)
       if (!files.length) return
       e.preventDefault()
@@ -1866,14 +1921,52 @@ export default function Chats() {
   // remembers what opened it, to hand focus back on close; an item in ⋮'s menu
   // goes away with the menu, so for those it is ⋮ itself.
   const infoOpenerRef = useRef<HTMLElement | null>(null)
-  const openInfo = (view: InfoView = 'main') => {
+  const openInfo = (view: InfoView = { view: 'info' }) => {
     const from = document.activeElement as HTMLElement | null
     infoOpenerRef.current = from?.closest('.head-menu')
       ? document.querySelector<HTMLElement>('.chat-peer-actions [aria-label="More options"]')
       : from
-    setInfoView(view); setShowInfo(true)
+    setInfoStart(view); setShowInfo(true)
     setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); setSelectedId(null)
   }
+  // The header's photo and name, and ⓘ: open the panel, or close it again —
+  // docked beside the thread, the header stays in reach while it is open.
+  const toggleInfo = () => { if (showInfo) setShowInfo(false); else openInfo() }
+  // A list row's avatar opens that chat with its info already up, as
+  // WhatsApp's list does; the rest of the row opens just the chat.
+  const openInfoFor = (cid: string) => {
+    setShowArchived(false)
+    if (cid === activeIdRef.current) { openInfo(); return }
+    pendingInfoRef.current = { view: 'info' }
+    setActiveId(cid)
+  }
+  // "Show in chat" from media, links and docs. Docked, the thread is in view
+  // beside the panel; covering it, the panel steps aside first. A search would
+  // hide the very line asked for, so it goes too (as Jump to a date does).
+  const showMessage = (mid: string) => {
+    if (!infoDocks) setShowInfo(false)
+    setViewerAt(null)
+    if (inSearch || inSearchOpen) { setInSearch(''); setInSearchOpen(false) }
+    // After the re-render that brings the whole thread back.
+    setTimeout(() => { if (!scrollToMessage(mid)) toast.info('That message is further back than this chat has loaded') }, 60)
+  }
+  // A review in the panel changes how many of a meeting's tasks still wait.
+  // The card the meeting left in the thread counted them when the thread
+  // loaded, so it is handed the new number rather than the thread reloaded.
+  const patchMeetingCard = (meetingId: string, pending: number) => setMessages((p) => (
+    p.some((m) => m.meeting?.id === meetingId && m.meeting.tasks !== pending)
+      ? p.map((m) => (m.meeting?.id === meetingId ? { ...m, meeting: { ...m.meeting, tasks: pending } } : m))
+      : p
+  ))
+  // Below 1400px the panel covers the thread, but the composer's slash,
+  // @mention and emoji pop-ups sit above it and would float over the panel,
+  // unreachable, until it closed. However it opens — a tap, or a summary
+  // finishing — they close first, before that frame is painted.
+  const infoCovers = showInfo && !!active && !infoDocks
+  useLayoutEffect(() => {
+    if (!infoCovers) return
+    setSlashQ(null); setMentionQ(null); setEmojiFor(null); setAttachMenu(false)
+  }, [infoCovers])
   useEffect(() => {
     if (showInfo) return
     const el = infoOpenerRef.current
@@ -2298,9 +2391,15 @@ export default function Chats() {
               ? <Ticks state={c.last_seen ? 'read' : c.last_delivered ? 'delivered' : 'sent'} /> : null
             return (
               <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '') + (hasUnread(c) && !c.muted ? ' has-unread' : '')} onClick={() => setActiveId(c.id)}>
-                {c.type === 'group'
-                  ? <GroupAvatar conv={c} size={38} />
-                  : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
+                {/* The avatar is its own button, as on WhatsApp: it opens the
+                    chat with its info already up, where the row opens just the chat. */}
+                <button type="button" className="ci-list-avatar" title={c.type === 'group' ? 'Group info' : 'Contact info'}
+                  aria-label={`${c.name}: ${c.type === 'group' ? 'group' : 'contact'} info`}
+                  onClick={(e) => { e.stopPropagation(); openInfoFor(c.id) }}>
+                  {c.type === 'group'
+                    ? <GroupAvatar conv={c} size={38} />
+                    : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
+                </button>
                 <div className="convo-meta" style={{ minWidth: 0, flex: 1 }}>
                   <div className="row spread" style={{ gap: 6 }}>
                     <div className="convo-title row" style={{ gap: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.pinned && <span title="Pinned" style={{ display: 'inline-flex', color: 'var(--muted)' }}><Ic name="pin" size={12} /></span>}{c.name}</div>
@@ -2350,7 +2449,7 @@ export default function Chats() {
       </aside>
 
       {/* ---- conversation pane ---- */}
-      <div className="card chat-pane" {...paneDrop}>
+      <div className={'card chat-pane' + (showInfo && active ? ' ci-on' : '')} {...paneDrop}>
         {dropping && (
           <div className="drop-veil" aria-hidden="true">
             <Ic name="attach" size={28} />
@@ -2426,7 +2525,7 @@ export default function Chats() {
               {/* The photo and the name both open the chat's info, as on
                   WhatsApp — for a person as much as for a group. The name is
                   not a <button>: the workload chip inside it is one. */}
-              <button className="chat-peer-photo" onClick={() => openInfo()} aria-label={`${active.type === 'group' ? 'Group' : 'Contact'} info for ${active.name}`}>
+              <button className="chat-peer-photo" onClick={toggleInfo} aria-expanded={showInfo} aria-label={`${active.type === 'group' ? 'Group' : 'Contact'} info for ${active.name}`}>
                 {active.type === 'group'
                   ? <GroupAvatar conv={active} size={38} />
                   : <PresenceAvatar name={active.name} color={active.avatar_color} size={38} online={otherOnline} src={active.avatar_file && active.other_user_id ? userAvatarUrl(active.other_user_id, active.avatar_file) : undefined} />}
@@ -2436,8 +2535,9 @@ export default function Chats() {
                 role="button"
                 tabIndex={0}
                 aria-label={`${active.name}. ${active.type === 'group' ? 'Group' : 'Contact'} info`}
-                onClick={() => openInfo()}
-                onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openInfo() } }}
+                aria-expanded={showInfo}
+                onClick={toggleInfo}
+                onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleInfo() } }}
               >
                 <div className="chat-peer-name">{active.name}</div>
                 <div className="muted chat-peer-sub">
@@ -2470,6 +2570,12 @@ export default function Chats() {
                 <button className="ic-btn wide-only" title="Search in chat" aria-label="Search in chat" onClick={() => setInSearchOpen((o) => !o)}>
                   <Ic name="search" size={19} />
                 </button>
+                {/* ⓘ opens and closes the info panel. Phones have no room for it
+                    in this row; the photo and the name do the same job there. */}
+                <button className={'ic-btn wide-only chat-peer-info-btn' + (showInfo ? ' on' : '')} title={active.type === 'group' ? 'Group info' : 'Contact info'}
+                  aria-label={active.type === 'group' ? 'Group info' : 'Contact info'} aria-expanded={showInfo} onClick={toggleInfo}>
+                  <Ic name="info" size={19} />
+                </button>
                 {/* Everything else lives behind ⋮. Six boxed buttons in a row left a
                     phone ~120px for the chat's own name. */}
                 <div className="msg-menu-wrap jump-wrap">
@@ -2482,7 +2588,8 @@ export default function Chats() {
                       <button className="phone-only" onClick={() => { setHeadMenu(false); setInSearchOpen(true) }}><Ic name="search" size={15} /> Search in chat</button>
                       <button onClick={() => { setHeadMenu(false); setSelectedId(null); setMulti([]) }}><SelectGlyph size={15} /> Select messages</button>
                       {!readOnly && <button onClick={() => { setHeadMenu(false); setAssignFor({ source: null, draft: { title: '' } }) }}><TaskGlyph size={15} /> Assign a task</button>}
-                      <button onClick={() => openInfo('media')}><Ic name="attach" size={15} /> Media, links and docs</button>
+                      <button onClick={() => openInfo({ view: 'media' })}><Ic name="attach" size={15} /> Media, links and docs</button>
+                      <button onClick={() => openInfo({ view: 'meetings' })}><Ic name="video" size={15} /> All meetings</button>
                       <button onClick={() => { setHeadMenu(false); setJumpOpen(true) }}><Ic name="calendar" size={15} /> Jump to a date</button>
                       <button onClick={() => { setHeadMenu(false); if (active.muted) muteConversation(active, 0); else setMuteFor(active) }}><Ic name={active.muted ? 'bell' : 'muteBell'} size={15} /> {active.muted ? 'Unmute notifications' : 'Mute notifications'}</button>
                       <button onClick={() => { setHeadMenu(false); archive(active, !active.archived) }}><ArchiveGlyph size={15} /> {active.archived ? 'Unarchive chat' : 'Archive chat'}</button>
@@ -2633,7 +2740,9 @@ export default function Chats() {
                       meeting={m.meeting}
                       isManager={isManager}
                       meId={user!.id}
-                      onOpenMeeting={() => navigate(`/meetings/${m.meeting!.id}`)}
+                      // In this chat's info panel, not on /meetings/:id: that page
+                      // is managers' only, and everyone in the chat can read a summary.
+                      onOpenMeeting={(review) => openInfo({ view: 'summary', meetingId: m.meeting!.id, review })}
                       onOpenTask={(tid) => setOpenTaskId(tid)}
                     />
                   ) : m.call ? (
@@ -3009,6 +3118,42 @@ export default function Chats() {
             </div>
           )}
         </div>
+        {/* Group info / Contact info. Inside the card, after .chat: the CSS
+            docks it beside the conversation from 1400px, covers the
+            conversation below that, and is the whole screen on a phone.
+            `start` is the state object itself, so only a new open (a meeting
+            card, the ⋮ menu) restarts its stack of views. */}
+        {showInfo && active && infoMe && (
+          <ChatInfoPanel
+            key={active.id}
+            conv={active}
+            me={infoMe}
+            online={online}
+            lastSeen={lastSeen}
+            start={infoStart}
+            backRef={infoStepRef}
+            onClose={() => setShowInfo(false)}
+            onChanged={() => { loadConvos(); loadThread(active.id) }}
+            onLeft={() => { setShowInfo(false); setActiveId(''); loadConvos() }}
+            onOpenConversation={(cid) => { setShowArchived(false); setActiveId(cid) }}
+            onMessageUser={messageUser}
+            onShowMessage={showMessage}
+            onCall={(kind) => startCall(active.id, kind, active.name)}
+            // Focus the search box once the panel has handed focus back to its opener.
+            onSearch={() => { setShowInfo(false); setInSearchOpen(true); requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.in-search input')?.focus()) }}
+            onMute={() => { if (active.muted) muteConversation(active, 0); else setMuteFor(active) }}
+            // Handing back clearChat's promise lets the panel refresh its counts
+            // once the clear has gone through.
+            onClearChat={() => clearChat(active)}
+            onDeleteChat={() => deleteChat(active)}
+            onExport={() => exportChat(active)}
+            onEditDescription={() => setDescOpen(true)}
+            // No setShowInfo(false): the move to Tasks unmounts the panel anyway,
+            // and Back from Tasks should find it open again.
+            onViewTasks={(uid) => navigate(`/tasks?assignee=${uid}`)}
+            onMeetingChanged={patchMeetingCard}
+          />
+        )}
       </div>
 
       {reactionsMsg && active && (
@@ -3021,41 +3166,6 @@ export default function Chats() {
         />
       )}
       {showNew && <NewChatModal user={user!} convos={convos} onClose={() => setShowNew(false)} onOpen={(cid) => { setShowNew(false); setActiveId(cid); loadConvos() }} />}
-      {showInfo && active && (
-        <InfoPanel
-          key={active.id}
-          conv={active}
-          user={user!}
-          view={infoView}
-          setView={setInfoView}
-          online={online}
-          lastSeen={lastSeen}
-          load={peerLoad}
-          isManager={isManager}
-          onClose={() => setShowInfo(false)}
-          onChanged={() => { loadConvos(); loadThread(active.id) }}
-          onLeft={() => { setShowInfo(false); setActiveId(''); loadConvos() }}
-          onCall={(kind) => { setShowInfo(false); startCall(active.id, kind, active.name) }}
-          // Focus the search box once the panel has handed focus back to its opener.
-          onSearch={() => { setShowInfo(false); setInSearchOpen(true); requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.in-search input')?.focus()) }}
-          onShowMessage={(id) => {
-            setShowInfo(false)
-            // A search leaves non-matching lines out of the thread; "show me that
-            // line" needs the whole of it (as Jump to a date does).
-            if (inSearch) { setInSearch(''); setInSearchOpen(false) }
-            requestAnimationFrame(() => { if (!scrollToMessage(id)) toast.info('That message is further back than this chat has loaded') })
-          }}
-          onMessageUser={messageUser}
-          onMute={() => { if (active.muted) muteConversation(active, 0); else setMuteFor(active) }}
-          onClear={() => { setShowInfo(false); clearChat(active) }}
-          onDeleteChat={() => deleteChat(active)}
-          onExport={() => exportChat(active)}
-          onEditDescription={() => setDescOpen(true)}
-          // No setShowInfo(false): the move to Tasks unmounts the panel anyway, and
-          // Back from Tasks should find it open again.
-          onViewTasks={() => navigate(`/tasks?assignee=${active.other_user_id}`)}
-        />
-      )}
       {forwardMsgs && <ForwardModal messages={forwardMsgs} convos={convos} onClose={() => setForwardMsgs(null)} onDone={() => { setForwardMsgs(null); loadConvos() }} />}
       {assignFor && active && (
         <TaskAssignSheet
@@ -3763,500 +3873,6 @@ function NewChatModal({ user, convos, onClose, onOpen }: { user: OrgUser; convos
           </button>
         )}
       </div>
-    </div>
-  )
-}
-
-// ---------- chat info: WhatsApp's Group info / Contact info ----------
-// Opened from the thread header (the photo or the name) and from ⋮. One page
-// that scrolls, in WhatsApp's order: who this is, what has been shared here
-// (photos, documents, links — the thing people come to this screen for), the
-// members, settings, and the way out. It covers the screen on a phone and
-// slides in from the right on a wide one. Confirmations it raises (remove,
-// exit, delete) sit above it — see .confirm-center.
-type InfoView = 'main' | 'media' | 'add'
-type InfoTab = 'media' | 'docs' | 'links'
-interface LinkItem { id: string; url: string; host: string; sender_id: string; sender_name: string; created_at: string }
-type SharedFile = Msg & { sender_name: string }
-
-const isImageFile = (f?: ChatFile | null) => !!f && (f.type || '').startsWith('image/')
-const fileExt = (name?: string) => (/\.([a-z0-9]{1,5})$/i.exec(name || '')?.[1] || 'FILE').toUpperCase()
-// A link's tile colour, the same for every link to the same site.
-const LINK_HUES = ['#2563eb', '#16a34a', '#7c3aed', '#d97706', '#0891b2', '#db2777']
-const hueFor = (host: string) => LINK_HUES[[...host].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) % LINK_HUES.length]
-// WhatsApp's media headings: this week, this month, then month by month.
-function periodLabel(iso: string) {
-  const d = new Date(iso), today = new Date()
-  if (today.getTime() - d.getTime() < 7 * 86400000) return 'This week'
-  if (d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear()) return 'This month'
-  return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
-}
-function byPeriod<T>(items: T[], at: (x: T) => string) {
-  const out: { label: string; items: T[] }[] = []
-  for (const it of items) {
-    const label = periodLabel(at(it))
-    if (out.length && out[out.length - 1].label === label) out[out.length - 1].items.push(it)
-    else out.push({ label, items: [it] })
-  }
-  return out
-}
-
-function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManager, onClose, onChanged, onLeft, onCall, onSearch, onShowMessage, onMessageUser, onMute, onClear, onViewTasks, onDeleteChat, onExport, onEditDescription }: {
-  conv: Conversation; user: OrgUser; view: InfoView; setView: (v: InfoView) => void; online: Set<string>; lastSeen: Record<string, string>
-  load?: { open: number; overdue: number }; isManager: boolean
-  onClose: () => void; onChanged: () => void; onLeft: () => void
-  onCall: (kind: 'audio' | 'video') => void; onSearch: () => void; onShowMessage: (messageId: string) => void
-  onMessageUser: (userId: string) => void; onMute: () => void; onClear: () => void; onViewTasks: () => void
-  onDeleteChat: () => void; onExport: () => void; onEditDescription: () => void
-}) {
-  const isGroup = conv.type === 'group'
-  const isAdmin = isGroup && conv.role === 'admin'
-  const [tab, setTab] = useState<InfoTab>('media')
-  const [files, setFiles] = useState<SharedFile[] | null>(null)
-  const [links, setLinks] = useState<LinkItem[] | null>(null)
-  const [editingName, setEditingName] = useState(false)
-  const [name, setName] = useState(conv.name)
-  const [memberOpen, setMemberOpen] = useState<string | null>(null)
-  const [memberQ, setMemberQ] = useState('')
-  const photoInput = useRef<HTMLInputElement>(null)
-  const bodyRef = useRef<HTMLDivElement>(null)
-
-  // Everything shared here, once per open: files from /media (newest 200, the
-  // same list the old Shared files box used) and every URL from /links.
-  useEffect(() => {
-    let cancel = false
-    api.get(`/chat/conversations/${conv.id}/media`).then((d) => { if (!cancel) setFiles(d.items || []) }).catch(() => { if (!cancel) setFiles([]) })
-    api.get(`/chat/conversations/${conv.id}/links`).then((d) => { if (!cancel) setLinks(d.items || []) }).catch(() => { if (!cancel) setLinks([]) })
-    return () => { cancel = true }
-  }, [conv.id])
-  useEffect(() => { if (!editingName) setName(conv.name) }, [conv.name, editingName])
-  // Back steps out of a sub-page before it closes the panel — Escape, the
-  // panel's own arrow, and Android's back button (registered after the Chats
-  // page's handler, so it runs first).
-  const back = () => { if (view !== 'main') setView('main'); else onClose() }
-  useEffect(() => pushBackHandler(() => { back(); return true }), [view])
-  // The shared dialog behaviour (lib/useDialog): focus moves into the panel,
-  // Tab stays inside it, Escape is `back`, and focus returns to what opened it.
-  // It stands aside for a confirmation the panel raises; a dialog it opens over
-  // itself (Mute) keeps Escape from closing the panel underneath it.
-  // Escape while renaming cancels the rename, not the whole panel (useDialog's
-  // listener runs before the name box's own).
-  const panelRef = useDialog<HTMLElement>(() => {
-    if (editingName) {
-      setEditingName(false); setName(conv.name)
-      requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>('.ci-name-pen')?.focus())
-      return
-    }
-    back()
-  })
-  // While it is open the floating voice pill steps left of it instead of
-  // sitting on its bottom rows (styles.css, body.chat-info-open).
-  useEffect(() => {
-    document.body.classList.add('chat-info-open')
-    return () => document.body.classList.remove('chat-info-open')
-  }, [])
-  // A new page starts at its top, with focus on its arrow if the button that
-  // led there went away with the old page.
-  useEffect(() => {
-    bodyRef.current?.scrollTo(0, 0)
-    if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.querySelector<HTMLElement>('.ci-head .ic-btn')?.focus()
-  }, [view])
-
-  const media = (files || []).filter((m) => isImageFile(m.file) || isVideo(m.file))
-  const docs = (files || []).filter((m) => !isImageFile(m.file) && !isVideo(m.file))
-  const linkList = links || []
-  const loaded = files !== null && links !== null
-  const counts: Record<InfoTab, number> = { media: media.length, docs: docs.length, links: linkList.length }
-  const total = counts.media + counts.docs + counts.links
-  // The strip on the main page: the newest few of all three kinds together.
-  const strip = [
-    ...media.map((m) => ({ kind: 'media' as const, at: m.created_at, m })),
-    ...docs.map((m) => ({ kind: 'doc' as const, at: m.created_at, m })),
-    ...linkList.map((l) => ({ kind: 'link' as const, at: l.created_at, l })),
-  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8)
-
-  // You first, then the group's admins, then everyone else by name.
-  const members = [...conv.members].sort((a, b) =>
-    a.id === user.id ? -1 : b.id === user.id ? 1
-      : (a.role === 'admin') !== (b.role === 'admin') ? (a.role === 'admin' ? -1 : 1)
-        : a.name.localeCompare(b.name))
-  const q = memberQ.trim().toLowerCase()
-  const shownMembers = q ? members.filter((m) => m.name.toLowerCase().includes(q)) : members
-  const peer = !isGroup ? conv.members.find((m) => m.id !== user.id) : undefined
-  const peerOnline = !!conv.other_user_id && online.has(conv.other_user_id)
-  const peerSeen = conv.other_user_id ? lastSeen[conv.other_user_id] : undefined
-
-  const uploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; e.target.value = ''
-    if (!file) return
-    if (!file.type.startsWith('image/')) { toast.error('Please choose an image'); return }
-    try {
-      const form = new FormData(); form.append('file', file)
-      const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`${API_BASE}/api/chat/conversations/${conv.id}/avatar`, { method: 'POST', headers, body: form })
-      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Upload failed')
-      onChanged()
-    } catch (err: any) { toast.error('Could not set photo: ' + err.message) }
-  }
-  const saveName = async () => {
-    const next = name.trim()
-    if (!next || next === conv.name) { setEditingName(false); setName(conv.name); return }
-    try { await api.patch(`/chat/conversations/${conv.id}`, { name: next }); setEditingName(false); onChanged() }
-    catch (e: any) { toast.error(e.message) }
-  }
-  const toggleVisibility = async () => {
-    const next = conv.visibility === 'public' ? 'private' : 'public'
-    if (next === 'public' && !(await confirmDialog({
-      title: 'Open this to everyone?',
-      message: `Anyone in the workspace will be able to find "${conv.name}" and read everything in it, including what was said before they joined.`,
-      confirmText: 'Open it',
-    }))) return
-    try { await api.post(`/chat/conversations/${conv.id}/visibility`, { visibility: next }); onChanged() }
-    catch (e: any) { toast.error(e.message) }
-  }
-  const remove = async (m: Member) => {
-    if (!(await confirmDialog({ title: `Remove ${m.name}?`, message: `${m.name.split(' ')[0]} will no longer see new messages in "${conv.name}".`, confirmText: 'Remove', danger: true }))) return
-    try { await api.del(`/chat/conversations/${conv.id}/members/${m.id}`); setMemberOpen(null); onChanged() }
-    catch (e: any) { toast.error(e.message) }
-  }
-  const leave = async () => {
-    if (!(await confirmDialog({ title: 'Exit group?', message: `You will stop getting messages from "${conv.name}".`, confirmText: 'Exit', danger: true }))) return
-    try { await api.del(`/chat/conversations/${conv.id}/members/${user.id}`); onLeft() }
-    catch (e: any) { toast.error(e.message) }
-  }
-  const deleteGroup = async () => {
-    if (!(await confirmDialog({ title: 'Delete group?', message: `Delete "${conv.name}" for everyone? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return
-    try { await api.del(`/chat/conversations/${conv.id}`); onLeft() }
-    catch (e: any) { toast.error(e.message) }
-  }
-  // Make a member an admin, or dismiss one (admins only; the server keeps at
-  // least one admin in every group).
-  const setAdmin = async (m: Member, on: boolean) => {
-    try { await api.post(`/chat/conversations/${conv.id}/members/${m.id}/role`, { role: on ? 'admin' : 'member' }); setMemberOpen(null); onChanged() }
-    catch (e: any) { toast.error(e.message) }
-  }
-  const setAdminsOnly = async (on: boolean) => {
-    try { await api.post(`/chat/conversations/${conv.id}/settings`, { admins_only: on }); onChanged() }
-    catch (e: any) { toast.error(e.message) }
-  }
-  const creator = conv.created_by ? conv.members.find((x) => x.id === conv.created_by) : undefined
-
-  const title = view === 'media' ? 'Media, links and docs' : view === 'add' ? 'Add members' : isGroup ? 'Group info' : 'Contact info'
-  const SEP = ' · '
-
-  const tile = (it: typeof strip[number]) => {
-    if (it.kind === 'link') return (
-      <a key={'l' + it.l.id + it.l.url} className="ci-tile ci-tile-link" href={it.l.url} target="_blank" rel="noopener noreferrer" title={it.l.url} style={{ background: hueFor(it.l.host) }}>
-        <span>{it.l.host.charAt(0).toUpperCase()}</span>
-      </a>
-    )
-    const m = it.m
-    return (
-      <a key={m.id} className={'ci-tile' + (it.kind === 'doc' ? ' ci-tile-doc' : '')} href={fileUrl(m)} target="_blank" rel="noreferrer" title={m.file?.name}>
-        {isImageFile(m.file) ? <img src={fileUrl(m)} alt={m.file?.name || 'Photo'} loading="lazy" />
-          : isVideo(m.file) ? <span className="ci-tile-play" aria-hidden="true">▶</span>
-            : isAudio(m.file) ? <Ic name="mic" size={20} />
-              : <span className="ci-tile-ext">{fileExt(m.file?.name)}</span>}
-      </a>
-    )
-  }
-
-  return (
-    <div className="ci-overlay" onClick={onClose}>
-      <aside className="ci-panel" ref={panelRef} role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
-        <div className="ci-head">
-          <button className="ic-btn" aria-label={view === 'main' ? 'Close' : 'Back'} title={view === 'main' ? 'Close' : 'Back'} onClick={back}>
-            {view === 'main' ? <Ic name="close" size={20} />
-              : <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>}
-          </button>
-          <span className="ci-head-title">{title}</span>
-        </div>
-
-        <div className={'ci-body' + (view === 'add' ? ' flush' : '')} ref={bodyRef}>
-          {view === 'main' && (<>
-            <section className="ci-hero">
-              {isGroup ? (
-                <>
-                  <input ref={photoInput} type="file" accept="image/*" style={{ display: 'none' }} onChange={uploadPhoto} />
-                  <button className="ci-photo" disabled={!isAdmin} title={isAdmin ? 'Change group photo' : undefined} aria-label={isAdmin ? 'Change group photo' : 'Group photo'} onClick={() => isAdmin && photoInput.current?.click()}>
-                    <GroupAvatar conv={conv} size={96} />
-                    {isAdmin && <span className="ci-photo-badge" aria-hidden="true"><Ic name="edit" size={13} /></span>}
-                  </button>
-                </>
-              ) : (
-                <span className="ci-photo"><PresenceAvatar name={conv.name} color={conv.avatar_color} size={96} online={peerOnline} src={conv.avatar_file && conv.other_user_id ? userAvatarUrl(conv.other_user_id, conv.avatar_file) : undefined} /></span>
-              )}
-              {editingName ? (
-                <div className="ci-name-edit">
-                  <input autoFocus value={name} maxLength={80} aria-label="Group name" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') { e.stopPropagation(); setEditingName(false); setName(conv.name) } }} />
-                  <button className="btn btn-primary btn-sm" onClick={saveName} disabled={!name.trim()}>Save</button>
-                  <button className="btn btn-sm" onClick={() => { setEditingName(false); setName(conv.name) }}>Cancel</button>
-                </div>
-              ) : (
-                <div className="ci-name">
-                  <span>{conv.name}</span>
-                  {isAdmin && <button className="ic-btn ci-name-pen" aria-label="Rename group" title="Rename group" onClick={() => setEditingName(true)}><Ic name="edit" size={15} /></button>}
-                </div>
-              )}
-              <div className="ci-sub">
-                {isGroup
-                  ? `${conv.visibility === 'public' ? 'Open channel' : 'Group'}${SEP}${conv.members.length} member${conv.members.length === 1 ? '' : 's'}`
-                  : peerOnline ? <span className="online-text">online</span>
-                    : peerSeen ? lastSeenLabel(peerSeen)
-                      : peer?.status_text ? `${peer.status_emoji || ''} ${peer.status_text}`.trim()
-                        : <span style={{ textTransform: 'capitalize' }}>{peer?.job_role || ''}</span>}
-              </div>
-              <div className="ci-quick">
-                <button onClick={() => onCall('audio')}><Ic name="phone" size={20} /><span>Audio</span></button>
-                <button onClick={() => onCall('video')}><Ic name="video" size={21} /><span>Video</span></button>
-                <button onClick={onSearch}><Ic name="search" size={20} /><span>Search</span></button>
-                {isAdmin && <button onClick={() => setView('add')}><Ic name="plus" size={21} /><span>Add</span></button>}
-              </div>
-            </section>
-
-            {/* The group's description, and who started it when — WhatsApp's
-                second band. Admins write the description; it is the place for
-                "what this group is for". */}
-            {isGroup && (conv.description || isAdmin || conv.created_at) && (
-              <section className="ci-sec">
-                {conv.description ? (
-                  <div className="ci-desc">
-                    <div className="ci-desc-text">{conv.description}</div>
-                    {isAdmin && <button className="ic-btn ci-name-pen" aria-label="Edit group description" title="Edit group description" onClick={onEditDescription}><Ic name="edit" size={15} /></button>}
-                  </div>
-                ) : isAdmin ? (
-                  <button className="ci-row ci-add-desc" onClick={onEditDescription}><span className="ci-row-text"><span>Add group description</span></span></button>
-                ) : null}
-                {conv.created_at && (
-                  <div className="ci-created">
-                    Created by {creator ? (creator.id === user.id ? 'you' : creator.name) : 'a former member'}, {new Date(conv.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
-                  </div>
-                )}
-              </section>
-            )}
-
-            {!isGroup && load && load.open > 0 && (
-              <section className="ci-sec">
-                <div className="ci-row ci-static">
-                  <span className={'ci-row-ic' + (load.overdue ? ' late' : '')}>{load.overdue ? <Ic name="warning" size={18} /> : <Ic name="check" size={18} />}</span>
-                  <span className="ci-row-text">
-                    <span>{load.open} open task{load.open === 1 ? '' : 's'}{load.overdue ? `${SEP}${load.overdue} overdue` : ''}</span>
-                    <span className="ci-row-sub">What {conv.name.split(' ')[0]} is already carrying</span>
-                  </span>
-                  {isManager && <button className="btn btn-sm" onClick={onViewTasks}>View tasks</button>}
-                </div>
-              </section>
-            )}
-
-            <section className="ci-sec">
-              <button className="ci-row-head" onClick={() => setView('media')}>
-                <span>Media, links and docs</span>
-                <span className="ci-count">{loaded ? total : ''}<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></span>
-              </button>
-              {!loaded && <div className="ci-strip">{[0, 1, 2, 3].map((i) => <span key={i} className="ci-tile ci-tile-skel" />)}</div>}
-              {loaded && strip.length === 0 && <div className="ci-empty">Photos, documents and links shared in this chat will show up here.</div>}
-              {loaded && strip.length > 0 && <div className="ci-strip">{strip.map(tile)}</div>}
-            </section>
-
-            {isGroup && (
-              <section className="ci-sec">
-                <div className="ci-sec-title">
-                  <span>{conv.members.length} member{conv.members.length === 1 ? '' : 's'}</span>
-                  {conv.members.length > 8 && <input className="ci-member-search" placeholder="Search members" value={memberQ} onChange={(e) => setMemberQ(e.target.value)} aria-label="Search members" />}
-                </div>
-                {isAdmin && (
-                  <button className="ci-row" onClick={() => setView('add')}>
-                    <span className="ci-add-ic" aria-hidden="true"><Ic name="plus" size={20} /></span>
-                    <span className="ci-row-text"><span style={{ fontWeight: 600 }}>Add members</span></span>
-                  </button>
-                )}
-                {shownMembers.map((m) => {
-                  const me = m.id === user.id
-                  const open = memberOpen === m.id
-                  const status = m.status_text ? `${m.status_emoji || ''} ${m.status_text}`.trim() : ''
-                  return (
-                    <div key={m.id} className={'ci-member' + (open ? ' open' : '')}>
-                      <button className="ci-row" aria-expanded={me ? undefined : open} disabled={me} onClick={() => setMemberOpen(open ? null : m.id)}>
-                        <PresenceAvatar name={m.name} color={m.avatar_color} size={40} online={online.has(m.id)} src={m.avatar_file ? userAvatarUrl(m.id, m.avatar_file) : undefined} />
-                        <span className="ci-row-text">
-                          <span className="ci-member-name">{me ? 'You' : m.name}</span>
-                          {status && <span className="ci-row-sub">{status}</span>}
-                        </span>
-                        {m.role === 'admin' && <span className="ci-admin">Group admin</span>}
-                      </button>
-                      {open && (
-                        <div className="ci-member-actions">
-                          <button className="btn btn-sm" onClick={() => onMessageUser(m.id)}><Ic name="chat" size={14} /> Message {m.name.split(' ')[0]}</button>
-                          {isAdmin && <button className="btn btn-sm" onClick={() => setAdmin(m, m.role !== 'admin')}><Ic name="user" size={14} /> {m.role === 'admin' ? 'Dismiss as admin' : 'Make group admin'}</button>}
-                          {isAdmin && <button className="btn btn-sm ci-danger-btn" onClick={() => remove(m)}><Ic name="trash" size={14} /> Remove from group</button>}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-                {q && shownMembers.length === 0 && <div className="ci-empty">Nobody here matches “{memberQ.trim()}”</div>}
-              </section>
-            )}
-
-            <section className="ci-sec">
-              <button className="ci-row" onClick={onMute}>
-                <span className="ci-row-ic">{conv.muted ? <Ic name="muteBell" size={18} /> : <Ic name="bell" size={18} />}</span>
-                <span className="ci-row-text"><span>Notifications</span><span className="ci-row-sub">{conv.muted ? 'Muted — messages arrive quietly' : 'On'}</span></span>
-              </button>
-              {isGroup && (isAdmin ? (
-                <div className="ci-row ci-static">
-                  <span className="ci-row-ic"><Ic name="chat" size={18} /></span>
-                  <span className="ci-row-text">
-                    <span>Send messages</span>
-                    <span className="ci-row-sub">{conv.admins_only ? 'Only admins can send messages here' : 'All members can send messages'}</span>
-                  </span>
-                  <button className="btn btn-sm" onClick={() => setAdminsOnly(!conv.admins_only)}>{conv.admins_only ? 'Allow everyone' : 'Only admins'}</button>
-                </div>
-              ) : conv.admins_only ? (
-                <div className="ci-row ci-static">
-                  <span className="ci-row-ic"><Ic name="lock" size={18} /></span>
-                  <span className="ci-row-text"><span>Only admins can send messages</span></span>
-                </div>
-              ) : null)}
-              <button className="ci-row" onClick={onExport}>
-                <span className="ci-row-ic"><ExportGlyph size={18} /></span>
-                <span className="ci-row-text"><span>Export chat</span><span className="ci-row-sub">Every message, as a text file</span></span>
-              </button>
-              {isAdmin && (
-                <div className="ci-row ci-static">
-                  <span className="ci-row-ic"><Ic name={conv.visibility === 'public' ? 'hash' : 'lock'} size={18} /></span>
-                  <span className="ci-row-text">
-                    <span>{conv.visibility === 'public' ? 'Open channel' : 'Private group'}</span>
-                    <span className="ci-row-sub">{conv.visibility === 'public' ? 'Anyone in the workspace can find and join this.' : 'Only people added here can see it.'}</span>
-                  </span>
-                  <button className="btn btn-sm" onClick={toggleVisibility}>{conv.visibility === 'public' ? 'Make private' : 'Open to all'}</button>
-                </div>
-              )}
-            </section>
-
-            <section className="ci-sec">
-              {isGroup ? (<>
-                <button className="ci-row ci-danger" onClick={leave}>
-                  <span className="ci-row-ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></svg></span>
-                  <span className="ci-row-text"><span>Exit group</span></span>
-                </button>
-                {isAdmin && (
-                  <button className="ci-row ci-danger" onClick={deleteGroup}>
-                    <span className="ci-row-ic"><Ic name="trash" size={18} /></span>
-                    <span className="ci-row-text"><span>Delete group</span></span>
-                  </button>
-                )}
-              </>) : (<>
-                <button className="ci-row ci-danger" onClick={onClear}>
-                  <span className="ci-row-ic"><Ic name="block" size={18} /></span>
-                  <span className="ci-row-text"><span>Clear chat</span></span>
-                </button>
-                <button className="ci-row ci-danger" onClick={onDeleteChat}>
-                  <span className="ci-row-ic"><Ic name="trash" size={18} /></span>
-                  <span className="ci-row-text"><span>Delete chat</span></span>
-                </button>
-              </>)}
-            </section>
-          </>)}
-
-          {view === 'media' && (<>
-            <div className="ci-tabs" role="tablist" aria-label="What to show">
-              {(['media', 'docs', 'links'] as InfoTab[]).map((t) => (
-                <button key={t} role="tab" aria-selected={tab === t} className={'ci-tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>
-                  {t === 'media' ? 'Media' : t === 'docs' ? 'Docs' : 'Links'}{loaded && <> <span>{counts[t]}</span></>}
-                </button>
-              ))}
-            </div>
-            {!loaded && <div className="ci-empty"><span className="spinner" /></div>}
-            {loaded && tab === 'media' && (media.length === 0
-              ? <div className="ci-empty">No photos or videos shared here yet.</div>
-              : byPeriod(media, (m) => m.created_at).map((g) => (
-                <div key={g.label}>
-                  <div className="ci-period">{g.label}</div>
-                  <div className="ci-grid">{g.items.map((m) => tile({ kind: 'media', at: m.created_at, m }))}</div>
-                </div>
-              )))}
-            {loaded && tab === 'docs' && (docs.length === 0
-              ? <div className="ci-empty">No documents shared here yet.</div>
-              : byPeriod(docs, (m) => m.created_at).map((g) => (
-                <div key={g.label}>
-                  <div className="ci-period">{g.label}</div>
-                  {g.items.map((m) => (
-                    <div key={m.id} className="ci-item">
-                      <a className="ci-item-main" href={fileUrl(m)} target="_blank" rel="noreferrer">
-                        <span className={'ci-doc-ic' + (isAudio(m.file) ? ' audio' : '')}>{isAudio(m.file) ? <Ic name="mic" size={18} /> : fileExt(m.file?.name)}</span>
-                        <span className="ci-row-text">
-                          <span className="ci-item-name">{m.file?.name}</span>
-                          <span className="ci-row-sub">{[fmtSize(m.file?.size), m.sender_id === user.id ? 'You' : m.sender_name, dayLabel(m.created_at)].filter(Boolean).join(SEP)}</span>
-                        </span>
-                      </a>
-                      <button className="ic-btn" title="Show in chat" aria-label={`Show ${m.file?.name} in the chat`} onClick={() => onShowMessage(m.id)}><Ic name="chat" size={17} /></button>
-                      <a className="ic-btn" href={fileUrl(m, true)} download title="Download" aria-label={`Download ${m.file?.name}`}><Ic name="download" size={17} /></a>
-                    </div>
-                  ))}
-                </div>
-              )))}
-            {loaded && tab === 'links' && (linkList.length === 0
-              ? <div className="ci-empty">No links shared here yet.</div>
-              : byPeriod(linkList, (l) => l.created_at).map((g) => (
-                <div key={g.label}>
-                  <div className="ci-period">{g.label}</div>
-                  {g.items.map((l) => (
-                    <div key={l.id + l.url} className="ci-item">
-                      <a className="ci-item-main" href={l.url} target="_blank" rel="noopener noreferrer">
-                        <span className="ci-link-ic" style={{ background: hueFor(l.host) }} aria-hidden="true">{l.host.charAt(0).toUpperCase()}</span>
-                        <span className="ci-row-text">
-                          <span className="ci-item-name">{l.host}</span>
-                          <span className="ci-link-url">{l.url}</span>
-                          <span className="ci-row-sub">{[l.sender_id === user.id ? 'You' : l.sender_name, dayLabel(l.created_at)].join(SEP)}</span>
-                        </span>
-                      </a>
-                      <button className="ic-btn" title="Show in chat" aria-label={`Show the message with ${l.host} in the chat`} onClick={() => onShowMessage(l.id)}><Ic name="chat" size={17} /></button>
-                    </div>
-                  ))}
-                </div>
-              )))}
-          </>)}
-
-          {view === 'add' && <AddMembers conv={conv} onDone={() => { setView('main'); onChanged() }} />}
-        </div>
-      </aside>
-    </div>
-  )
-}
-
-// Add people to a group: everyone in the workspace not already in it.
-function AddMembers({ conv, onDone }: { conv: Conversation; onDone: () => void }) {
-  const [users, setUsers] = useState<OrgUser[] | null>(null)
-  const [sel, setSel] = useState<Set<string>>(new Set())
-  const [q, setQ] = useState('')
-  const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    api.get('/chat/users').then((d) => setUsers(d.users.filter((u: OrgUser) => !conv.members.some((m) => m.id === u.id)))).catch(() => setUsers([]))
-  }, [conv.id])
-  const shown = (users || []).filter((u) => u.name.toLowerCase().includes(q.trim().toLowerCase()))
-  const add = async () => {
-    if (!sel.size) return
-    setBusy(true)
-    try { await api.post(`/chat/conversations/${conv.id}/members`, { userIds: [...sel] }); toast.success(`Added ${sel.size} ${sel.size === 1 ? 'person' : 'people'}`); onDone() }
-    catch (e: any) { toast.error(e.message) } finally { setBusy(false) }
-  }
-  return (
-    <div className="ci-add">
-      <input className="ci-member-search ci-add-search" placeholder="Search people" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search people" autoFocus />
-      {users === null && <div className="ci-empty"><span className="spinner" /></div>}
-      {users !== null && users.length === 0 && <div className="ci-empty">Everyone in the workspace is already here.</div>}
-      {shown.map((u) => (
-        <label key={u.id} className="ci-row">
-          <Avatar name={u.name} color={u.avatar_color} size={40} src={u.avatar_file ? userAvatarUrl(u.id, u.avatar_file) : undefined} />
-          <span className="ci-row-text"><span className="ci-member-name">{u.name}</span><span className="ci-row-sub" style={{ textTransform: 'capitalize' }}>{u.role}</span></span>
-          <input type="checkbox" checked={sel.has(u.id)} onChange={() => setSel((s) => { const n = new Set(s); n.has(u.id) ? n.delete(u.id) : n.add(u.id); return n })} />
-        </label>
-      ))}
-      {/* Nothing to confirm when nobody can be added. */}
-      {!!users?.length && <div className="ci-add-bar">
-        <button className="btn btn-primary" disabled={!sel.size || busy} onClick={add}>{busy ? 'Adding…' : sel.size ? `Add ${sel.size} ${sel.size === 1 ? 'person' : 'people'}` : 'Add people'}</button>
-      </div>}
     </div>
   )
 }

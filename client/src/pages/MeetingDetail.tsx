@@ -10,7 +10,11 @@ import { ReviewEdit, loadReviewDraft, saveReviewDraft, clearReviewDraft, draftAg
 
 // A textarea that grows to fit its content — so a long task wraps and is fully
 // readable instead of scrolling word-by-word inside a one-line input.
-const SUMMARY_SECTIONS: { key: string; label: string; icon: React.ReactNode }[] = [
+// Exported, with the summary and review pieces below, because the chat info
+// panel shows the same summary and runs the same review in place: a group's
+// meetings are reviewed from inside the group, and employees cannot open this
+// page at all (its route is manager-only).
+export const SUMMARY_SECTIONS: { key: string; label: string; icon: React.ReactNode }[] = [
   { key: 'key_decisions', label: 'Key Decisions', icon: <Ic name="check" /> },
   { key: 'action_items', label: 'Action Items', icon: <Ic name="arrowRight" /> },
   { key: 'risks', label: 'Risks', icon: <Ic name="warning" /> },
@@ -21,13 +25,13 @@ const SUMMARY_SECTIONS: { key: string; label: string; icon: React.ReactNode }[] 
 // A summary point is either a bare string (meetings summarised before evidence
 // linking existed) or { text, evidence }. Normalising here means the UI never
 // has to care which, and old meetings keep rendering.
-interface Cite { quote: string; speaker?: string; seq?: number; language?: string; match?: number }
-interface Point { text: string; evidence?: Cite | null }
+export interface Cite { quote: string; speaker?: string; seq?: number; language?: string; match?: number }
+export interface Point { text: string; evidence?: Cite | null }
 
-function normalisePoints(raw: any): Point[] {
+export function normalisePoints(raw: any): Point[] {
   if (!Array.isArray(raw)) return []
   return raw
-    .map((it) => (typeof it === 'string' ? { text: it, evidence: null } : { text: it?.text ?? '', evidence: it?.evidence ?? null }))
+    .map((it) => (typeof it === 'string' ? { text: it, evidence: null } : { text: String(it?.text ?? ''), evidence: it?.evidence ?? null }))
     .filter((p) => p.text.trim())
 }
 
@@ -37,7 +41,7 @@ function normalisePoints(raw: any): Point[] {
 // every line turns five bullets into a wall of transcript. But "where did that
 // come from?" is the first question anyone asks of an AI summary, so the answer
 // is always one click away rather than a trip to the transcript tab.
-function SummaryPoint({ point }: { point: Point }) {
+export function SummaryPoint({ point }: { point: Point }) {
   const [open, setOpen] = useState(false)
   const ev = point.evidence
   return (
@@ -89,8 +93,9 @@ function askedBy(sg: Pick<Suggestion, 'suggested_assigner_id' | 'suggested_assig
 
 // Who asked for the work. Resolved to a real teammate where the name in the
 // transcript matched one; otherwise the spoken name, which is still better than
-// silently crediting whoever pressed the button.
-function Assigner({ sg }: { sg: Suggestion }) {
+// silently crediting whoever pressed the button. Exported for the chat info
+// panel's meeting summary, which lists the same tasks.
+export function Assigner({ sg }: { sg: Suggestion }) {
   const name = askedBy(sg)
   if (!name) return null
   return (
@@ -331,7 +336,7 @@ const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
 // and approve them ONE BY ONE — every approval assigns that task & notifies the
 // owner immediately, with no need to wait and assign the whole batch at the end.
 type RowStatus = 'pending' | 'busy' | 'assigned' | 'rejected' | 'merged'
-function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: any; pending: Suggestion[]; onClose: () => void; onChanged: () => void }) {
+export function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: any; pending: Suggestion[]; onClose: () => void; onChanged: () => void }) {
   type Row = Suggestion & { _status: RowStatus; _error: string; _showMerge: boolean; _mergeInto: string }
   const { user } = useAuth()
   const uid = user?.id || 'anon'
