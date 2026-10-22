@@ -931,6 +931,20 @@ export function initSchema() {
   ensureColumn('chat_calls', 'transcribe', 'INTEGER DEFAULT 1')
   ensureColumn('chat_calls', 'meeting_id', 'TEXT')
   ensureColumn('chat_calls', 'processed_at', 'TEXT')
+  // WHERE A MEETING CAME FROM. A meeting filed out of a chat — a call's
+  // transcript, a recording posted in the thread — kept its only trail on the
+  // chat side (chat_calls.meeting_id, the "Summary of …" card), so nothing on
+  // the meeting said which chat or which call it was. The chat info panel lists
+  // a conversation's calls with their summaries, so the link now lives on the
+  // meeting and is written when the meeting is created. Both stay NULL for
+  // meetings made on the Meetings page, which belong to no conversation. (The
+  // kind of call, meetings.call_kind, is ensured further up.)
+  ensureColumn('meetings', 'conversation_id', 'TEXT')
+  ensureColumn('meetings', 'call_id', 'TEXT')
+  // After the ensureColumn calls, or a database predating the columns fails to
+  // boot on these lines.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_meetings_conversation ON meetings(conversation_id, created_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_meetings_call ON meetings(call_id)')
 
   // Index on conversation_id — created here (not in the inline schema) so it runs
   // AFTER the column is ensured above; otherwise older DBs predating the column fail.
@@ -1023,6 +1037,66 @@ export function initSchema() {
         const exists = db.prepare('SELECT id FROM departments WHERE org_id=? AND name=?').get(org.id, name)
         if (!exists) db.prepare('INSERT INTO departments (id, org_id, name) VALUES (?,?,?)').run(id('dep'), org.id, name)
       }
+    }
+  })
+
+  // Link the meetings filed before meetings.conversation_id / call_id existed,
+  // where the answer is a fact and not a guess:
+  //  1. A call summarised at hang-up names its meeting (chat_calls.meeting_id):
+  //     exact on both counts.
+  //  2. A "Summary of …" card, or a recording that was turned into a meeting,
+  //     names its meeting AND sits in a conversation. Oldest first, so the chat
+  //     a meeting was first filed in is the one it keeps.
+  //  3. Older call meetings recorded nothing about their call, so they are
+  //     matched by TIME: a call their filer was on, running when the meeting was
+  //     created (two minutes of grace after the end, for the hang-up path).
+  //     Back-to-back calls make that ambiguous, and a wrong link would file one
+  //     call's summary under another, so it links only when exactly one call
+  //     fits and leaves the rest alone. That is also why this is a one-time
+  //     backfill and not how links are made: new meetings carry theirs from the
+  //     moment they are created.
+  // julianday() rather than comparing strings: chat_calls holds ISO timestamps
+  // ('2026-09-30T06:44:46.490Z') and some in SQLite's own format ('2026-09-29
+  // 08:35:17'), and 'T' > ' ' makes a string BETWEEN wrong across the two.
+  runOnce('meetings_chat_link_v1', () => {
+    try {
+      let byCall = 0, byCard = 0, byTime = 0
+      db.transaction(() => {
+        const kindOf = (k) => (k === 'video' ? 'video' : 'audio')
+        const setCall = db.prepare(`UPDATE meetings
+          SET call_id=?, conversation_id=COALESCE(conversation_id, ?), call_kind=COALESCE(call_kind, ?)
+          WHERE id=? AND org_id=? AND call_id IS NULL`)
+        for (const k of db.prepare('SELECT id, org_id, conversation_id, kind, meeting_id FROM chat_calls WHERE meeting_id IS NOT NULL').all()) {
+          byCall += setCall.run(k.id, k.conversation_id, kindOf(k.kind), k.meeting_id, k.org_id).changes
+        }
+
+        const cards = db.prepare(`SELECT meeting_id, conversation_id FROM chat_messages
+          WHERE meeting_id IS NOT NULL AND conversation_id IS NOT NULL ORDER BY julianday(created_at)`).all()
+        const setConversation = db.prepare(`UPDATE meetings SET conversation_id=?
+          WHERE id=? AND conversation_id IS NULL AND org_id=(SELECT org_id FROM chat_conversations WHERE id=?)`)
+        for (const c of cards) byCard += setConversation.run(c.conversation_id, c.meeting_id, c.conversation_id).changes
+
+        const callsAround = db.prepare(`
+          SELECT k.id, k.conversation_id, k.kind FROM chat_calls k
+          JOIN chat_call_participants p ON p.call_id=k.id AND p.user_id=?
+          WHERE k.org_id=? AND (? IS NULL OR k.conversation_id=?)
+            AND julianday(?) BETWEEN julianday(k.started_at)
+                                 AND julianday(COALESCE(k.ended_at, ?)) + 120.0/86400`)
+        const unlinked = db.prepare(`SELECT id, org_id, uploaded_by, conversation_id, created_at FROM meetings
+          WHERE source_type='call' AND call_id IS NULL AND status<>'recording'`).all()
+        for (const m of unlinked) {
+          if (!m.uploaded_by) continue
+          const hits = callsAround.all(m.uploaded_by, m.org_id, m.conversation_id, m.conversation_id, m.created_at, m.created_at)
+          if (hits.length !== 1) continue
+          byTime += setCall.run(hits[0].id, hits[0].conversation_id, kindOf(hits[0].kind), m.id, m.org_id).changes
+        }
+      })()
+      if (byCall || byCard || byTime) console.log(`[migrate] linked meetings to their chat: ${byCall} by call, ${byCard} by summary card, ${byTime} by call time`)
+    } catch (e) {
+      // Never block boot on this. Every meeting created from now on is linked
+      // when it is made; an old one left unlinked is only missing from its
+      // chat's meeting list.
+      console.error('[migrate] meetings_chat_link_v1 skipped:', e.message)
     }
   })
 }

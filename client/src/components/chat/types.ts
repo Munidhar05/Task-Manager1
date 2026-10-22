@@ -11,7 +11,7 @@ export interface Conversation {
   other_user_id?: string | null; other_last_seen?: string | null; member_count: number; members: Member[]; role: string
   last_message: string | null; last_sender_name: string | null; last_from_me: boolean; last_at: string | null; unread: number
   last_kind?: string | null; last_seen?: boolean; last_delivered?: boolean
-  muted?: boolean; pinned?: boolean; visibility?: 'private' | 'public'
+  muted?: boolean; muted_until?: string | null; pinned?: boolean; visibility?: 'private' | 'public'
   archived?: boolean; marked_unread?: boolean
   description?: string; admins_only?: boolean; created_by?: string | null; created_at?: string
 }

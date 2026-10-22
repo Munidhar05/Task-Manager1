@@ -227,11 +227,13 @@ export function LinkPreview({ messageId, version = '' }: { messageId: string; ve
 }
 
 // ---------- the summary a call leaves behind ----------
-// Who walked away with what, right in the thread. Managers can open the full
-// summary (the Meetings page is theirs); everyone can read it here.
+// Who walked away with what, right in the thread. Everyone can open the full
+// summary (in the chat's info panel); a manager with tasks still waiting goes
+// straight to reviewing them, since assigning is theirs.
 export function CallSummaryCard({ meeting, isManager, meId, onOpenMeeting, onOpenTask }: {
-  meeting: MeetingCard; isManager: boolean; meId: string; onOpenMeeting: () => void; onOpenTask: (taskId: string) => void
+  meeting: MeetingCard; isManager: boolean; meId: string; onOpenMeeting: (review: boolean) => void; onOpenTask: (taskId: string) => void
 }) {
+  const review = isManager && meeting.tasks > 0
   const [open, setOpen] = useState(false)
   const assigned = meeting.assigned || []
   return (
@@ -261,7 +263,7 @@ export function CallSummaryCard({ meeting, isManager, meId, onOpenMeeting, onOpe
         {meeting.tasks > 0 && <span className="mc-chip warn">{meeting.tasks} without an owner</span>}
         {meeting.decisions > 0 && <span className="mc-chip">{meeting.decisions} decision{meeting.decisions === 1 ? '' : 's'}</span>}
         {meeting.risks > 0 && <span className="mc-chip warn">{meeting.risks} risk{meeting.risks === 1 ? '' : 's'}</span>}
-        {isManager && <button type="button" className="mc-open" onClick={onOpenMeeting}>{meeting.tasks > 0 ? 'Review' : 'Full summary'} →</button>}
+        <button type="button" className="mc-open" onClick={() => onOpenMeeting(review)}>{review ? 'Review' : 'Full summary'} →</button>
       </div>
     </div>
   )

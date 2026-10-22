@@ -411,8 +411,10 @@ function callSummary(callId) {
   const c = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(callId)
   if (!c) return null
   const joined = db.prepare('SELECT COUNT(*) n FROM chat_call_participants WHERE call_id=? AND joined_at IS NOT NULL').get(callId).n
+  // normTs: a call closed with an SQLite-format timestamp would otherwise be
+  // read as local time and come out hours short (see normTs).
   const secs = c.answered_at && c.ended_at
-    ? Math.max(0, Math.round((new Date(c.ended_at) - new Date(c.answered_at)) / 1000))
+    ? Math.max(0, Math.round((tsMs(c.ended_at) - tsMs(c.answered_at)) / 1000)) || 0
     : 0
   return { id: c.id, kind: c.kind, status: c.status, started_by: c.started_by, duration_sec: secs, joined }
 }
@@ -495,7 +497,88 @@ function summarizeConvo(conv, viewerId) {
   }
 }
 
+// ---------- helpers shared with the chat info panel ----------
+
+// Timestamps reach these tables in two formats: ISO from now()
+// ('2026-09-30T06:44:46.490Z') and SQLite's own ('2026-09-29 08:35:17' — UTC,
+// but with no zone on it), which some calls were closed with outside the app.
+// JavaScript reads the second as LOCAL time, five and a half hours out on an
+// Indian phone, so every timestamp the panel is sent goes through this.
+const SQLITE_TS = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/
+function normTs(s) {
+  if (!s) return null
+  const m = SQLITE_TS.exec(s)
+  return m ? `${m[1]}T${m[2]}Z` : s
+}
+// Milliseconds since the epoch; NaN when there is no readable timestamp.
+const tsMs = (s) => Date.parse(normTs(s) || '')
+
+// 'Employee 2' before 'Employee 10' — the order a person reads a list in.
+const naturalCompare = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
+
+// Which tab of "Media, links and docs" a file belongs in. The declared MIME
+// type decides whenever there is one: a video/webm clip is a video whatever it
+// is called. The extension is only consulted when the browser declared nothing
+// useful (no type, or the generic octet-stream some Android pickers send). The
+// app's own recordings are webm too, so a bare .webm counts as audio only when
+// it carries a name the client gives voice notes and call recordings.
+const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif', 'svg'])
+const VIDEO_EXT = new Set(['mp4', 'mov', 'm4v', 'mkv', 'avi', '3gp'])
+const AUDIO_EXT = new Set(['mp3', 'm4a', 'ogg', 'oga', 'wav', 'aac', 'flac', 'opus', 'amr'])
+function mediaKind(row) {
+  const type = String(row.file_type || '').split(';')[0].trim().toLowerCase()
+  if (type && type !== 'application/octet-stream') {
+    if (type.startsWith('image/')) return 'images'
+    if (type.startsWith('video/')) return 'videos'
+    if (type.startsWith('audio/')) return 'audio'
+    return 'files'
+  }
+  const name = String(row.file_name || '').toLowerCase()
+  const ext = (/\.([a-z0-9]+)$/.exec(name) || [])[1] || ''
+  if (IMAGE_EXT.has(ext)) return 'images'
+  if (VIDEO_EXT.has(ext)) return 'videos'
+  if (AUDIO_EXT.has(ext)) return 'audio'
+  if (ext === 'webm') return audioKind(name) === 'audio' ? 'videos' : 'audio'
+  return 'files'
+}
+
+// Voice notes and call recordings are the same kind of file (audio/webm, or
+// m4a from iOS); only the names the client gives them tell them apart —
+// 'voice-note.<ext>' from Chats' recorder, 'call-recording-HHMM.<ext>' from
+// CallCenter's keepRecordingInChat.
+function audioKind(name) {
+  const n = String(name || '').toLowerCase()
+  if (n.startsWith('voice-note')) return 'voice-note'
+  if (n.startsWith('call-recording')) return 'call-recording'
+  return 'audio'
+}
+
+// The title of a meeting made from a chat. In that chat's panel every summary
+// comes from the same place, so "Call — Test 1" on each told the reader nothing:
+// what tells two apart is the kind of call and who was on it. A group lists its
+// other attendees (two, then +N); a direct chat is with one person, named even
+// if they never joined. Titles are written once, so older meetings keep theirs.
+function chatMeetingTitle(conv, label, others, meId) {
+  const names = [...others].sort(naturalCompare)
+  if (conv?.type !== 'group') {
+    const peer = names[0] || (conv && db.prepare(`
+      SELECT u.name FROM chat_participants p JOIN users u ON u.id=p.user_id
+      WHERE p.conversation_id=? AND p.user_id<>? LIMIT 1`).get(conv.id, meId)?.name)
+    return `${label} with ${peer || 'a teammate'}`
+  }
+  const shown = names.slice(0, 2).join(names.length === 2 ? ' and ' : ', ')
+  const more = names.length > 2 ? ` +${names.length - 2}` : ''
+  return `${label} — ${conv.name || 'Group'}${shown ? ` · with ${shown}${more}` : ''}`
+}
+
 // ---------- file download (token in header OR ?token= so <img>/<a> work) ----------
+// Sent with res.sendFile rather than piped, because a media player needs more
+// than a byte stream: Range requests (206) are how a <video> seeks — and iOS
+// WebKit will not play a video at all from a server that ignores them —
+// Content-Length lets a player show how far along it is, and ETag /
+// Last-Modified let an image grid revalidate instead of downloading again.
+// Cached privately and only for an hour: the URL carries the viewer's token.
+//
 // An attachment is served from the app's own origin, so an HTML or SVG file
 // opened inline would run its scripts with the viewer's session. Those get a
 // sandbox CSP, which renders them script-less in an opaque origin; images,
@@ -514,20 +597,19 @@ r.get('/file/:messageId', (req, res) => {
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
   // The declared type wins (send never overrides a Content-Type that is
   // already set), except the generic octet-stream: then send names the type
-  // from the stored extension — the same fallback the thread's isVideo uses —
-  // so a photo picked as "a file" still displays and a clip still plays.
+  // from the stored extension — the same fallback mediaKind classifies by — so
+  // a photo picked as "a file" still displays and a clip still plays.
   if (m.file_type && !/^application\/octet-stream\b/i.test(m.file_type)) res.type(m.file_type)
   const dl = req.query.download === '1' ? 'attachment' : 'inline'
   res.setHeader('Content-Disposition', `${dl}; filename="${encodeURIComponent(m.file_name || 'file')}"`)
+  res.setHeader('Cache-Control', 'private, max-age=3600')
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('Referrer-Policy', 'no-referrer')
   if (ACTIVE_TYPE.test(m.file_type || '') || ACTIVE_EXT.test(m.file_stored)) {
     res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
   }
-  // sendFile, not a bare stream, for the Content-Length and byte ranges: a big
-  // video can be seeked, and a phone recording keeps its index at the end of
-  // the file — without ranges the player downloads all of it just to show its
-  // length. Dotfiles allowed because the path is ours, not the requester's.
+  // Dotfiles allowed because the path is ours, not the requester's; the cache
+  // header is the one set above, not send's public default.
   res.sendFile(abs, { cacheControl: false, dotfiles: 'allow' }, (err) => {
     // Nothing to fix once the headers are out, or when the viewer went away
     // mid-transfer — which a seeking <video> does all the time.
@@ -1580,13 +1662,16 @@ async function summariseCall(call, actorId, { autoAssign }) {
   const pool = [...new Set([...joined, ...(conv ? participantsOf(conv.id) : [])])]
   const attendees = attendeesFor(call.org_id, pool)
   const others = attendees.filter((a) => joined.includes(a.id) && a.id !== actorId).map((a) => a.name)
-  const title = conv?.type === 'group' ? `Call — ${conv.name || 'Group'}` : `Call with ${others[0] || 'a teammate'}`
+  const callKind = call.kind === 'video' ? 'video' : 'audio'
+  const title = chatMeetingTitle(conv, callKind === 'video' ? 'Video call' : 'Audio call', others, actorId)
   const meetingDate = now().slice(0, 10)
   const analysis = await analyzeMeetingTranscript(transcript, {
     meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
   })
+  // Filed against its chat and its call, so the chat's info panel lists it
+  // under that call (see meetings.conversation_id in db.js).
   const { mid, suggestionCount } = persistMeeting(
-    { orgId: call.org_id, userId: actorId, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds: pool, callKind: call.kind === 'video' ? 'video' : 'audio' },
+    { orgId: call.org_id, userId: actorId, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds: pool, conversationId: conv ? conv.id : null, callId: call.id, callKind },
     analysis)
   // These utterances are now a meeting with a transcript of their own, so
   // drop them. Recording a SECOND stretch of the same call would otherwise
@@ -2085,6 +2170,425 @@ r.get('/search', (req, res) => {
   }) })
 })
 
+// ---------- chat info panel ----------
+// WhatsApp's "Group info" / "Contact info": who is in the chat, everything
+// shared in it, and its calls with their summaries. All read-only and cheap to
+// repeat — unlike GET /conversations/:id, nothing here marks the chat read or
+// tells anyone you looked. The response shapes are the contract in
+// client/src/lib/chatInfo.ts.
+
+// The conversation behind a request, or null when it is not the viewer's to
+// read. The participant row is the permission; the org check is belt and
+// braces, so a row that somehow outlived a move between orgs opens nothing.
+function infoConv(req) {
+  if (!member(req.params.id, req.user.id)) return null
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
+  return conv && conv.org_id === req.user.org_id ? conv : null
+}
+
+// Files are sorted into tabs in JS (mediaKind needs the name as well as the
+// type), so a request scans the conversation's attachments — metadata only,
+// the bytes stay on disk — and the scan is capped. A chat with more files than
+// this is not one anybody scrolls back through from a side panel.
+const MEDIA_SCAN_CAP = 5000
+const MEDIA_KINDS = ['images', 'videos', 'audio', 'files', 'links']
+
+// Newest first; at the same instant the higher id first; the links inside one
+// message in the order they were written. A total order, which is what lets
+// the cursor below never skip or repeat an item between pages, even when two
+// messages share a timestamp.
+const newestFirst = (a, b) => (b.t - a.t) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0) || (a.n - b.n)
+
+// Every attachment the viewer can still see — not deleted for everyone, not
+// cleared or deleted by them (chat_message_hidden), the same rules /media and
+// /search apply — with the tab each one belongs in.
+function visibleFiles(convId, viewerId) {
+  return db.prepare(`
+    SELECT id, file_name, file_type, created_at FROM chat_messages
+    WHERE conversation_id=? AND file_stored IS NOT NULL AND deleted_for_all=0
+      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+    ORDER BY created_at DESC LIMIT ${MEDIA_SCAN_CAP}`).all(convId, viewerId)
+    .map((m) => ({ id: m.id, n: 0, t: tsMs(m.created_at) || 0, kind: mediaKind(m), name: m.file_name, type: m.file_type, created_at: m.created_at }))
+    .sort(newestFirst)
+}
+
+// The links in one message: exactly what the thread makes clickable (linksIn,
+// shared with /links below), as {url, domain}. A link is only as bounded as the
+// 4000-character message it came in, and a page of them carries up to 200, so
+// each is cut to the conventional 2048 of a usable URL and DNS's 253 of a
+// hostname. The cut is lossy; the message itself still holds the whole URL.
+const MAX_LINK_URL = 2048
+const MAX_LINK_DOMAIN = 253
+const firstChars = (s, max) => (s.length > max ? Array.from(s).slice(0, max).join('') : s)
+function extractLinks(body) {
+  const out = []
+  for (const url of linksIn(body)) {
+    let u
+    try { u = new URL(url) } catch { continue }
+    out.push({ url: firstChars(url, MAX_LINK_URL), domain: firstChars(u.hostname.replace(/^www\./i, ''), MAX_LINK_DOMAIN) })
+  }
+  return out
+}
+
+// One item per link, under the same visibility rules. The LIKE only narrows
+// the scan to messages that could hold one; extractLinks decides what is one.
+function visibleLinks(convId, viewerId) {
+  const rows = db.prepare(`
+    SELECT id, sender_id, body, created_at FROM chat_messages
+    WHERE conversation_id=? AND deleted_for_all=0 AND body LIKE '%http%'
+      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+    ORDER BY created_at DESC LIMIT ${MEDIA_SCAN_CAP}`).all(convId, viewerId)
+  const out = []
+  for (const m of rows) {
+    const t = tsMs(m.created_at) || 0
+    extractLinks(m.body).forEach((l, n) => out.push({ id: m.id, n, t, url: l.url, domain: l.domain, body: m.body, sender_id: m.sender_id, created_at: m.created_at }))
+  }
+  return out.sort(newestFirst)
+}
+
+function mediaCounts(files, links) {
+  const counts = { images: 0, videos: 0, audio: 0, files: 0, links: links.length }
+  for (const f of files) counts[f.kind]++
+  return counts
+}
+
+// Opaque to the client: the (time, message id, link number) of the last item
+// it was sent, in the order newestFirst defines.
+const encodeCursor = (it) => Buffer.from(JSON.stringify([it.t, it.id, it.n])).toString('base64url')
+function decodeCursor(s) {
+  try {
+    const [t, mid, n] = JSON.parse(Buffer.from(String(s), 'base64url').toString('utf8'))
+    if (Number.isFinite(t) && typeof mid === 'string' && Number.isInteger(n)) return { t, id: mid, n }
+  } catch {}
+  return null
+}
+
+// Cut on a character boundary: slice() can split an emoji in two.
+function clip(text, max) {
+  const chars = Array.from(text)
+  return chars.length > max ? chars.slice(0, max - 1).join('').trimEnd() + '…' : text
+}
+
+// A person as the panel draws one; null when the account is gone.
+const personLite = (uid, name, color, file) => (uid ? { id: uid, name, avatar_color: color, avatar_file: file || null } : null)
+
+// A page of file items, with the per-message detail the scan left out — two
+// queries however long the page is.
+function fileItems(page, orgId) {
+  if (!page.length) return []
+  const ids = page.map((f) => f.id)
+  const rows = db.prepare(`
+    SELECT m.id, m.sender_id, m.body, m.file_size, m.transcript, m.meeting_id, u.name AS sender_name
+    FROM chat_messages m LEFT JOIN users u ON u.id=m.sender_id
+    WHERE m.id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+  const byId = new Map(rows.map((m) => [m.id, m]))
+  // A meeting deleted from the Meetings page leaves its id behind on the
+  // recording, and "View summary" would open nothing, so only live ones count.
+  const mids = [...new Set(rows.map((m) => m.meeting_id).filter(Boolean))]
+  const live = new Set(mids.length
+    ? db.prepare(`SELECT id FROM meetings WHERE org_id=? AND id IN (${mids.map(() => '?').join(',')})`).all(orgId, ...mids).map((x) => x.id)
+    : [])
+  return page.filter((f) => byId.has(f.id)).map((f) => {
+    const d = byId.get(f.id)
+    const item = {
+      id: f.id, kind: f.kind, name: f.name || 'Attachment', type: f.type || '', size: d.file_size || 0,
+      created_at: normTs(f.created_at), sender_id: d.sender_id, sender_name: d.sender_name || 'Unknown',
+      caption: d.body || '', transcript: d.transcript || null,
+      meeting_id: live.has(d.meeting_id) ? d.meeting_id : null,
+    }
+    if (f.kind === 'audio') item.audio_kind = audioKind(f.name)
+    return item
+  })
+}
+
+function linkItems(page, orgId) {
+  const senders = [...new Set(page.map((l) => l.sender_id))]
+  const names = new Map(senders.length
+    ? db.prepare(`SELECT id, name FROM users WHERE org_id=? AND id IN (${senders.map(() => '?').join(',')})`).all(orgId, ...senders).map((u) => [u.id, u.name])
+    : [])
+  return page.map((l) => ({
+    id: `${l.id}:${l.n}`, kind: 'links', message_id: l.id, url: l.url, domain: l.domain,
+    text: clip(String(l.body || '').trim(), 300), created_at: normTs(l.created_at),
+    sender_id: l.sender_id, sender_name: names.get(l.sender_id) || 'Unknown',
+  }))
+}
+
+// Talk time: answered → ended, or → now while the call is still going. A call
+// nobody answered has none, whatever its status says.
+function talkSeconds(k) {
+  const from = tsMs(k.answered_at)
+  const to = k.ended_at ? tsMs(k.ended_at) : (k.status === 'ringing' || k.status === 'active' ? Date.now() : NaN)
+  return Number.isFinite(from) && Number.isFinite(to) ? Math.max(0, Math.round((to - from) / 1000)) : 0
+}
+
+// A meeting's summary_json, or {} when it is missing or not valid JSON: one bad
+// row must not take a whole conversation's meeting list down with it. An old
+// rule-based statistics sentence is shown in today's wording (rules.js), as the
+// Meetings page and the thread's card show it.
+function parseSummary(json) {
+  try {
+    const s = JSON.parse(json || '{}')
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return {}
+    if (typeof s.executive_summary === 'string') s.executive_summary = restateRuleSummary(s.executive_summary)
+    return s
+  } catch { return {} }
+}
+// The points the panel will actually show. Older summaries hold plain strings,
+// newer ones {text, evidence}; a blank point is dropped on screen (MeetingDetail's
+// normalisePoints), so it is not counted either.
+const pointCount = (v) => (Array.isArray(v) ? v.filter((it) => String(typeof it === 'string' ? it : (it?.text ?? '')).trim()).length : 0)
+
+r.get('/conversations/:id/info', (req, res) => {
+  const me = req.user
+  const conv = infoConv(req)
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' })
+
+  const people = db.prepare(`
+    SELECT u.id, u.name, u.email, u.role AS org_role, u.avatar_color, u.avatar_file, u.status_text, u.status_emoji,
+           u.dnd_until, u.last_seen, d.name AS department, p.role AS chat_role, p.joined_at
+    FROM chat_participants p
+    JOIN users u ON u.id=p.user_id AND u.org_id=?
+    LEFT JOIN departments d ON d.id=u.department_id
+    WHERE p.conversation_id=?`).all(me.org_id, conv.id)
+  const load = workloadFor(me.org_id, people.map((u) => u.id))
+  // What a member row and a contact card share.
+  const profile = (u) => ({
+    id: u.id, name: u.name, avatar_color: u.avatar_color, avatar_file: u.avatar_file || null,
+    email: u.email, org_role: u.org_role, department: u.department || null, last_seen: normTs(u.last_seen),
+    status_text: u.status_text || '', status_emoji: u.status_emoji || '', dnd_until: normTs(u.dnd_until),
+    workload: load[u.id] || { open: 0, overdue: 0 },
+  })
+  const members = people
+    .map((u) => ({ ...profile(u), chat_role: u.chat_role === 'admin' ? 'admin' : 'member', joined_at: normTs(u.joined_at), is_me: u.id === me.id }))
+    // You first, then the group's admins, then everyone else by name.
+    .sort((a, b) => (Number(b.is_me) - Number(a.is_me))
+      || (Number(b.chat_role === 'admin') - Number(a.chat_role === 'admin'))
+      || naturalCompare(a.name, b.name) || (a.id < b.id ? -1 : 1))
+
+  const files = visibleFiles(conv.id, me.id)
+  const links = visibleLinks(conv.id, me.id)
+  const calls = db.prepare('SELECT COUNT(*) AS n FROM chat_calls WHERE conversation_id=? AND org_id=?').get(conv.id, me.org_id).n
+  const lastCall = db.prepare('SELECT started_at FROM chat_calls WHERE conversation_id=? AND org_id=? ORDER BY julianday(started_at) DESC LIMIT 1').get(conv.id, me.org_id)
+  const summaries = db.prepare("SELECT COUNT(*) AS n FROM meetings WHERE conversation_id=? AND org_id=? AND status<>'recording'").get(conv.id, me.org_id).n
+  const pending = db.prepare(`
+    SELECT COUNT(*) AS n FROM suggested_tasks s JOIN meetings m ON m.id=s.meeting_id
+    WHERE m.conversation_id=? AND m.org_id=? AND m.status<>'recording' AND s.status='pending'`).get(conv.id, me.org_id).n
+  const creator = conv.created_by ? db.prepare('SELECT id, name FROM users WHERE id=? AND org_id=?').get(conv.created_by, me.org_id) : null
+
+  // A direct chat is about the other person: their card, and the groups you
+  // share. None when they have left the chat or no longer exist.
+  const other = conv.type === 'direct' ? people.find((u) => u.id !== me.id) || null : null
+  const common = other ? db.prepare(`
+    SELECT c.id, c.name, c.avatar_color, c.avatar_file,
+           (SELECT COUNT(*) FROM chat_participants x WHERE x.conversation_id=c.id) AS member_count
+    FROM chat_conversations c
+    JOIN chat_participants a ON a.conversation_id=c.id AND a.user_id=?
+    JOIN chat_participants b ON b.conversation_id=c.id AND b.user_id=?
+    WHERE c.type='group' AND c.org_id=?
+    ORDER BY julianday(c.updated_at) DESC, c.id LIMIT 50`).all(me.id, other.id, me.org_id) : []
+
+  res.json({
+    conversation: { ...summarizeConvo(conv, me.id), created_at: normTs(conv.created_at), created_by: creator ? { id: creator.id, name: creator.name } : null },
+    members,
+    counts: { ...mediaCounts(files, links), calls, summaries, pending_review: pending },
+    recent_media: files.filter((f) => f.kind === 'images' || f.kind === 'videos').slice(0, 6)
+      .map((f) => ({ id: f.id, kind: f.kind, name: f.name || 'Attachment', type: f.type || '', created_at: normTs(f.created_at) })),
+    last_call_at: normTs(lastCall?.started_at),
+    contact: other ? profile(other) : null,
+    common_groups: common.map((g) => ({ id: g.id, name: g.name || 'Group', avatar_color: g.avatar_color, avatar_file: g.avatar_file || null, member_count: g.member_count })),
+  })
+})
+
+// Every call in the conversation — here a call IS a meeting, audio or video,
+// summarised or not — and every meeting summary filed from it. Two lists, not
+// one, because they are different things on screen: a call nobody answered has
+// no summary, and a recording summarised by hand files a second for one call.
+const CALL_LIST_CAP = 200
+r.get('/conversations/:id/meetings', (req, res) => {
+  const me = req.user
+  const conv = infoConv(req)
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' })
+
+  const callRows = db.prepare(`
+    SELECT k.id, k.kind, k.status, k.started_at, k.answered_at, k.ended_at, k.meeting_id,
+           u.id AS by_id, u.name AS by_name, u.avatar_color AS by_color, u.avatar_file AS by_file
+    FROM chat_calls k LEFT JOIN users u ON u.id=k.started_by AND u.org_id=k.org_id
+    WHERE k.conversation_id=? AND k.org_id=?
+    ORDER BY julianday(k.started_at) DESC, k.id DESC LIMIT ${CALL_LIST_CAP + 1}`).all(conv.id, me.org_id)
+  const calls = callRows.slice(0, CALL_LIST_CAP)
+  const callIds = calls.map((k) => k.id)
+  // Who actually joined each call. Who was rung is never stored.
+  const joined = new Map()
+  if (callIds.length) {
+    const rows = db.prepare(`
+      SELECT p.call_id, u.id, u.name, u.avatar_color, u.avatar_file FROM chat_call_participants p
+      JOIN users u ON u.id=p.user_id AND u.org_id=?
+      WHERE p.call_id IN (${callIds.map(() => '?').join(',')}) AND p.joined_at IS NOT NULL
+      ORDER BY julianday(p.joined_at), u.name`).all(me.org_id, ...callIds)
+    for (const p of rows) {
+      if (!joined.has(p.call_id)) joined.set(p.call_id, [])
+      joined.get(p.call_id).push(personLite(p.id, p.name, p.avatar_color, p.avatar_file))
+    }
+  }
+
+  const meetingRows = db.prepare(`
+    SELECT m.id, m.title, m.call_kind, m.source_type, m.call_id, m.created_at, m.meeting_date, m.engine,
+           m.summary_json, m.uploaded_by, u.name AS uploaded_by_name
+    FROM meetings m LEFT JOIN users u ON u.id=m.uploaded_by
+    WHERE m.conversation_id=? AND m.org_id=? AND m.status<>'recording'
+    ORDER BY julianday(m.created_at) DESC, m.id DESC`).all(conv.id, me.org_id)
+  const mids = meetingRows.map((m) => m.id)
+  const tasks = new Map(mids.map((mid) => [mid, { pending: 0, approved: 0, rejected: 0, merged: 0, total: 0 }]))
+  const attendees = new Map(mids.map((mid) => [mid, []]))
+  if (mids.length) {
+    const ph = mids.map(() => '?').join(',')
+    for (const s of db.prepare(`SELECT meeting_id, status, COUNT(*) AS n FROM suggested_tasks WHERE meeting_id IN (${ph}) GROUP BY meeting_id, status`).all(...mids)) {
+      const t = tasks.get(s.meeting_id)
+      if (s.status !== 'total' && Object.hasOwn(t, s.status)) t[s.status] += s.n
+      t.total += s.n
+    }
+    for (const p of db.prepare(`
+      SELECT mp.meeting_id, u.id, u.name, u.avatar_color, u.avatar_file FROM meeting_participants mp
+      JOIN users u ON u.id=mp.user_id AND u.org_id=?
+      WHERE mp.meeting_id IN (${ph})`).all(me.org_id, ...mids)) {
+      attendees.get(p.meeting_id).push(personLite(p.id, p.name, p.avatar_color, p.avatar_file))
+    }
+  }
+  // Each call's summaries, newest first (meetingRows already are). The call's
+  // own pointer (chat_calls.meeting_id, written at hang-up) counts too, so a
+  // summary the one-time link missed still hangs off its call.
+  const live = new Set(mids)
+  const byCall = new Map()
+  for (const m of meetingRows) {
+    if (!m.call_id) continue
+    if (!byCall.has(m.call_id)) byCall.set(m.call_id, [])
+    byCall.get(m.call_id).push(m.id)
+  }
+  for (const k of calls) {
+    if (!k.meeting_id || !live.has(k.meeting_id)) continue
+    const list = byCall.get(k.id) || []
+    if (!list.includes(k.meeting_id)) byCall.set(k.id, [...list, k.meeting_id])
+  }
+
+  res.json({
+    calls: calls.map((k) => ({
+      id: k.id, kind: k.kind === 'video' ? 'video' : 'audio', status: k.status,
+      started_at: normTs(k.started_at), answered_at: normTs(k.answered_at), ended_at: normTs(k.ended_at),
+      duration_sec: talkSeconds(k),
+      started_by: personLite(k.by_id, k.by_name, k.by_color, k.by_file),
+      participants: joined.get(k.id) || [],
+      meeting_ids: byCall.get(k.id) || [],
+    })),
+    meetings: meetingRows.map((m) => {
+      const s = parseSummary(m.summary_json)
+      return {
+        id: m.id, title: m.title,
+        call_kind: m.call_kind === 'video' || m.call_kind === 'audio' ? m.call_kind : null,
+        source_type: m.source_type || 'transcript', call_id: m.call_id || null,
+        created_at: normTs(m.created_at), meeting_date: m.meeting_date, engine: m.engine || '',
+        executive_summary: typeof s.executive_summary === 'string' ? s.executive_summary : '',
+        counts: {
+          decisions: pointCount(s.key_decisions), action_items: pointCount(s.action_items),
+          risks: pointCount(s.risks), blockers: pointCount(s.blockers), follow_ups: pointCount(s.follow_ups),
+        },
+        tasks: tasks.get(m.id),
+        participants: attendees.get(m.id).sort((a, b) => naturalCompare(a.name, b.name)),
+        uploaded_by: m.uploaded_by && m.uploaded_by_name ? { id: m.uploaded_by, name: m.uploaded_by_name } : null,
+      }
+    }),
+    calls_truncated: callRows.length > CALL_LIST_CAP,
+  })
+})
+
+// One meeting, shaped like GET /api/meetings/:id so the review screen
+// (MeetingDetail's ReviewAssignModal) takes it as it is — but only a meeting
+// filed from THIS conversation, and without the raw transcript: the summary's
+// evidence quotes carry the lines that matter, and reading a summary in a group
+// is not a reason to hand every member the whole recording's text. Every member
+// may read it; reviewing stays manager-only on the /meetings routes it calls.
+r.get('/conversations/:id/meetings/:mid', (req, res) => {
+  const me = req.user
+  const conv = infoConv(req)
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' })
+  const m = db.prepare(`
+    SELECT m.*, u.name AS uploaded_by_name FROM meetings m LEFT JOIN users u ON u.id=m.uploaded_by
+    WHERE m.id=? AND m.org_id=? AND m.conversation_id=? AND m.status<>'recording'`).get(req.params.mid, me.org_id, conv.id)
+  if (!m) return res.status(404).json({ error: 'Meeting not found' })
+  const { raw_transcript: _transcript, summary_json: summaryJson, ...fields } = m
+
+  const participants = db.prepare(`
+    SELECT u.id, u.name, u.avatar_color, u.avatar_file, u.role, u.department_id
+    FROM meeting_participants p JOIN users u ON u.id=p.user_id WHERE p.meeting_id=?`).all(m.id)
+    .sort((a, b) => naturalCompare(a.name, b.name))
+  // Joined exactly as GET /api/meetings/:id joins them.
+  const suggestions = db.prepare(`SELECT s.*,
+      u.name AS suggested_assignee_name, u.avatar_color AS suggested_assignee_color,
+      a.name AS suggested_assigner_name, a.avatar_color AS suggested_assigner_color
+    FROM suggested_tasks s
+    LEFT JOIN users u ON u.id=s.suggested_assignee_id
+    LEFT JOIN users a ON a.id=s.suggested_assigner_id
+    WHERE s.meeting_id=? ORDER BY s.created_at`).all(m.id)
+  // The tasks it became. A private draft (visible_to_manager=0) stays private.
+  const tasks = db.prepare(`
+    SELECT t.id, t.title, t.status, t.priority, t.due_date, t.assignee_id,
+           a.name AS assignee_name, b.name AS assigned_by_name
+    FROM tasks t LEFT JOIN users a ON a.id=t.assignee_id LEFT JOIN users b ON b.id=t.assigned_by_id
+    WHERE t.meeting_id=? AND t.org_id=? AND COALESCE(t.visible_to_manager, 1)=1
+    ORDER BY t.created_at`).all(m.id, me.org_id)
+  const k = m.call_id ? db.prepare('SELECT * FROM chat_calls WHERE id=? AND org_id=?').get(m.call_id, me.org_id) : null
+  let languages = []
+  try { languages = JSON.parse(m.detected_languages || '[]') } catch {}
+
+  res.json({
+    ...fields,
+    description: m.description || '',
+    engine: m.engine || '',
+    created_at: normTs(m.created_at),
+    detected_languages: Array.isArray(languages) ? languages : [],
+    uploaded_by_name: m.uploaded_by_name || null,
+    summary: parseSummary(summaryJson),
+    participants,
+    suggestions,
+    tasks,
+    call: k ? {
+      id: k.id, kind: k.kind === 'video' ? 'video' : 'audio', status: k.status,
+      started_at: normTs(k.started_at), ended_at: normTs(k.ended_at), duration_sec: talkSeconds(k),
+    } : null,
+  })
+})
+
+// "Media, links and docs": one tab at a time, newest first, paged by an opaque
+// cursor, with every tab's count on every page (the tab bar shows them).
+// Registered ahead of the original /media below, which still answers every
+// request without ?kind exactly as it always has, for clients that predate
+// this.
+r.get('/conversations/:id/media', (req, res, next) => {
+  if (req.query.kind === undefined) return next()
+  const conv = infoConv(req)
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' })
+  const { kind } = req.query
+  if (typeof kind !== 'string' || !MEDIA_KINDS.includes(kind)) {
+    return res.status(400).json({ error: `kind must be one of: ${MEDIA_KINDS.join(', ')}` })
+  }
+  const asked = Number.parseInt(req.query.limit, 10)
+  const limit = Number.isFinite(asked) ? Math.min(200, Math.max(1, asked)) : 60
+  let after = null
+  if (req.query.before) {
+    after = decodeCursor(req.query.before)
+    if (!after) return res.status(400).json({ error: 'Invalid cursor' })
+  }
+  const files = visibleFiles(conv.id, req.user.id)
+  const links = visibleLinks(conv.id, req.user.id)
+  const pool = (kind === 'links' ? links : files.filter((f) => f.kind === kind))
+    .filter((it) => !after || newestFirst(it, after) > 0)
+  const page = pool.slice(0, limit)
+  res.json({
+    items: kind === 'links' ? linkItems(page, req.user.org_id) : fileItems(page, req.user.org_id),
+    next: pool.length > page.length ? encodeCursor(page[page.length - 1]) : null,
+    counts: mediaCounts(files, links),
+  })
+})
+
 // ---------- shared files / media in a conversation ----------
 r.get('/conversations/:id/media', (req, res) => {
   if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Not found' })
@@ -2263,7 +2767,12 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
   const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
   if (!m || m.deleted_for_all || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
   if (!m.file_stored || !(m.file_type || '').startsWith('audio/')) return res.status(400).json({ error: 'That message has no recording' })
-  if (m.meeting_id) return res.json({ id: m.meeting_id, existing: true })
+  // Already summarised — unless that meeting has since been deleted from the
+  // Meetings page, which leaves its id behind on the recording. Answering with
+  // the dead id would open a summary that is not there, so make a new one.
+  if (m.meeting_id && db.prepare('SELECT 1 FROM meetings WHERE id=? AND org_id=?').get(m.meeting_id, me.org_id)) {
+    return res.json({ id: m.meeting_id, existing: true })
+  }
 
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(m.conversation_id)
   try {
@@ -2285,25 +2794,34 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
     const analysis = await analyzeMeetingTranscript(transcript, {
       meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
     })
-    const title = conv?.type === 'group' ? `Call — ${conv.name || 'Group'}` : `Call with ${attendees.filter((a) => a.id !== me.id)[0]?.name || 'a teammate'}`
-    // Audio or video, for the review screen's heading. Only the app's own call
-    // recordings (older CallCenters posted them as call-recording-HHMM) can say,
-    // and the upload carries no call id, so the call is matched by time: the one
-    // call in this chat the recorder was on, with the recording posted between
-    // its start and fifteen minutes after its end. Two candidates is a guess, and
-    // a guess would name the wrong kind of call, so it is then left unnamed.
-    let callKind = null
-    if (/^call-recording/i.test(m.file_name || '')) {
+    // Called what the Audio tab calls the recording: a summarised voice note was
+    // never a call. A group lists nobody, because who was on a recording is not
+    // known, only who is in the chat.
+    const recordingKind = audioKind(m.file_name)
+    const label = recordingKind === 'call-recording' ? 'Call recording' : recordingKind === 'voice-note' ? 'Voice note' : 'Recording'
+    const title = chatMeetingTitle(conv, label, conv?.type === 'group' ? [] : attendees.filter((a) => a.id !== me.id).map((a) => a.name), me.id)
+    // Which call this is a recording of. Best effort, and only for the app's own
+    // call recordings (CallCenter names them call-recording-HHMM): the upload
+    // carries no call id, so it is matched by time — the one call in this chat
+    // that the recorder was on, with the recording posted between the call's
+    // start and fifteen minutes after its end (the fallbacks that post it run
+    // after hang-up). Two candidates is a guess, and a guess is worse than no
+    // link: it would show this summary under somebody else's call.
+    let call = null
+    if (recordingKind === 'call-recording') {
       const hits = db.prepare(`
-        SELECT k.kind FROM chat_calls k
+        SELECT k.id, k.kind FROM chat_calls k
         JOIN chat_call_participants p ON p.call_id=k.id AND p.user_id=?
         WHERE k.conversation_id=? AND k.org_id=?
           AND julianday(?) BETWEEN julianday(k.started_at) AND julianday(COALESCE(k.ended_at, ?)) + 15.0/1440
         LIMIT 2`).all(m.sender_id, m.conversation_id, me.org_id, m.created_at, m.created_at)
-      if (hits.length === 1) callKind = hits[0].kind === 'video' ? 'video' : 'audio'
+      if (hits.length === 1) call = hits[0]
     }
+    // A recording that found its call is named by that call's kind; otherwise a
+    // call recording is at least known to be audio.
+    const callKind = call ? (call.kind === 'video' ? 'video' : 'audio') : (recordingKind === 'call-recording' ? 'audio' : null)
     const { mid, suggestionCount } = persistMeeting(
-      { orgId: me.org_id, userId: me.id, title, description: 'Transcribed from a recording in the chat.', meetingDate, transcript, sourceType: 'call', participantIds, callKind },
+      { orgId: me.org_id, userId: me.id, title, description: 'Transcribed from a recording in the chat.', meetingDate, transcript, sourceType: 'call', participantIds, conversationId: m.conversation_id, callId: call?.id || null, callKind },
       analysis)
 
     // Point the recording at its summary, and drop the audit card in the thread.
@@ -2331,19 +2849,27 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
 // PRIVATE tasks are excluded (visible_to_manager=0). A count is not much, but it
 // is still someone else's private list, and it is not this feature's to spend.
 r.get('/workload', (req, res) => {
+  res.json({ byUser: workloadFor(req.user.org_id) })
+})
+
+// The counts behind /workload, for the whole org or for a given set of people
+// (the info panel's member list) — still one grouped query either way.
+function workloadFor(orgId, userIds = null) {
+  if (userIds && !userIds.length) return {}
   const today = new Date().toISOString().slice(0, 10)
+  const only = userIds ? ` AND assignee_id IN (${userIds.map(() => '?').join(',')})` : ''
   const rows = db.prepare(`
     SELECT assignee_id AS user_id,
            COUNT(*) AS open,
            SUM(CASE WHEN due_date IS NOT NULL AND due_date <> '' AND due_date < ? THEN 1 ELSE 0 END) AS overdue
     FROM tasks
     WHERE org_id=? AND assignee_id IS NOT NULL AND assignee_id <> ''
-      AND status NOT IN ('Done') AND COALESCE(visible_to_manager, 1) = 1
-    GROUP BY assignee_id`).all(today, req.user.org_id)
+      AND status NOT IN ('Done') AND COALESCE(visible_to_manager, 1) = 1${only}
+    GROUP BY assignee_id`).all(today, orgId, ...(userIds || []))
   const byUser = {}
   for (const r0 of rows) byUser[r0.user_id] = { open: r0.open, overdue: r0.overdue || 0 }
-  res.json({ byUser })
-})
+  return byUser
+}
 
 // ---------- custom status / do-not-disturb ----------
 r.get('/status', (req, res) => {
