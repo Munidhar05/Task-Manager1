@@ -43,7 +43,7 @@ export interface Msg {
   id: string; conversation_id: string; sender_id: string; body: string; created_at: string
   kind?: 'system' | 'poll' | 'task' | 'location' | 'contact' | null
   edited_at?: string | null; forwarded?: boolean; reply_to?: string | null; reply?: ReplyPreview | null; file?: ChatFile | null
-  reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; delivered?: boolean; deleted?: boolean; uploading?: boolean
+  reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; delivered?: boolean; deleted?: boolean; uploading?: boolean; progress?: number
   pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
   system?: string | null; poll?: Poll | null; task?: TaskRef | null; location?: LocationRef | null; contact?: ContactRef | null
 }

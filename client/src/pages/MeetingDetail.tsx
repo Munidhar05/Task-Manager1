@@ -67,6 +67,43 @@ function SummaryPoint({ point }: { point: Point }) {
   )
 }
 
+// What this meeting actually was, in the words a person would use. A call and
+// an uploaded recording are not the same thing to review, and calling both of
+// them "Meeting" loses the one bit of context the reviewer already has in their
+// head — they were ON the call ten seconds ago.
+export function sourceLabel(m: any): string {
+  if (m?.call_kind === 'video') return 'Video Call'
+  if (m?.call_kind === 'audio') return 'Audio Call'
+  if (m?.source_type === 'call') return 'Call'
+  if (m?.source_type === 'audio') return 'Recording'
+  return 'Meeting'
+}
+
+// Whoever asked for the work, unless it is the owner's own "I'll do it": then
+// nobody else asked, and the server keeps the reviewer as the assigner (see
+// createTaskFromSuggestion).
+function askedBy(sg: Pick<Suggestion, 'suggested_assigner_id' | 'suggested_assigner_name' | 'suggested_assigner_raw' | 'suggested_assignee_id'>) {
+  if (sg.suggested_assigner_id && sg.suggested_assigner_id === sg.suggested_assignee_id) return null
+  return sg.suggested_assigner_name || sg.suggested_assigner_raw || null
+}
+
+// Who asked for the work. Resolved to a real teammate where the name in the
+// transcript matched one; otherwise the spoken name, which is still better than
+// silently crediting whoever pressed the button.
+function Assigner({ sg }: { sg: Suggestion }) {
+  const name = askedBy(sg)
+  if (!name) return null
+  return (
+    <span className="row asgn" style={{ gap: 5 }} title={sg.suggested_assigner_name
+      ? `${sg.suggested_assigner_name} asked for this in the meeting`
+      : `Heard "${sg.suggested_assigner_raw}" — not matched to an account`}>
+      <Avatar name={name} color={sg.suggested_assigner_color || undefined} size={16} />
+      <span>Asked by {name}</span>
+      {!sg.suggested_assigner_name && <span className="asgn-unmatched">unmatched</span>}
+    </span>
+  )
+}
+
 export default function MeetingDetail() {
   const { id } = useParams()
   const [m, setM] = useState<any>(null)
@@ -138,6 +175,7 @@ export default function MeetingDetail() {
         <div>
           <h1 style={{ fontSize: 22 }}>{m.title}</h1>
           <div className="muted row" style={{ fontSize: 13, flexWrap: 'wrap' }}>
+            <span className="src-tag">{sourceLabel(m)}</span>
             {(m.meeting_date || '').slice(0, 10)}
             {(m.detected_languages || []).length > 0 && <span>· Transcribed from</span>}
             <span className="tag-list">{(m.detected_languages || []).map((l: string) => <span key={l} className="lang-tag">{LANG_LABEL[l] || l}</span>)}</span>
@@ -173,8 +211,8 @@ export default function MeetingDetail() {
             {pending.length > 0 && (
               <div className="card section">
                 <div className="card-head spread">
-                  <h3 className="row" style={{ gap: 8 }}><span style={{ color: 'var(--primary)' }}><Ic name="ai" /></span> AI Suggested Tasks — Pending Review ({pending.length})</h3>
-                  <button className="btn btn-primary btn-sm" onClick={() => setReview(true)}>Review &amp; Assign Tasks</button>
+                  <h3 className="row" style={{ gap: 8 }}><span style={{ color: 'var(--primary)' }}><Ic name="ai" /></span> Tasks found in this {sourceLabel(m).toLowerCase()} — pending review ({pending.length})</h3>
+                  <button className="btn btn-primary btn-sm" onClick={() => setReview(true)}>Review &amp; Assign {sourceLabel(m)}</button>
                 </div>
                 <div className="card-pad grid" style={{ gap: 10 }}>
                   {pending.map((sg) => {
@@ -193,7 +231,10 @@ export default function MeetingDetail() {
                         </div>
                         <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
                           <ConfidenceScore score={sg.confidence} />
-                          <span className="muted" style={{ fontSize: 12.5 }}>{dueLabel(sg)}</span>
+                          {/* Beside "Asked by", a bare date could be when it was said;
+                              say what the date is. */}
+                          <span className="muted" style={{ fontSize: 12.5 }}>{(sg.due_date || sg.due_date_raw) && 'Due '}{dueLabel(sg)}</span>
+                          <Assigner sg={sg} />
                         </div>
                         <Evidence quote={sg.source_quote} reasoning={sg.assignee_reasoning} score={sg.confidence} ownerLabel={owner} />
                       </div>
@@ -337,6 +378,25 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
   const [bulkErr, setBulkErr] = useState('')
   const participants: any[] = meeting.participants || []
 
+  // The dropdown used to list only recorded attendees. When the transcript named
+  // somebody who was not on the attendee list -- which is every pasted transcript
+  // and any call somebody dialled into late -- the resolved assignee had no
+  // matching <option>, so the browser fell back to displaying "Unassigned" while
+  // the row underneath still carried their id. The reviewer was shown one thing
+  // and would have assigned another. Offer the whole org, as the task pages do.
+  const [assignable, setAssignable] = useState<any[]>(participants)
+  useEffect(() => {
+    api.get('/users')
+      .then((list: any[]) => {
+        const byId = new Map<string, any>()
+        for (const p of [...(list || []), ...participants]) if (p?.id) byId.set(p.id, p)
+        setAssignable([...byId.values()].sort((a, b) => (a.name || '').localeCompare(b.name || '')))
+      })
+      // An attendee-only list is worse than the full one but still correct for
+      // the common case, so a failed fetch must not empty the dropdown.
+      .catch(() => setAssignable(participants))
+  }, [meeting.id])
+
   // Only count what actually came back: a suggestion someone else assigned or
   // deleted while this manager was away is no longer in `pending`, and claiming
   // to have restored an edit to it would be a lie.
@@ -429,7 +489,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
     // people get notified (with per-person counts). Bulk assignment can't be undone.
     const byPerson = new Map<string, number>()
     for (const t of targets) {
-      const name = participants.find((p) => p.id === t.suggested_assignee_id)?.name || 'Unassigned'
+      const name = assignable.find((p: any) => p.id === t.suggested_assignee_id)?.name || 'Unassigned'
       byPerson.set(name, (byPerson.get(name) || 0) + 1)
     }
     const people = [...byPerson.entries()].map(([n, c]) => `${n} (${c})`).join(', ')
@@ -468,7 +528,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
   return (
     <div className="modal-center" onClick={onClose}>
       <div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Review and assign tasks" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 920, width: '94%' }}>
-        <div className="card-head spread"><h3>Review &amp; Assign Tasks</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
+        <div className="card-head spread"><h3>Review &amp; Assign {sourceLabel(meeting)}</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="card-pad grid" style={{ gap: 12, maxHeight: '70vh', overflow: 'auto' }}>
           {/* Say so out loud. A manager who was pulled into a call mid-review comes
               back expecting to start over, and silently restoring their edits would
@@ -525,10 +585,10 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
                   </div>
                   <div className="grid grid-3" style={{ gap: 8 }}>
                     <div>
-                      <label>Assignee</label>
+                      <label>Assignee{askedBy(r) ? <span className="asgn-inline"> · asked by {askedBy(r)}</span> : null}</label>
                       <select value={r.suggested_assignee_id || ''} onChange={(e) => set(i, { suggested_assignee_id: e.target.value || null })}>
                         <option value="">— Unassigned —</option>
-                        {participants.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        {assignable.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
                       </select>
                     </div>
                     <div><label>Priority</label><select value={r.priority} onChange={(e) => set(i, { priority: e.target.value, due_date: defaultDueDate(e.target.value) })}>{PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select></div>

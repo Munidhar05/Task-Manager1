@@ -131,6 +131,11 @@ const server = app.listen(PORT, () => {
   startScheduler()
   console.log('')
 })
+// Node gives a whole request — body included — 5 minutes by default, and a chat
+// file can be 1 GB: ~70 minutes on a 2 Mbps phone uplink. Render's own proxy
+// cuts requests at 100 minutes, so that, not Node, is the limit that matters.
+// A slow-headers attack is still cut off by headersTimeout (60 s).
+server.requestTimeout = 100 * 60 * 1000
 
 // RAG catch-up: on boot, index anything created while embeddings were off or the
 // server was down. Runs in the background (never blocks startup) and is cheap on

@@ -822,6 +822,16 @@ export function initSchema() {
   // auto-detected from the task text. NULL = Uncategorized. See categories.js.
   ensureColumn('tasks', 'category', 'TEXT')
   ensureColumn('suggested_tasks', 'category', 'TEXT')
+  // WHO ASSIGNED IT. Every extraction engine already works this out — the rule
+  // engine from the speaker of the sentence, the LLMs from the conversation —
+  // and `tasks` has carried assigned_by_name_raw all along. It was only the
+  // suggestion queue that had nowhere to put it, so the answer was computed and
+  // then dropped, and whoever happened to press Assign became the assigner.
+  ensureColumn('suggested_tasks', 'suggested_assigner_id', 'TEXT')
+  ensureColumn('suggested_tasks', 'suggested_assigner_raw', 'TEXT')
+  // 'audio' | 'video' for a meeting that came from a call, so the review screen
+  // can name what it is reviewing instead of calling everything a meeting.
+  ensureColumn('meetings', 'call_kind', 'TEXT')
   // What an API key is allowed to be: 'full' is a REST credential sent in an
   // Authorization header; 'mcp' is a Claude connector key, which by necessity
   // travels inside a URL and is therefore refused everywhere except /mcp. If a

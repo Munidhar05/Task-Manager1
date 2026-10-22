@@ -2,6 +2,7 @@ import { Router } from 'express'
 import multer from 'multer'
 import fs from 'node:fs'
 import path from 'node:path'
+import { pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
 import { authRequired, requireRole, verifyToken } from '../auth.js'
@@ -12,7 +13,7 @@ import { transcribeAudio } from '../ai/transcribe.js'
 import { analyzeMeetingTranscript } from '../ai/extractor.js'
 import { persistMeeting, attendeesFor, createTaskFromSuggestion } from './meetings.js'
 import { parseDueDate } from '../ai/dates.js'
-import { detectPriority } from '../ai/rules.js'
+import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
@@ -26,11 +27,92 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'data', 'chat_uploads')
 fs.mkdirSync(UPLOAD_DIR, { recursive: true })
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => cb(null, id('cf') + path.extname(file.originalname || '').slice(0, 12)),
-})
-const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } })
+const MB = 1024 * 1024
+// A file sent in a chat can be up to 1 GB. It streams straight to disk, so the
+// size costs disk and never memory.
+const CHAT_FILE_MAX = 1024 * MB
+// That disk also holds the SQLite database. A file that fills it does not just
+// fail to send — every later write in the app fails with it — so a file is only
+// let in if this much is still free once it lands.
+const DISK_HEADROOM = 200 * MB
+// Bytes promised to uploads still streaming in, so two big files that each fit
+// on their own cannot both be let into room only one of them has.
+let reserved = 0
+
+// multer's own diskStorage pipes the part into the file and stops there: a
+// sender who drops out mid-file leaves the write stream open and the half-file
+// on disk for good. At 1 GB over a phone connection that is the common case,
+// not the rare one, so this does the same job and closes and removes the scrap
+// when the request goes away unfinished.
+const storage = {
+  _handleFile(req, file, cb) {
+    const filename = id('cf') + path.extname(file.originalname || '').slice(0, 12)
+    const abs = path.join(UPLOAD_DIR, filename)
+    const out = fs.createWriteStream(abs)
+    const abandon = () => { if (!req.complete) out.destroy(new Error('Upload abandoned')) }
+    req.once('close', abandon)
+    pipeline(file.stream, out, (err) => {
+      req.off('close', abandon)
+      if (err) { fs.unlink(abs, () => {}); return cb(err) }
+      cb(null, { destination: UPLOAD_DIR, filename, path: abs, size: out.bytesWritten })
+    })
+  },
+  _removeFile(req, file, cb) { fs.unlink(file.path, () => cb(null)) },
+}
+// +1 because busboy counts reaching the limit as going over it, and a file of
+// exactly 1 GB is one the app says it takes.
+const upload = multer({ storage, limits: { fileSize: CHAT_FILE_MAX + 1 } })
+// A group photo and a piece of call audio keep the old ceiling: one is only
+// ever a picture, the other is read whole into memory to be transcribed.
+const smallUpload = multer({ storage, limits: { fileSize: 15 * MB } })
+
+const freeBytes = () => {
+  try { const s = fs.statfsSync(UPLOAD_DIR); return s.bavail * s.bsize } catch { return Infinity }
+}
+
+const TOO_BIG = 'File too large (max 1 GB)'
+const NO_ROOM = 'The server is out of storage space for a file this size'
+// [status, message] if this many bytes cannot come in right now, else null.
+// The MB of slack is the multipart wrapping around the file itself.
+const refusalFor = (len) => (len > CHAT_FILE_MAX + MB ? [413, TOO_BIG]
+  : len && freeBytes() - reserved - len < DISK_HEADROOM ? [507, NO_ROOM] : null)
+
+// The 1 GB route's way in. Content-Length is the whole form, so a file that is
+// over the limit, or that the disk has no room for, is turned away before a
+// byte of it is written, and the connection closed so the rest is not sent
+// for nothing. The sender's browser will not read that answer mid-upload — it
+// sees a dropped connection — which is why the app asks GET /upload-room
+// first. multer's own errors come back as a status, not the global 500.
+function receiveChatFile(req, res, next) {
+  const len = Number(req.headers['content-length']) || 0
+  const refuse = (status, error) => { if (!res.headersSent) res.status(status).set('Connection', 'close').json({ error }) }
+  const no = refusalFor(len)
+  if (no) return refuse(...no)
+  reserved += len
+  let gone = false
+  res.once('close', () => { reserved -= len; if (!res.writableFinished) gone = true })
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next()
+    if (gone) return // the sender left; storage has already removed the half-file
+    if (err.code === 'LIMIT_FILE_SIZE') return refuse(413, TOO_BIG)
+    if (err.code === 'ENOSPC') return refuse(507, NO_ROOM)
+    next(err)
+  })
+}
+
+// Transcription reads the whole recording into memory, and the providers cap
+// what they take anyway (Whisper: 25 MB) — the same ceiling as a meeting
+// upload. Now that a chat file can be 1 GB, an audio file that size has to be
+// turned away here rather than read onto a 512 MB instance.
+const TRANSCRIBE_MAX = 25 * MB
+function readForTranscription(abs) {
+  if (fs.statSync(abs).size > TRANSCRIBE_MAX) {
+    const err = new Error('This recording is over 25 MB, too long to turn into text.')
+    err.code = 'TOO_LARGE'
+    throw err
+  }
+  return fs.readFileSync(abs)
+}
 
 const r = Router()
 
@@ -307,7 +389,9 @@ function meetingCard(meetingId) {
   let counts = { decisions: 0, risks: 0, blockers: 0 }
   try {
     const s = JSON.parse(m.summary_json || '{}')
-    exec = String(s.executive_summary || '')
+    // Restated as on the Meetings page: an old rule-based summary says
+    // "3 assigned" about suggestions nobody had approved.
+    exec = restateRuleSummary(String(s.executive_summary || ''))
     counts = {
       decisions: (s.key_decisions || []).length,
       risks: (s.risks || []).length,
@@ -425,7 +509,11 @@ r.get('/file/:messageId', (req, res) => {
   if (m.file_type) res.type(m.file_type)
   const dl = req.query.download === '1' ? 'attachment' : 'inline'
   res.setHeader('Content-Disposition', `${dl}; filename="${encodeURIComponent(m.file_name || 'file')}"`)
-  fs.createReadStream(abs).pipe(res)
+  // sendFile, not a bare stream, for the Content-Length and byte ranges: a big
+  // video can be seeked, and a phone recording keeps its index at the end of
+  // the file — without ranges the player downloads all of it just to show its
+  // length. Dotfiles allowed because the path is ours, not the requester's.
+  res.sendFile(abs, { cacheControl: false, dotfiles: 'allow' })
 })
 
 // Group photo (token via header or ?token= for <img>).
@@ -625,7 +713,7 @@ r.post('/conversations/:id/remove', (req, res) => {
 })
 
 // Set a group photo (admin only, images only).
-r.post('/conversations/:id/avatar', upload.single('file'), (req, res) => {
+r.post('/conversations/:id/avatar', smallUpload.single('file'), (req, res) => {
   const cleanup = () => { if (req.file) try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)) } catch {} }
   const m = member(req.params.id, req.user.id)
   if (!m) { cleanup(); return res.status(404).json({ error: 'Not found' }) }
@@ -905,8 +993,18 @@ r.post('/conversations/:id/messages', (req, res) => {
   res.status(201).json(shapeMessage(row, me.id, receiptCtx(conv.id, me.id)))
 })
 
+// Asked before a big file is sent: would it be let in right now? The upload
+// route checks the same thing, but a browser reads no answer until it has
+// sent the whole body, so its refusal arrives as "connection lost" — this is
+// how a sender hears "no room" in a moment instead.
+r.get('/upload-room', (req, res) => {
+  const no = refusalFor(Number(req.query.size) || 0)
+  if (no) return res.status(no[0]).json({ error: no[1] })
+  res.json({ ok: true })
+})
+
 // Send a file (optional caption + replyTo).
-r.post('/conversations/:id/upload', upload.single('file'), (req, res) => {
+r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   const me = req.user
   const cleanup = () => { if (req.file) try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)) } catch {} }
   if (!member(req.params.id, me.id)) { cleanup(); return res.status(404).json({ error: 'Conversation not found' }) }
@@ -979,9 +1077,13 @@ r.post('/message/:id/forward', (req, res) => {
     if (!conv || !canPost(conv, me.id)) continue
     let storedName = null
     if (src.file_stored) {
-      // copy the file so deleting one message doesn't affect the other
+      // A name of its own so deleting one message doesn't affect the other —
+      // as a hard link, not a copy: copying a 1 GB file would stall the whole
+      // server while it ran and spend another 1 GB of disk per chat it went to.
+      // Unlinking one name leaves the other's bytes where they are.
       storedName = id('cf') + path.extname(src.file_stored)
-      try { fs.copyFileSync(path.join(UPLOAD_DIR, src.file_stored), path.join(UPLOAD_DIR, storedName)) } catch { storedName = null }
+      const from = path.join(UPLOAD_DIR, src.file_stored), to = path.join(UPLOAD_DIR, storedName)
+      try { fs.linkSync(from, to) } catch { try { fs.copyFileSync(from, to) } catch { storedName = null } }
     }
     const mid = id('msg')
     const ts = now()
@@ -1381,7 +1483,7 @@ r.post('/call/:id/segment', (req, res) => {
 // speech provider key — without one this says so and the call is summarised
 // from whoever's browser could listen.
 const pendingAudio = new Map()
-r.post('/call/:id/audio', upload.single('file'), async (req, res) => {
+r.post('/call/:id/audio', smallUpload.single('file'), async (req, res) => {
   const me = req.user
   const drop = () => { if (req.file) try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)) } catch {} }
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
@@ -1456,7 +1558,7 @@ async function summariseCall(call, actorId, { autoAssign }) {
     meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
   })
   const { mid, suggestionCount } = persistMeeting(
-    { orgId: call.org_id, userId: actorId, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds: pool },
+    { orgId: call.org_id, userId: actorId, title, description: `Transcribed live from ${call.kind === 'audio' ? 'an' : 'a'} ${call.kind} call.`, meetingDate, transcript, sourceType: 'call', participantIds: pool, callKind: call.kind === 'video' ? 'video' : 'audio' },
     analysis)
   // These utterances are now a meeting with a transcript of their own, so
   // drop them. Recording a SECOND stretch of the same call would otherwise
@@ -1731,7 +1833,7 @@ r.post('/task-draft', async (req, res) => {
     // on the message, so this happens at most once per note.
     if (!text.trim() && isVoice) {
       try {
-        const buf = fs.readFileSync(path.join(UPLOAD_DIR, m.file_stored))
+        const buf = readForTranscription(path.join(UPLOAD_DIR, m.file_stored))
         const out = await transcribeAudio(buf, m.file_name || 'voice.webm', m.file_type || 'audio/webm')
         const clean = String(out.text || '').trim()
         if (clean) {
@@ -1740,7 +1842,9 @@ r.post('/task-draft', async (req, res) => {
           text = clean
         }
       } catch (err) {
-        return res.status(422).json({
+        // Too long to transcribe ever: it is a bare attachment, and gets its
+        // file name as the title below, like any other.
+        if (err.code !== 'TOO_LARGE') return res.status(422).json({
           error: 'This voice note has no text yet, so there is nothing to build a task from. Play it and press "Read it as text" first, or set a speech provider on the server.',
           code: 'NO_TRANSCRIPT',
         })
@@ -2105,7 +2209,7 @@ r.post('/message/:id/transcribe', async (req, res) => {
   const notePath = path.join(UPLOAD_DIR, m.file_stored)
   if (!fs.existsSync(notePath)) return res.status(410).json({ error: 'The audio for this voice note is no longer on the server, so it cannot be transcribed.', code: 'FILE_MISSING' })
   try {
-    const buf = fs.readFileSync(notePath)
+    const buf = readForTranscription(notePath)
     const { text } = await transcribeAudio(buf, m.file_name || 'voice.webm', m.file_type || 'audio/webm')
     const clean = String(text || '').trim()
     if (!clean) return res.status(422).json({ error: 'Nothing could be made out in that recording' })
@@ -2114,7 +2218,7 @@ r.post('/message/:id/transcribe', async (req, res) => {
     res.json({ text: clean, cached: false })
   } catch (err) {
     console.error('[chat] voice transcription failed:', err.message)
-    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+    res.status(err.code === 'NO_PROVIDER' ? 400 : err.code === 'TOO_LARGE' ? 413 : 502).json({ error: err.message, code: err.code || null })
   }
 })
 
@@ -2140,7 +2244,7 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
     // as the meetings upload route).
     const recPath = path.join(UPLOAD_DIR, m.file_stored)
     if (!fs.existsSync(recPath)) return res.status(410).json({ error: 'The recording is no longer on the server, so it cannot be summarised.', code: 'FILE_MISSING' })
-    const buf = fs.readFileSync(recPath)
+    const buf = readForTranscription(recPath)
     const provider = process.env.OPENAI_API_KEY ? 'openai' : undefined
     const { text } = await transcribeAudio(buf, m.file_name || 'call.webm', m.file_type || 'audio/webm', { provider })
     const transcript = String(text || '').trim()
@@ -2154,8 +2258,24 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
       meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: 'en',
     })
     const title = conv?.type === 'group' ? `Call — ${conv.name || 'Group'}` : `Call with ${attendees.filter((a) => a.id !== me.id)[0]?.name || 'a teammate'}`
+    // Audio or video, for the review screen's heading. Only the app's own call
+    // recordings (older CallCenters posted them as call-recording-HHMM) can say,
+    // and the upload carries no call id, so the call is matched by time: the one
+    // call in this chat the recorder was on, with the recording posted between
+    // its start and fifteen minutes after its end. Two candidates is a guess, and
+    // a guess would name the wrong kind of call, so it is then left unnamed.
+    let callKind = null
+    if (/^call-recording/i.test(m.file_name || '')) {
+      const hits = db.prepare(`
+        SELECT k.kind FROM chat_calls k
+        JOIN chat_call_participants p ON p.call_id=k.id AND p.user_id=?
+        WHERE k.conversation_id=? AND k.org_id=?
+          AND julianday(?) BETWEEN julianday(k.started_at) AND julianday(COALESCE(k.ended_at, ?)) + 15.0/1440
+        LIMIT 2`).all(m.sender_id, m.conversation_id, me.org_id, m.created_at, m.created_at)
+      if (hits.length === 1) callKind = hits[0].kind === 'video' ? 'video' : 'audio'
+    }
     const { mid, suggestionCount } = persistMeeting(
-      { orgId: me.org_id, userId: me.id, title, description: 'Transcribed from a recording in the chat.', meetingDate, transcript, sourceType: 'call', participantIds },
+      { orgId: me.org_id, userId: me.id, title, description: 'Transcribed from a recording in the chat.', meetingDate, transcript, sourceType: 'call', participantIds, callKind },
       analysis)
 
     // Point the recording at its summary, and drop the audit card in the thread.
@@ -2170,7 +2290,7 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
     res.status(201).json({ id: mid, suggestion_count: suggestionCount, engine: analysis.engine })
   } catch (err) {
     console.error('[chat] recording -> meeting failed:', err.message)
-    res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
+    res.status(err.code === 'NO_PROVIDER' ? 400 : err.code === 'TOO_LARGE' ? 413 : 502).json({ error: err.message, code: err.code || null })
   }
 })
 

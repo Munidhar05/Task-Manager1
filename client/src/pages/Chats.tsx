@@ -29,7 +29,7 @@ import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPi
 import MediaViewer from '../components/chat/MediaViewer'
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
-const MAX_FILE = 15 * 1024 * 1024
+const MAX_FILE = 1024 * 1024 * 1024 // 1 GB — the server's limit for a chat file
 
 // ---- selecting a message on a touch screen (see selectMessage) ----
 // How long a finger has to stay put for a press to become a long-press. Under
@@ -1051,7 +1051,7 @@ export default function Chats() {
     if (!files.length || !activeIdRef.current) return
     if (editing) { toast.info('Finish editing the message first'); return }
     const tooBig = files.filter((f) => f.size > MAX_FILE)
-    if (tooBig.length) toast.error(tooBig.length === 1 ? `"${tooBig[0].name}" is over 15 MB, too big to send` : `${tooBig.length} files are over 15 MB, too big to send`)
+    if (tooBig.length) toast.error(tooBig.length === 1 ? `"${tooBig[0].name}" is over 1 GB, too big to send` : `${tooBig.length} files are over 1 GB, too big to send`)
     let ok = files.filter((f) => f.size > 0 && f.size <= MAX_FILE)
     const room = MAX_STAGED - stagedRef.current.length
     if (ok.length > room) { toast.info(`Up to ${MAX_STAGED} files at a time`); ok = ok.slice(0, Math.max(0, room)) }
@@ -1073,18 +1073,41 @@ export default function Chats() {
   useEffect(() => () => stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [])
 
   // One file to the thread, with an optimistic "Sending…" line until it lands.
+  // XHR rather than fetch for the upload progress: a file can be 1 GB, minutes
+  // on a phone, and a "Sending…" line that never moves reads as stuck.
   const uploadOne = async (conv: Conversation, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
     const tmpId = 'tmp_' + Date.now() + Math.random().toString(36).slice(2, 6)
     setMessages((m) => [...m, { id: tmpId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }])
     try {
+      // A big file asks first whether the server has room for it: a refusal
+      // sent mid-upload never reaches us (the browser reads no answer until it
+      // has sent everything) and would surface as a dropped connection.
+      if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
       const form = new FormData(); form.append('file', file)
       if (caption) form.append('body', caption)
       if (rep) form.append('replyTo', rep.id)
       if (capMentions.length) form.append('mentions', JSON.stringify(capMentions))
-      const headers: Record<string, string> = {}; const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`${API_BASE}/api/chat/conversations/${conv.id}/upload`, { method: 'POST', headers, body: form })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data?.error || 'Upload failed')
+      const data = await new Promise<Msg>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', `${API_BASE}/api/chat/conversations/${conv.id}/upload`)
+        const t = getToken(); if (t) xhr.setRequestHeader('authorization', `Bearer ${t}`)
+        let shown = -1
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return
+          const pct = Math.floor((e.loaded / e.total) * 100)
+          if (pct === shown) return
+          shown = pct
+          setMessages((prev) => prev.map((x) => (x.id === tmpId ? { ...x, progress: pct } : x)))
+        }
+        xhr.onload = () => {
+          let body: any = null
+          try { body = JSON.parse(xhr.responseText) } catch {}
+          if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body)
+          else reject(new Error(body?.error || `Upload failed (${xhr.status})`))
+        }
+        xhr.onerror = () => reject(new Error('the connection was lost'))
+        xhr.send(form)
+      })
       setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x)))
       return true
     } catch (err: any) {
@@ -2673,7 +2696,7 @@ export default function Chats() {
                               ? <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
                               : <div className="chat-file">
                                   <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <DocGlyph size={20} />}</span>
-                                  <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? 'Sending…' : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
+                                  <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
                                   {!m.uploading && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
                                 </div>)}
                           {!m.file && !m.kind && !isTemp && /https?:\/\//i.test(body) && <LinkPreview messageId={m.id} version={m.edited_at || ''} />}

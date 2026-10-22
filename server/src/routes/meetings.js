@@ -4,12 +4,24 @@ import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify, dueDateForPriority } from '../util.js'
 import { analyzeMeetingTranscript, resolveUser, resolveUserAmong } from '../ai/extractor.js'
+import { restateRuleSummary } from '../ai/rules.js'
 import { resolveCategory, normalizeCategory } from '../categories.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 import { indexMeeting, indexTask, removeMeetingEmbeddings } from '../ai/ragIndex.js'
 import { recordUsage, estimateTokens } from '../ai/usage.js'
 
 const r = Router()
+
+// Rule-based summaries stored before the wording fix say "3 assigned" for
+// suggestions nobody had approved. They are restated when read, here exactly as
+// on the call's summary card in the chat, so the two never disagree; the stored
+// rows stay as they were.
+function readSummary(json) {
+  let s = {}
+  try { s = JSON.parse(json || '{}') || {} } catch { s = {} }
+  if (typeof s.executive_summary === 'string') s.executive_summary = restateRuleSummary(s.executive_summary)
+  return s
+}
 r.use(authRequired)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } })
 
@@ -74,13 +86,23 @@ function createTaskFromSuggestion(s, { orgId, actorId, notifyAssignee = true }) 
   const priority = s.priority || 'Medium'
   // Auto-fill the due date from priority when the AI didn't capture a deadline.
   const dueDate = s.due_date || dueDateForPriority(priority)
+  // The assigner is whoever ASKED for the work, not whoever pressed the button.
+  // Falling back to actorId keeps hand-added suggestions sane — there the person
+  // adding it really is the one assigning. So does a volunteer's own "I'll do
+  // it": as their own assigner the task would read as one they raised for
+  // themselves, which they may close or bin with no manager sign-off
+  // (isOwnSelfCreated in tasks.js), and work that came out of a reviewed meeting
+  // keeps the approval flow.
+  const volunteered = !!s.suggested_assigner_id && s.suggested_assigner_id === s.suggested_assignee_id
+  const assignerId = s.suggested_assigner_id && !volunteered ? s.suggested_assigner_id : actorId
+  const assignerRaw = volunteered ? null : s.suggested_assigner_raw || null
   db.prepare(`INSERT INTO tasks
     (id, org_id, title, description, assignee_id, assignee_name_raw, assigned_by_id, assigned_by_name_raw,
      due_date, due_date_raw, priority, status, meeting_id, ownership_confidence, progress, approval_status, source_quote,
      category, assigned_at, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     tid, orgId, s.title, s.description || s.title, s.suggested_assignee_id || null, s.suggested_assignee_raw || null,
-    actorId, null, dueDate, s.due_date_raw || null,
+    assignerId, assignerRaw, dueDate, s.due_date_raw || null,
     priority, 'To Do', s.meeting_id, s.suggested_assignee_id ? 'high' : 'needs_confirmation', 0, 'none',
     s.source_quote || null, s.category || null, s.suggested_assignee_id ? now() : null, now(), now())
   db.prepare("UPDATE suggested_tasks SET status='approved', created_task_id=?, updated_at=? WHERE id=?").run(tid, now(), s.id)
@@ -95,14 +117,15 @@ function createTaskFromSuggestion(s, { orgId, actorId, notifyAssignee = true }) 
 // PENDING SUGGESTIONS for manager review (they are not assigned yet).
 // opts.autoApprove (used by the seed) immediately assigns them so demo
 // dashboards stay populated.
-function persistMeeting({ orgId, userId, title, description, meetingDate, transcript, sourceType, audioFilename, participantIds = [] }, analysis, opts = {}) {
+// callKind: 'audio' | 'video' when the meeting is a call, NULL otherwise.
+function persistMeeting({ orgId, userId, title, description, meetingDate, transcript, sourceType, audioFilename, participantIds = [], callKind = null }, analysis, opts = {}) {
   const mid = id('mtg')
   db.prepare(`INSERT INTO meetings
-    (id, org_id, title, description, meeting_date, uploaded_by, source_type, audio_filename, raw_transcript, detected_languages, status, summary_json, engine, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    (id, org_id, title, description, meeting_date, uploaded_by, source_type, audio_filename, raw_transcript, detected_languages, status, summary_json, engine, call_kind, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     mid, orgId, title, description || '', meetingDate, userId, sourceType || 'transcript', audioFilename || null,
     transcript, JSON.stringify(filterLanguages(analysis.detected_languages)), 'processed',
-    JSON.stringify(analysis.summary || {}), analysis.engine || 'rule-based', now())
+    JSON.stringify(analysis.summary || {}), analysis.engine || 'rule-based', callKind, now())
 
   // Attendees — only these users can be suggested as task owners.
   const attendeeIds = []
@@ -125,6 +148,12 @@ function persistMeeting({ orgId, userId, title, description, meetingDate, transc
   let suggestionCount = 0
   for (const t of analysis.tasks || []) {
     const assignee = resolveUserAmong(orgId, t.assignee_name_raw, attendeeIds)
+    // Deliberately resolved across the ORG, not just attendees: in a recorded
+    // call the speaker labels come from the participants' own accounts, but a
+    // pasted transcript can name a manager who was in the room and not in the
+    // meeting record. Being wrong about who asked is less damaging than being
+    // silent about it, and the UI shows the raw name when it cannot resolve.
+    const assigner = t.assigned_by_name_raw ? resolveUser(orgId, t.assigned_by_name_raw) : null
     const key = (t.title || '').toLowerCase().trim() + '|' + (assignee?.id || '')
     if (seen.has(key)) continue
     seen.add(key)
@@ -133,10 +162,13 @@ function persistMeeting({ orgId, userId, title, description, meetingDate, transc
     const category = resolveCategory({ text: `${t.title} ${t.description || ''} ${t.source_quote || ''}`, aiSuggested: t.category, orgId })
     db.prepare(`INSERT INTO suggested_tasks
       (id, meeting_id, org_id, title, description, suggested_assignee_id, suggested_assignee_raw, assignee_reasoning,
+       suggested_assigner_id, suggested_assigner_raw,
        confidence, priority, due_date, due_date_raw, source_quote, category, status, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id('sug'), mid, orgId, t.title, t.description || t.title, assignee?.id || null, t.assignee_name_raw || null,
-      t.assignee_reasoning || null, conf, t.priority || 'Medium', t.due_date || null, t.due_date_raw || null,
+      t.assignee_reasoning || null,
+      assigner?.id || null, t.assigned_by_name_raw || null,
+      conf, t.priority || 'Medium', t.due_date || null, t.due_date_raw || null,
       t.source_quote || null, category, 'pending', now(), now())
     suggestionCount++
   }
@@ -166,7 +198,7 @@ r.get('/', (req, res) => {
     FROM meetings m WHERE m.org_id=? AND m.status<>'recording'
     ORDER BY m.meeting_date DESC, m.created_at DESC
   `).all(req.user.org_id)
-  res.json(rows.map((m) => ({ ...m, detected_languages: JSON.parse(m.detected_languages || '[]'), summary: JSON.parse(m.summary_json || '{}') })))
+  res.json(rows.map((m) => ({ ...m, detected_languages: JSON.parse(m.detected_languages || '[]'), summary: readSummary(m.summary_json) })))
 })
 
 // ---------------------------------------------------------------------------
@@ -271,12 +303,17 @@ r.get('/:id', (req, res) => {
   const tasks = db.prepare(`SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.meeting_id=? ORDER BY t.created_at`).all(m.id)
   const participants = db.prepare(`SELECT u.id, u.name, u.avatar_color, u.role, u.department_id
     FROM meeting_participants p JOIN users u ON u.id=p.user_id WHERE p.meeting_id=? ORDER BY u.name`).all(m.id)
-  const suggestions = db.prepare(`SELECT s.*, u.name AS suggested_assignee_name, u.avatar_color AS suggested_assignee_color
-    FROM suggested_tasks s LEFT JOIN users u ON u.id=s.suggested_assignee_id WHERE s.meeting_id=? ORDER BY s.created_at`).all(m.id)
+  const suggestions = db.prepare(`SELECT s.*,
+      u.name AS suggested_assignee_name, u.avatar_color AS suggested_assignee_color,
+      a.name AS suggested_assigner_name, a.avatar_color AS suggested_assigner_color
+    FROM suggested_tasks s
+    LEFT JOIN users u ON u.id=s.suggested_assignee_id
+    LEFT JOIN users a ON a.id=s.suggested_assigner_id
+    WHERE s.meeting_id=? ORDER BY s.created_at`).all(m.id)
   res.json({
     ...m,
     detected_languages: JSON.parse(m.detected_languages || '[]'),
-    summary: JSON.parse(m.summary_json || '{}'),
+    summary: readSummary(m.summary_json),
     segments, tasks, participants, suggestions,
   })
 })

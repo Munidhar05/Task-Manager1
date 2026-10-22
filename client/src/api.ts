@@ -72,6 +72,10 @@ export interface Suggestion {
   id: string; meeting_id: string; title: string; description?: string
   suggested_assignee_id?: string | null; suggested_assignee_name?: string | null; suggested_assignee_color?: string | null
   suggested_assignee_raw?: string | null; assignee_reasoning?: string | null
+  // Who ASKED for the work, as heard in the transcript -- resolved to an
+  // account where the spoken name matched one, raw otherwise.
+  suggested_assigner_id?: string | null; suggested_assigner_name?: string | null
+  suggested_assigner_color?: string | null; suggested_assigner_raw?: string | null
   confidence: number; priority: string; due_date?: string | null; due_date_raw?: string | null
   source_quote?: string | null; status: 'pending' | 'approved' | 'rejected' | 'merged'; created_task_id?: string | null
 }
