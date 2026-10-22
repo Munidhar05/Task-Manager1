@@ -18,7 +18,7 @@ import { useSurface } from '../voice/uiRegistry'
 import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiController'
 import TaskDrawer from '../components/TaskDrawer'
 import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, LocationRef, Poll } from '../components/chat/types'
-import { fileUrl, isAudio, isEditable, isForwardable, isRecordLine } from '../components/chat/types'
+import { fileUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
 import {
   CopyGlyph, Ticks, PollGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
   ArchiveGlyph, InfoGlyph, SelectGlyph, ExportGlyph, PencilGlyph, ChevronDown, DotsV, SparkGlyph,
@@ -2009,7 +2009,7 @@ export default function Chats() {
 
   const clearChat = async (c: Conversation) => {
     setConvoMenu(null)
-    if (!(await confirmDialog({ title: 'Clear chat', message: 'Clear all messages in this chat? This only clears them for you.', confirmText: 'Clear' }))) return
+    if (!(await confirmDialog({ title: 'Clear chat', message: 'Clear all messages in this chat? This only clears them for you.', confirmText: 'Clear chat', danger: true }))) return
     try { await api.post(`/chat/conversations/${c.id}/clear`); if (c.id === activeId) setMessages([]); loadConvos() }
     catch (e: any) { toast.error('Could not clear: ' + e.message) }
   }
@@ -2181,7 +2181,7 @@ export default function Chats() {
     ? `No chats match “${search.trim()}”`
     : showArchived ? 'No archived chats' : LIST_TABS.find((t) => t.id === listTab)!.empty
   // Every photo and video loaded in the thread, oldest first: what the viewer steps through.
-  const mediaMsgs = messages.filter((m) => !m.deleted && !m.uploading && !!m.file && ((m.file.type || '').startsWith('image/') || (m.file.type || '').startsWith('video/')))
+  const mediaMsgs = messages.filter((m) => !m.deleted && !m.uploading && !!m.file && ((m.file.type || '').startsWith('image/') || isVideo(m.file)))
   // The person a direct chat is with, and what they are holding (for the header chip).
   const peerLoad = active?.type === 'direct' && active.other_user_id ? workload[active.other_user_id] : undefined
   const reactionsMsg = reactionsOf ? messages.find((x) => x.id === reactionsOf) || null : null
@@ -2576,7 +2576,6 @@ export default function Chats() {
               const mine = m.sender_id === user!.id
               const isTemp = m.id.startsWith('tmp_')
               const isImage = !!m.file && (m.file.type || '').startsWith('image/')
-              const isVideo = !!m.file && (m.file.type || '').startsWith('video/')
               const isCard = !!m.kind && !m.deleted
               const showSender = active?.type === 'group' && !mine && !m.deleted
               // A message that names me gets an accent stripe — in a busy group,
@@ -2692,7 +2691,7 @@ export default function Chats() {
                             ? <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
                                 <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
                               </button>
-                            : isVideo && !m.uploading
+                            : isVideo(m.file) && !m.uploading
                               ? <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
                               : <div className="chat-file">
                                   <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <DocGlyph size={20} />}</span>
@@ -3781,7 +3780,6 @@ interface LinkItem { id: string; url: string; host: string; sender_id: string; s
 type SharedFile = Msg & { sender_name: string }
 
 const isImageFile = (f?: ChatFile | null) => !!f && (f.type || '').startsWith('image/')
-const isVideoFile = (f?: ChatFile | null) => !!f && (f.type || '').startsWith('video/')
 const fileExt = (name?: string) => (/\.([a-z0-9]{1,5})$/i.exec(name || '')?.[1] || 'FILE').toUpperCase()
 // A link's tile colour, the same for every link to the same site.
 const LINK_HUES = ['#2563eb', '#16a34a', '#7c3aed', '#d97706', '#0891b2', '#db2777']
@@ -3864,8 +3862,8 @@ function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManage
     if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.querySelector<HTMLElement>('.ci-head .ic-btn')?.focus()
   }, [view])
 
-  const media = (files || []).filter((m) => isImageFile(m.file) || isVideoFile(m.file))
-  const docs = (files || []).filter((m) => !isImageFile(m.file) && !isVideoFile(m.file))
+  const media = (files || []).filter((m) => isImageFile(m.file) || isVideo(m.file))
+  const docs = (files || []).filter((m) => !isImageFile(m.file) && !isVideo(m.file))
   const linkList = links || []
   const loaded = files !== null && links !== null
   const counts: Record<InfoTab, number> = { media: media.length, docs: docs.length, links: linkList.length }
@@ -3956,7 +3954,7 @@ function InfoPanel({ conv, user, view, setView, online, lastSeen, load, isManage
     return (
       <a key={m.id} className={'ci-tile' + (it.kind === 'doc' ? ' ci-tile-doc' : '')} href={fileUrl(m)} target="_blank" rel="noreferrer" title={m.file?.name}>
         {isImageFile(m.file) ? <img src={fileUrl(m)} alt={m.file?.name || 'Photo'} loading="lazy" />
-          : isVideoFile(m.file) ? <span className="ci-tile-play" aria-hidden="true">▶</span>
+          : isVideo(m.file) ? <span className="ci-tile-play" aria-hidden="true">▶</span>
             : isAudio(m.file) ? <Ic name="mic" size={20} />
               : <span className="ci-tile-ext">{fileExt(m.file?.name)}</span>}
       </a>

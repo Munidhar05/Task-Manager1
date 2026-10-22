@@ -496,6 +496,12 @@ function summarizeConvo(conv, viewerId) {
 }
 
 // ---------- file download (token in header OR ?token= so <img>/<a> work) ----------
+// An attachment is served from the app's own origin, so an HTML or SVG file
+// opened inline would run its scripts with the viewer's session. Those get a
+// sandbox CSP, which renders them script-less in an opaque origin; images,
+// video, audio and PDFs never match and are untouched by it.
+const ACTIVE_TYPE = /^(text\/html|application\/xhtml\+xml|image\/svg\+xml|text\/xml|application\/xml|text\/javascript|application\/(x-)?javascript)\b/i
+const ACTIVE_EXT = /\.(html?|xht|xhtml|svgz?|xml|xsl|js|mjs)$/i
 r.get('/file/:messageId', (req, res) => {
   const user = (req.headers.authorization || '').startsWith('Bearer ')
     ? verifyToken(req.headers.authorization.slice(7))
@@ -506,14 +512,36 @@ r.get('/file/:messageId', (req, res) => {
   if (!member(m.conversation_id, user.id)) return res.status(403).json({ error: 'Forbidden' })
   const abs = path.join(UPLOAD_DIR, m.file_stored)
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
-  if (m.file_type) res.type(m.file_type)
+  // The declared type wins (send never overrides a Content-Type that is
+  // already set), except the generic octet-stream: then send names the type
+  // from the stored extension — the same fallback the thread's isVideo uses —
+  // so a photo picked as "a file" still displays and a clip still plays.
+  if (m.file_type && !/^application\/octet-stream\b/i.test(m.file_type)) res.type(m.file_type)
   const dl = req.query.download === '1' ? 'attachment' : 'inline'
   res.setHeader('Content-Disposition', `${dl}; filename="${encodeURIComponent(m.file_name || 'file')}"`)
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  if (ACTIVE_TYPE.test(m.file_type || '') || ACTIVE_EXT.test(m.file_stored)) {
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
+  }
   // sendFile, not a bare stream, for the Content-Length and byte ranges: a big
   // video can be seeked, and a phone recording keeps its index at the end of
   // the file — without ranges the player downloads all of it just to show its
   // length. Dotfiles allowed because the path is ours, not the requester's.
-  res.sendFile(abs, { cacheControl: false, dotfiles: 'allow' })
+  res.sendFile(abs, { cacheControl: false, dotfiles: 'allow' }, (err) => {
+    // Nothing to fix once the headers are out, or when the viewer went away
+    // mid-transfer — which a seeking <video> does all the time.
+    if (!err || res.headersSent || err.code === 'ECONNABORTED') return
+    // send had already set the file's headers when it hit the error, and none
+    // of them describe what goes out instead.
+    for (const h of ['Content-Type', 'Content-Disposition', 'ETag', 'Last-Modified', 'Accept-Ranges', 'Content-Security-Policy']) res.removeHeader(h)
+    res.setHeader('Cache-Control', 'no-store')
+    // A range past the end of the file, or a failed If-Match: answer with the
+    // status send chose (it has already set Content-Range for a 416).
+    const status = err.status || err.statusCode
+    if (status === 416 || status === 412) return res.status(status).end()
+    res.status(404).json({ error: 'File missing' })
+  })
 })
 
 // Group photo (token via header or ?token= for <img>).

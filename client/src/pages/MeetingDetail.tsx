@@ -525,11 +525,14 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
   const noOwnerCount = rows.filter((r) => r._status === 'pending' && !r.suggested_assignee_id).length
   const dialogRef = useDialog<HTMLDivElement>(onClose)
 
+  // Sized by the rv-* rules in styles.css, not inline: the heading and the footer
+  // with the bulk action stay put while only the task list scrolls, and on a
+  // phone the whole thing becomes a full-screen sheet.
   return (
-    <div className="modal-center" onClick={onClose}>
-      <div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Review and assign tasks" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 920, width: '94%' }}>
-        <div className="card-head spread"><h3>Review &amp; Assign {sourceLabel(meeting)}</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
-        <div className="card-pad grid" style={{ gap: 12, maxHeight: '70vh', overflow: 'auto' }}>
+    <div className="modal-center rv-center" onClick={onClose}>
+      <div className="modal rv-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Review and assign tasks" onClick={(e) => e.stopPropagation()}>
+        <div className="card-head spread rv-head"><h3>Review &amp; Assign {sourceLabel(meeting)}</h3><button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button></div>
+        <div className="card-pad grid rv-list" style={{ gap: 12 }}>
           {/* Say so out loud. A manager who was pulled into a call mid-review comes
               back expecting to start over, and silently restoring their edits would
               leave them re-checking every row to work out what the AI said and what
@@ -619,7 +622,7 @@ function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { meeting: 
             )
           })}
         </div>
-        <div className="card-pad spread" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="card-pad spread rv-foot">
           <div className="muted" style={{ fontSize: 12.5 }}>
             {assignedCount} assigned · {remaining} left{noOwnerCount ? ` · ${noOwnerCount} need an owner` : ''}
             {bulkErr && <span style={{ color: 'var(--danger-ink)', marginLeft: 8 }}>{bulkErr}</span>}

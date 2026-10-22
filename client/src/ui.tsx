@@ -163,16 +163,29 @@ export function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaEle
   )
 }
 
+// Two initials, except that a number after the first word is kept whole:
+// "Employee 1" and "Employee 10" are different people, and both used to read
+// "E1". Up to three digits fit the circle. A longer number gets the first letter
+// alone, because cut short ("E1" for Employee 1000) it would name someone else.
+function initialsOf(name?: string) {
+  const words = (name || '?').split(' ')
+  if (words[0] && /^\d+$/.test(words[1] || '')) return (words[0][0] + (words[1].length <= 3 ? words[1] : '')).toUpperCase()
+  return words.map((n) => n[0]).slice(0, 2).join('').toUpperCase()
+}
+
 export function Avatar({ name, color, size = 28, src }: { name?: string; color?: string; size?: number; src?: string | null }) {
   const [broken, setBroken] = useState(false)
   useEffect(() => { setBroken(false) }, [src]) // a new image URL should retry, not stay fallen-back
-  const initials = (name || '?').split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase()
+  const initials = initialsOf(name)
   if (src && !broken) {
     return <img className="avatar" src={src} alt={name || ''} onError={() => setBroken(true)}
       style={{ width: size, height: size, objectFit: 'cover' }} />
   }
+  // "E10" and "E100" are wider than two letters: a step smaller keeps them
+  // inside the circle at every size, down to the 16px faces.
+  const scale = initials.length > 3 ? 0.28 : initials.length > 2 ? 0.34 : 0.4
   return (
-    <span className="avatar" style={{ background: color || '#ea580c', width: size, height: size, fontSize: size * 0.4 }}>
+    <span className="avatar" style={{ background: color || '#ea580c', width: size, height: size, fontSize: size * scale }}>
       {initials}
     </span>
   )
@@ -338,15 +351,38 @@ export function defaultDueDate(priority: string): string {
   const days = DUE_DAYS_BY_PRIORITY[priority] ?? 3
   const d = new Date()
   d.setDate(d.getDate() + days)
-  const y = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, '0'), da = String(d.getDate()).padStart(2, '0')
-  return `${y}-${mo}-${da}`
+  return localDateKey(d)
 }
 
+// 'YYYY-MM-DD' on the viewer's own calendar. A due date is a day, not an
+// instant: toISOString() would give the UTC day, which in India is still
+// yesterday until 5:30 in the morning.
+function localDateKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// A stored due date as that same local day. new Date('2026-10-02') is UTC
+// midnight, which west of Greenwich is still the 1st; an impossible date
+// ('2026-02-31') gives null rather than rolling over into March.
+function dueDay(s: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s)
+  if (!m) return null
+  const d = new Date(+m[1], +m[2] - 1, +m[3])
+  return d.getMonth() === +m[2] - 1 && d.getDate() === +m[3] ? d : null
+}
+
+// "Fri, 2 Oct" in the viewer's own date order, with the year only when it is
+// not this one. The stored date stays in the tooltip. Its spaces don't break: in
+// a narrow column the date stays one line and only "(overdue)" wraps below it.
 export function dueLabel(t: { due_date?: string | null; due_date_raw?: string | null }) {
   if (t.due_date) {
-    const today = new Date().toISOString().slice(0, 10)
-    const overdue = t.due_date < today
-    return <span style={{ color: overdue ? 'var(--danger-ink)' : 'inherit', fontWeight: overdue ? 600 : 400 }}>{t.due_date}{overdue ? <span className="due-overdue"> (overdue)</span> : ''}</span>
+    const now = new Date()
+    const day = dueDay(t.due_date)
+    const overdue = (day ? localDateKey(day) : t.due_date) < localDateKey(now)
+    const text = day
+      ? day.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: day.getFullYear() === now.getFullYear() ? undefined : 'numeric' }).replace(/ /g, ' ')
+      : t.due_date
+    return <span title={t.due_date} style={{ color: overdue ? 'var(--danger-ink)' : 'inherit', fontWeight: overdue ? 600 : 400 }}>{text}{overdue ? <span className="due-overdue"> (overdue)</span> : ''}</span>
   }
   if (t.due_date_raw) return <span style={{ fontStyle: 'italic', color: 'var(--muted)' }}>“{t.due_date_raw}”</span>
   return <span style={{ color: 'var(--n-400)' }}>—</span>
