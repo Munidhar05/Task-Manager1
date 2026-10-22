@@ -505,7 +505,7 @@ Handles authentication and account lifecycle: self-serve signup (which provision
 
 ### routes/chat.js
 
-Implements an internal WhatsApp-style team chat: 1:1 and group conversations, file attachments (via multer, 15 MB cap, stored on disk in `data/chat_uploads`), real-time delivery over WebSockets (`pushToUser`/`pushToConversation`), replies, reactions, stars, edits, per-message deletes, read receipts, mute/pin, and RAG indexing of messages. The two file-serving routes are declared **before** `r.use(authRequired)` because they must accept a token via query string (so `<img>`/`<a>` can load them); all other routes require auth.
+Implements an internal WhatsApp-style team chat: 1:1 and group conversations, file attachments (via multer, 1 GB cap, streamed to disk in `data/chat_uploads` and refused up front when the disk lacks room for it plus 200 MB), real-time delivery over WebSockets (`pushToUser`/`pushToConversation`), replies, reactions, stars, edits, per-message deletes, read receipts, mute/pin, and RAG indexing of messages. The two file-serving routes are declared **before** `r.use(authRequired)` because they must accept a token via query string (so `<img>`/`<a>` can load them); all other routes require auth.
 
 **Helper functions:**
 - `member(convId, userId)` — returns the participant row or undefined (membership check).
@@ -1314,7 +1314,7 @@ UI: a `chat-history` sidebar (title, "New chat", conversation list with relative
 
 A full WhatsApp-style team messaging page: conversation list, real-time messaging over WebSocket, replies, reactions, edits, deletes, stars, forwarding, file/image attachments, typing indicators, presence, read receipts, and group management.
 
-**Interfaces** `Member`, `Conversation` (direct/group with last-message/unread/mute/pin metadata), `Reaction`, `ReplyPreview`, `ChatFile`, `Msg` (full message shape including `reactions, starred, seen, deleted, uploading`), and `OrgUser`. Constants: `EMOJIS`, `MAX_FILE` (15 MB), `fileUrl(m, download)` (builds `/api/chat/file/:id?token=...`). Helpers: `relTime`, `fmtSize`, `fmtTime`, `dayLabel`, `lastSeenLabel`.
+**Interfaces** `Member`, `Conversation` (direct/group with last-message/unread/mute/pin metadata), `Reaction`, `ReplyPreview`, `ChatFile`, `Msg` (full message shape including `reactions, starred, seen, deleted, uploading`), and `OrgUser`. Constants: `EMOJIS`, `MAX_FILE` (1 GB), `fileUrl(m, download)` (builds `/api/chat/file/:id?token=...`). Helpers: `relTime`, `fmtSize`, `fmtTime`, `dayLabel`, `lastSeenLabel`.
 
 **Component `PresenceAvatar`** — an `Avatar` with an optional green "online" dot. **Component `GroupAvatar`** — a group photo (with broken-image fallback to a `#` tile).
 
