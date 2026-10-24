@@ -69,6 +69,21 @@ const NAV = [
   { to: '/platform', label: 'Platform', icon: ICONS.platform, roles: ['manager', 'employee'], platformOnly: true },
 ]
 
+// The phone tab bar, by role: two tabs, the raised orange centre tab, one more
+// tab, then More. Picked by path rather than sliced off NAV, because the bar has
+// four slots and the sidebar's order answers a different question — on a phone a
+// manager lives in their own and the team's tasks and runs meetings, and an
+// employee checks where they stand. Everything else (Dashboard for managers, the
+// voice assistant, Admin) is one tap away in the More drawer.
+//
+// A slot whose page this user can't see (Chats and Leaderboard in a solo
+// workspace) is left out rather than backfilled, so the centre tab never shifts
+// sideways into a different meaning.
+const BOTTOM_TABS: Record<string, [string, string, string, string]> = {
+  manager: ['/my-tasks', '/tasks', '/meetings', '/chats'],
+  employee: ['/', '/tasks', '/leaderboard', '/chats'],
+}
+
 const TITLES: Record<string, { t: string; s: string }> = {
   '/my-tasks': { t: 'My Tasks', s: 'Your private personal tasks — visible only to you' },
   '/': { t: 'Dashboard', s: 'Your meeting-to-task command center' },
@@ -145,23 +160,12 @@ function Layout({ children }: { children: React.ReactNode }) {
   const visibleNav = NAV.filter((n) => (n as any).platformOnly
     ? !!user.platform_admin
     : n.roles.includes(user.role) && !(user.workspace_personal && (n as any).teamOnly))
-  // The bottom bar shows only three of these, so WHICH three matters far more than
-  // the order does in the sidebar, where everything is visible at once. A manager
-  // on a phone is there to run a meeting, not to read a dashboard, so the two trade
-  // places: Meetings comes up into the thumb row and Dashboard takes its slot
-  // further down the drawer. The sidebar keeps the original order either way.
-  //
-  // Employees need no special case and get none. /meetings is manager-only, so it
-  // was already filtered out above, the swap finds nothing to do, and their bar
-  // keeps Dashboard exactly where it was — which is the whole point, since the
-  // screen they would be sent to is one they cannot use.
-  const bottomNav = [...visibleNav]
-  const dashAt = bottomNav.findIndex((n) => n.to === '/')
-  const meetAt = bottomNav.findIndex((n) => n.to === '/meetings')
-  if (dashAt !== -1 && meetAt !== -1) {
-    [bottomNav[dashAt], bottomNav[meetAt]] = [bottomNav[meetAt], bottomNav[dashAt]]
-  }
-  // One bottom-nav tab (shared by the slots on either side of the center mic).
+  // Resolved against visibleNav, so a role or workspace that can't open a page
+  // never gets a tab for it (see BOTTOM_TABS).
+  const [tabL1, tabL2, tabMid, tabR1] = (BOTTOM_TABS[user.role] || BOTTOM_TABS.employee)
+    .map((to) => visibleNav.find((n) => n.to === to))
+  const openVoice = () => { setOpen(false); window.dispatchEvent(new Event('open-voice')) }
+  // One bottom-nav tab (shared by the slots on either side of the centre tab).
   const renderBottomTab = (n: typeof NAV[number]) => (
     <NavLink key={n.to} to={n.to} end={n.to === '/'} onClick={n.to === '/chats' ? onChatsNav : undefined} className={({ isActive }) => 'bn-item' + (isActive ? ' active' : '')}>
       <span className="bn-ic">{n.icon}</span>
@@ -179,6 +183,30 @@ function Layout({ children }: { children: React.ReactNode }) {
             <div className="brand-sub">Execution Platform</div>
           </div>
         </div>
+        {/* Phones only: the voice assistant's way in, since the tab bar's centre
+            went to a page. First in the drawer, above the pages, because it is
+            the one thing in here that isn't a place you go — and it keeps the
+            neon orb so it still reads as the thing that listens. Desktop has the
+            floating Ask BTM card instead. */}
+        <button className="sidebar-ai-m" onClick={openVoice} aria-label="Open voice assistant">
+          <span className="sidebar-ai-orb" aria-hidden="true">
+            <span className="sidebar-ai-glow" />
+            <span className="sidebar-ai-core">
+              {/* Both wave groups are identical markup — CSS mirrors the right one
+                  so the tall bars sit inward on both sides. */}
+              <span className="sidebar-ai-wave"><i /><i /><i /></span>
+              <svg className="sidebar-ai-glyph" viewBox="0 0 24 24" width="14" height="14">
+                <rect x="9" y="2" width="6" height="11.5" rx="3" fill="currentColor" />
+                <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <span className="sidebar-ai-wave"><i /><i /><i /></span>
+            </span>
+          </span>
+          <span className="sidebar-ai-text">
+            <span className="sidebar-ai-title">Talk to AI</span>
+            <span className="sidebar-ai-sub">Create tasks by voice</span>
+          </span>
+        </button>
         <nav className="nav" onClick={() => setOpen(false)}>
           {visibleNav.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} onClick={n.to === '/chats' ? onChatsNav : undefined} className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -187,10 +215,10 @@ function Layout({ children }: { children: React.ReactNode }) {
             </NavLink>
           ))}
 
-          {/* Invite lives here, not in NAV: NAV also feeds the mobile bottom bar
-              via slice(), so a new row there would silently push an existing tab
-              out of the thumb zone. Managers only — POST /invites refuses
-              employees, and a button that always fails is worse than no button. */}
+          {/* Invite lives here, not in NAV: every NAV row is a route (a NavLink
+              with a TITLES entry), and this opens a modal. Managers only — POST
+              /invites refuses employees, and a button that always fails is worse
+              than no button. */}
           {user.role !== 'employee' && !user.workspace_personal && (
             <button
               type="button"
@@ -315,38 +343,22 @@ function Layout({ children }: { children: React.ReactNode }) {
         </header>
         <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
       </div>
-      {/* Mobile bottom tab bar — template layout: two tabs, the signature center
-          floating AI voice mic, one more tab, then "More" (opens the full drawer).
-          The center mic opens the global VoiceAssistant via an 'open-voice' event. */}
+      {/* Mobile bottom tab bar: two tabs, the raised orange centre tab, one more
+          tab, then "More" (opens the full drawer, where the voice assistant now
+          lives). Which pages fill the slots is per role — see BOTTOM_TABS. */}
       <nav className="bottom-nav" aria-label="Primary">
-        {bottomNav.slice(0, 2).map(renderBottomTab)}
-        <button
-          className="bn-mic"
-          onClick={() => window.dispatchEvent(new Event('open-voice'))}
-          aria-label="Open voice assistant"
-          title="Talk to the AI assistant"
-        >
-          {/* The halo. Its own element rather than a box-shadow on the orb, because
-              a shadow takes one flat colour per layer and this one is a green→orange
-              gradient. First child so it paints UNDER the orb by document order —
-              no z-index, and so nothing here can escape the tab bar's stacking. */}
-          <span className="bn-mic-glow" aria-hidden="true" />
-          <span className="bn-mic-btn">
-            {/* The orb face: a mic flanked by a live waveform. Both wave groups are
-                identical markup — CSS mirrors the right one so the tall bars sit
-                inward on both sides. */}
-            <span className="bn-mic-face" aria-hidden="true">
-              <span className="bn-wave"><i /><i /><i /></span>
-              <svg className="bn-mic-glyph" viewBox="0 0 24 24" width="17" height="17">
-                <rect x="9" y="2" width="6" height="11.5" rx="3" fill="currentColor" />
-                <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-              <span className="bn-wave"><i /><i /><i /></span>
-            </span>
-          </span>
-          <span className="bn-mic-label">AI</span>
-        </button>
-        {bottomNav.slice(2, 3).map(renderBottomTab)}
+        {tabL1 && renderBottomTab(tabL1)}
+        {tabL2 && renderBottomTab(tabL2)}
+        {tabMid && (
+          <NavLink key={tabMid.to} to={tabMid.to} end={tabMid.to === '/'} className={({ isActive }) => 'bn-center' + (isActive ? ' active' : '')}>
+            {/* The halo is its own element, first child, so it paints under the
+                button by document order — no z-index that could escape the bar. */}
+            <span className="bn-center-glow" aria-hidden="true" />
+            <span className="bn-center-btn">{tabMid.icon}</span>
+            <span className="bn-center-label">{tabMid.label}</span>
+          </NavLink>
+        )}
+        {tabR1 && renderBottomTab(tabR1)}
         <button className="bn-item" onClick={() => setOpen(true)} aria-label="More menu">
           <span className="bn-ic">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

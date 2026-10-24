@@ -382,6 +382,9 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
 /* Mobile-only, like the Log out button it sits above. Desktop reaches the same
    thing through the profile modal, where the whole list already fits. */
 .sidebar-switch-m { display: none; }
+/* Phones only too: desktop reaches the voice assistant through the floating Ask
+   BTM card, which phones hide. Styled in the mobile shell block, by the tab bar. */
+.sidebar-ai-m { display: none; }
 .sidebar-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .sidebar-sync { display: inline-flex; align-items: center; gap: 7px; font-size: var(--t-xs); font-weight: 600; color: var(--sidebar-muted); min-width: 0; }
 .sidebar-sync span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3559,87 +3562,108 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
     box-shadow: 0 -6px 20px rgba(16,24,40,.06);
     overflow: visible;
   }
-  /* Signature center voice control — an assistant "orb": dark core, neon green
-     rim, live waveform, floating above the bar and notched out of it by an opaque
-     surface-coloured ring. Green, matching the voice screen it opens: every other
-     control on the bar is coral/grey, so the one thing that listens to you needs a
-     colour nothing else owns, and tapping it should land somewhere that looks the
-     same rather than a different product. */
-  .bn-mic {
+  /* The raised centre tab — Meetings for a manager, Leaderboard for an employee
+     (BOTTOM_TABS in App.tsx), lifted above the bar in the brand orange and
+     notched out of it by an opaque surface-coloured ring. It took over the slot
+     the voice orb had; the orb moved to the top of the More drawer
+     (.sidebar-ai-m). Orange, not the orb's green: this is a page like the tabs
+     beside it, just the one this role opens the app for, and green stays the
+     colour of the one thing that listens. */
+  .bn-center {
     position: relative;
     flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center;
-    justify-content: flex-end; gap: 5px; border: none; background: transparent;
-    /* Matches .bn-item's bottom padding so "AI" lands on the same baseline as the
-       other tab labels, and leaves room for the label's underscore. */
+    justify-content: flex-end; gap: 5px; text-decoration: none;
+    /* Same bottom padding and label size as .bn-item, so the label lands on the
+       same baseline as the other tabs' labels. */
     padding: 0 2px 6px;
-    font-size: 10.5px; font-weight: 800;
+    color: var(--brand-ink); font-size: 10.5px; font-weight: 700;
   }
-  .bn-mic-btn {
-    position: relative; width: 62px; height: 62px; margin-top: -28px;
-    border-radius: 50%; border: 2px solid transparent; color: #fff;
+  .bn-center-btn {
+    position: relative; display: grid; place-items: center;
+    width: 58px; height: 58px; margin-top: -26px; border-radius: 50%; color: #fff;
+    background: linear-gradient(135deg, #fb923c 0%, #ea580c 48%, #c2410c 100%);
+    /* The opaque ring cuts the button out of the bar; the inset line lights its
+       top edge. The coloured halo is .bn-center-glow behind it. */
+    box-shadow: 0 0 0 5px var(--surface), inset 0 1px 0 rgba(255,255,255,.3);
+    transition: transform .14s ease, box-shadow .14s ease;
+  }
+  /* NAV's icons are drawn for an 18px sidebar row; they would rattle around in
+     a 58px button. */
+  .bn-center-btn svg { width: 25px; height: 25px; }
+  /* Sized/offset off the button's own 58px + (-26px) so the two move together
+     if either is retuned. Static: a page tab has nothing to "breathe" about. */
+  .bn-center-glow {
+    position: absolute; left: 50%; top: -30px; width: 66px; height: 66px;
+    transform: translateX(-50%); border-radius: 50%; pointer-events: none;
+    background: linear-gradient(135deg, #fdba74 0%, #f97316 55%, #c2410c 100%);
+    filter: blur(12px); opacity: .55;
+  }
+  .bn-center:active .bn-center-btn { transform: scale(.92); }
+  .bn-center-label { position: relative; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The button is always orange, so "you are here" is a white inner ring and a
+     heavier label rather than a colour change. */
+  .bn-center.active .bn-center-btn { box-shadow: 0 0 0 5px var(--surface), inset 0 0 0 2px rgba(255,255,255,.7); }
+  .bn-center.active .bn-center-label { font-weight: 800; }
+
+  /* --- "Talk to AI" at the top of the More drawer -------------------------- */
+  /* The voice orb that used to be the bar's centre, kept whole so it still
+     reads as the assistant: dark core, neon green rim, live waveform. Green,
+     matching the voice screen it opens — every other control is orange/grey,
+     so the one thing that listens needs a colour nothing else owns. */
+  .sidebar-ai-m {
+    display: flex; align-items: center; gap: 12px; width: 100%; margin: 0 0 6px; padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, #2ee27f 40%, var(--border)); border-radius: var(--r-md);
+    background: color-mix(in srgb, #2ee27f 7%, var(--surface)); color: var(--text);
+    font: inherit; text-align: left; cursor: pointer; transition: background .15s;
+  }
+  .sidebar-ai-m:active { background: color-mix(in srgb, #2ee27f 15%, var(--surface)); }
+  .sidebar-ai-orb { position: relative; width: 48px; height: 48px; flex-shrink: 0; }
+  /* Green→orange halo. Its own element rather than a box-shadow on the core,
+     because a shadow takes one flat colour per layer and this is a gradient. */
+  .sidebar-ai-glow {
+    position: absolute; inset: -5px; border-radius: 50%; pointer-events: none;
+    background: linear-gradient(135deg, #2ee27f 0%, #7ad04a 45%, #ea580c 100%);
+    filter: blur(9px); opacity: .7;
+    animation: sidebar-ai-breathe 3.2s ease-in-out infinite;
+  }
+  .sidebar-ai-core {
+    position: relative; display: flex; align-items: center; justify-content: center; gap: 3px;
+    width: 100%; height: 100%; border-radius: 50%; border: 2px solid transparent; color: #fff;
     /* Two-layer paint: dark core on padding-box, neon rim on border-box. This is
        the only way to get a *gradient* border — border-color takes a colour only. */
     background:
       radial-gradient(circle at 50% 42%, #0d2a1c 0%, #06150e 62%, #030b07 100%) padding-box,
       conic-gradient(from 210deg, #6ffbb4, #2ee27f 22%, #12b866 42%, #2ee27f 62%, #9dffcb 78%, #6ffbb4 100%) border-box;
-    /* Just the opaque ring that cuts the orb out of the bar. The coloured halo is
-       .bn-mic-glow behind it — a shadow could only do one flat colour per layer. */
-    box-shadow: 0 0 0 5px var(--surface);
-    transition: transform .14s ease;
   }
-  /* Green→orange halo: a blurred gradient disc, slightly larger than the orb and
-     centred on it. Sized/offset off the orb's own 62px + (-28px) so the two move
-     together if either is retuned. */
-  .bn-mic-glow {
-    position: absolute; left: 50%; top: -34px; width: 74px; height: 74px;
-    transform: translateX(-50%); border-radius: 50%; pointer-events: none;
-    background: linear-gradient(135deg, #2ee27f 0%, #7ad04a 45%, #ea580c 100%);
-    filter: blur(11px); opacity: .8;
-    animation: bn-orb-breathe 3.2s ease-in-out infinite;
+  /* A faint inner ring — the scanning-depth cue. */
+  .sidebar-ai-core::before {
+    content: ''; position: absolute; inset: 4px; border-radius: 50%; pointer-events: none;
+    border: 1px solid rgba(110,251,180,.2);
   }
-  /* Two faint concentric rings inside the core — the scanning-depth cue. */
-  .bn-mic-btn::before, .bn-mic-btn::after {
-    content: ''; position: absolute; border-radius: 50%; pointer-events: none;
-    border: 1px solid rgba(110,251,180,.22);
-  }
-  .bn-mic-btn::before { inset: 5px; }
-  .bn-mic-btn::after { inset: 10px; border-color: rgba(46,226,127,.16); }
-  .bn-mic:active .bn-mic-btn { transform: scale(.92); }
-  .bn-mic-face { display: flex; align-items: center; justify-content: center; gap: 3px; width: 100%; height: 100%; }
-  .bn-mic-glyph { display: block; flex: none; }
-  .bn-wave { display: flex; align-items: center; gap: 2px; }
+  .sidebar-ai-glyph { display: block; flex: none; }
+  .sidebar-ai-wave { display: flex; align-items: center; gap: 2px; }
   /* Mirrored so the tallest bar is the innermost one on both sides. */
-  .bn-wave:last-child { flex-direction: row-reverse; }
-  .bn-wave i {
+  .sidebar-ai-wave:last-child { flex-direction: row-reverse; }
+  .sidebar-ai-wave i {
     width: 2px; border-radius: 1px; background: linear-gradient(180deg, #9dffcb, #22c96f);
-    animation: bn-wave-bounce 1.15s ease-in-out infinite;
+    animation: sidebar-ai-bounce 1.15s ease-in-out infinite;
   }
-  .bn-wave i:nth-child(1) { height: 6px; animation-delay: 0s; }
-  .bn-wave i:nth-child(2) { height: 11px; animation-delay: .18s; }
-  .bn-wave i:nth-child(3) { height: 16px; animation-delay: .36s; }
-  .bn-mic-label {
-    position: relative; line-height: 1; letter-spacing: .14em; font-size: 9.5px;
-    background: linear-gradient(90deg, #12b866, #2ee27f);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
+  .sidebar-ai-wave i:nth-child(1) { height: 5px; animation-delay: 0s; }
+  .sidebar-ai-wave i:nth-child(2) { height: 9px; animation-delay: .18s; }
+  .sidebar-ai-wave i:nth-child(3) { height: 13px; animation-delay: .36s; }
+  .sidebar-ai-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+  .sidebar-ai-title { font-size: 14px; font-weight: 800; }
+  .sidebar-ai-sub { font-size: 11.5px; font-weight: 600; color: var(--n-500); margin-top: 2px; }
+  @keyframes sidebar-ai-breathe {
+    0%, 100% { opacity: .6; transform: scale(1); }
+    50% { opacity: .9; transform: scale(1.1); }
   }
-  /* Gradient underscore, absolutely placed so it can't shift the label off the
-     baseline it shares with the other tabs' labels. */
-  .bn-mic-label::after {
-    content: ''; position: absolute; left: 50%; transform: translateX(-50%); bottom: -5px;
-    width: 22px; height: 2px; border-radius: 2px;
-    background: linear-gradient(90deg, rgba(46,226,127,0), #12b866, #2ee27f, rgba(46,226,127,0));
-  }
-  /* translateX is repeated in both frames — an animation's transform REPLACES the
-     rule's, so omitting it would snap the halo left by half its width. */
-  @keyframes bn-orb-breathe {
-    0%, 100% { opacity: .72; transform: translateX(-50%) scale(1); }
-    50% { opacity: 1; transform: translateX(-50%) scale(1.12); }
-  }
-  @keyframes bn-wave-bounce { 0%, 100% { transform: scaleY(.45) } 50% { transform: scaleY(1) } }
+  @keyframes sidebar-ai-bounce { 0%, 100% { transform: scaleY(.45) } 50% { transform: scaleY(1) } }
   /* The orb idles with two infinite animations — kill both when motion is unwelcome. */
   @media (prefers-reduced-motion: reduce) {
-    .bn-mic-glow, .bn-wave i { animation: none; }
+    .sidebar-ai-glow, .sidebar-ai-wave i { animation: none; }
   }
+
   .bn-item {
     flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 3px; padding: 6px 2px;
@@ -3667,9 +3691,10 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
   .va-root { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
   .va-dock { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
   .toast-host { bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
-  /* The bottom-nav center mic replaces the floating voice pill on phones, so the
-     card (and with it the drag affordance) is desktop/tablet only — the dock
-     stays put here purely to anchor the coachmark above the tab bar. */
+  /* The drawer's "Talk to AI" row replaces the floating voice pill on phones, so
+     the card (and with it the drag affordance) is desktop/tablet only — the dock
+     stays put here purely to anchor the coachmark above the tab bar, where its
+     tail points down at More. */
   .va-fab-pill { display: none; }
   /* The verify-email card is full-width on a phone, so it has to clear both the
      tab bar and, on Tasks, the new-task button in the right corner (74–128px). */

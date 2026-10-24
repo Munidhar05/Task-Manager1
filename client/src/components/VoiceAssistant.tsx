@@ -8,7 +8,8 @@ import VoiceOrb from './VoiceOrb'
 // Where the draggable "Ask BTM" card remembers its spot (per device).
 const FAB_POS_KEY = 'befach_voice_fab_pos'
 // The card is only shown — and so only draggable — on desktop/tablet; phones use
-// the bottom-nav centre mic instead (see the `.va-fab-pill { display: none }` rule).
+// the "Talk to AI" row at the top of the More drawer instead (see the
+// `.va-fab-pill { display: none }` rule).
 const CARD_MQ = '(min-width: 721px)'
 
 const MicIcon = ({ size = 24 }: { size?: number }) => (
@@ -199,7 +200,7 @@ export default function VoiceAssistant() {
   // Opening the assistant counts as "seen".
   useEffect(() => { if (v.open) dismissCoach() }, [v.open])
 
-  // The mobile bottom-nav center mic (in App's Layout) opens the assistant by
+  // The phone drawer's "Talk to AI" row (in App's Layout) opens the assistant by
   // firing an 'open-voice' event — listen for it here where the voice state lives.
   useEffect(() => {
     const open = () => v.start()
@@ -431,7 +432,9 @@ export default function VoiceAssistant() {
           <button className="va-coach-x" onClick={dismissCoach} aria-label="Dismiss">✕</button>
           <span className="va-coach-badge">NEW</span>
           <div className="va-coach-title">Control the app with your voice</div>
-          <div className="va-coach-sub">Create tasks, check workload, open meetings — just talk. Tap the mic below{wakeWordConfigured() && <>, or say <b>“{wakeWordPhrase()}”</b></>}.</div>
+          {/* canDrag is the desktop/tablet query: there the mic is the card below
+              the tip; phones have no mic on screen, only the drawer row behind More. */}
+          <div className="va-coach-sub">Create tasks, check workload, open meetings — just talk. {canDrag ? 'Tap the mic below' : <>Tap <b>More</b>, then <b>Talk to AI</b></>}{wakeWordConfigured() && <>, or say <b>“{wakeWordPhrase()}”</b></>}.</div>
           <div className="va-coach-actions">
             <button className="btn btn-primary btn-sm" onClick={() => { dismissCoach(); v.start() }}>Try it</button>
             <button className="va-coach-later" onClick={dismissCoach}>Got it</button>
