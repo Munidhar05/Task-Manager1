@@ -648,6 +648,7 @@ export default function Chats() {
   const loadThread = (cid: string) => api.get(`/chat/conversations/${cid}`).then((d) => {
     // The answer to a chat we have since left must not overwrite the one now open.
     if (cid !== activeIdRef.current) return
+    if (linkedRef.current === cid) linkedRef.current = null
     setMessages(d.messages)
     setHasMore(!!d.has_more)
     setThreadLastRead(d.last_read_at || null)
@@ -656,11 +657,12 @@ export default function Chats() {
     }
     setConvos((cs) => cs.map((c) => (c.id === cid ? { ...c, ...d.conversation, unread: 0, marked_unread: false } : c)))
     pingNav()
-    // Arrived via a message link — land on that line rather than the bottom.
+    // Arrived via a message link or a notification — land on that line rather
+    // than the bottom, once it is on screen (see landOn).
     const want = deepMsgRef.current
     if (want) {
       deepMsgRef.current = null
-      requestAnimationFrame(() => scrollToMessage(want))
+      setLandOn(want)
     }
     // "Assign as task" from the Mentions inbox: the chat it lives in is open
     // now, so the sheet can offer its people.
@@ -672,8 +674,18 @@ export default function Chats() {
       const src = (d.messages as Msg[]).find((x) => x.id === assignId) || null
       void toTask({ messageId: assignId }, src)
     }
-  }).catch(() => {})
+  }).catch((e) => {
+    // A notification or link into a chat this person has since left (removed
+    // from the group, chat deleted): say so and show the list, instead of an
+    // empty pane that looks like the app broke.
+    if (cid !== activeIdRef.current || linkedRef.current !== cid) return
+    linkedRef.current = null
+    deepMsgRef.current = null
+    if (/not found/i.test(String(e?.message))) { toast.info("That chat isn't available to you any more"); setActiveId('') }
+  })
   const pendingAssignRef = useRef<string | null>(null)
+  // The chat a link or notification just opened, until its thread has loaded.
+  const linkedRef = useRef<string | null>(null)
 
   // The page before the oldest message on screen, kept in place: the thread is
   // re-anchored by the height it grew, so what you were reading does not jump.
@@ -741,13 +753,25 @@ export default function Chats() {
   // stripped straight away with replace:true so Back doesn't bounce them into the
   // same thread, and so a refresh doesn't reopen a chat they've since left.
   const [params, setParams] = useSearchParams()
-  // A pasted message link (?c=…&msg=…): open that thread and scroll to the line.
+  // A pasted message link or a tapped notification (?c=…&msg=…): open that
+  // thread and land on the line.
   const deepMsgRef = useRef<string | null>(null)
   useEffect(() => {
     const c = params.get('c')
     const msg = params.get('msg')
     if (!c || !user) return
+    if (c === activeIdRef.current) {
+      // Already open (a notification for the chat on screen). The thread will
+      // not reload, so land on the line from here. The link arrived as an
+      // entry with no chat in it, which the history effect above has just
+      // read as "close the chat": keep it open, and give the entry its chat.
+      navigate(loc.pathname, { state: { chat: c }, replace: true })
+      setActiveId(c)
+      if (msg) { setInSearch(''); setInSearchOpen(false); setLandOn(msg) } // a search filter could be hiding it
+      return
+    }
     setParams(new URLSearchParams(), { replace: true })
+    linkedRef.current = c
     deepMsgRef.current = msg
     setActiveId(c)
   }, [params, user?.id])
@@ -807,6 +831,45 @@ export default function Chats() {
       if (messages.length) forceScrollRef.current = false
     }
   }, [messages, busy, typingName, inSearchOpen])
+  // The line a link or notification asked for, landed on once it is on screen.
+  // Not a requestAnimationFrame after the load: the thread is only drawn once
+  // the chat list has loaded too (`active`), which a notification tapped from
+  // another page can be still waiting on — the frame came and went with nothing
+  // to scroll to, and the chat opened at the bottom. Declared after the
+  // auto-scroll above so that, in the same render, it moves second.
+  const [landOn, setLandOn] = useState<string | null>(null)
+  useEffect(() => {
+    if (!landOn || !active) return
+    const id = landOn
+    setLandOn(null)
+    // Landing is a scroll of its own: the opening jump to the bottom must not
+    // fire later (someone starts typing) and drag the reader off it.
+    forceScrollRef.current = false
+    if (!scrollToMessage(id)) void seekOlder(activeId, id, messages, hasMore)
+  }, [landOn, active?.id, messages])
+  // The line is older than the page that loaded — a busy group can bury a
+  // notification under hundreds of newer messages. Fetch back a page at a time
+  // until it is there. Bounded: a line deleted or cleared from this chat is
+  // never coming, and paging the whole history to learn that would be slow.
+  const seekOlder = async (cid: string, id: string, have: Msg[], more: boolean) => {
+    let before = have.find((m) => !m.id.startsWith('tmp_'))?.created_at
+    const older: Msg[] = []
+    let hit = false
+    for (let i = 0; i < 5 && more && before && !hit; i++) {
+      const d = await api.get(`/chat/conversations/${cid}?before=${encodeURIComponent(before)}`).catch(() => null)
+      if (!d || cid !== activeIdRef.current) return
+      older.unshift(...(d.messages as Msg[]))
+      more = !!d.has_more
+      before = d.messages[0]?.created_at
+      hit = (d.messages as Msg[]).some((m) => m.id === id)
+    }
+    if (older.length) {
+      setMessages((cur) => [...older.filter((x) => !cur.some((y) => y.id === x.id)), ...cur])
+      setHasMore(more)
+    }
+    if (hit) setLandOn(id)
+    else toast.info(more ? 'That message is further back — scroll up to load earlier messages' : 'That message is no longer in this chat')
+  }
   // Watching the scroll: the ⌄ button once you are away from the bottom, and
   // the next page of history once you reach the top.
   const onLogScroll = () => {

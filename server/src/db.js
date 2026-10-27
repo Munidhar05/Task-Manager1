@@ -987,6 +987,12 @@ export function initSchema() {
   // boot on these lines.
   db.exec('CREATE INDEX IF NOT EXISTS idx_meetings_conversation ON meetings(conversation_id, created_at)')
   db.exec('CREATE INDEX IF NOT EXISTS idx_meetings_call ON meetings(call_id)')
+  // WHICH CHAT A NOTIFICATION IS ABOUT. A chat notification ("Abhiram: hi")
+  // carried only task_id, which chat never sets, so tapping it could open
+  // nothing more specific than the chat list. notify() now records the
+  // conversation and the line; both stay NULL for task notifications.
+  ensureColumn('notifications', 'conversation_id', 'TEXT')
+  ensureColumn('notifications', 'message_id', 'TEXT')
 
   // Index on conversation_id — created here (not in the inline schema) so it runs
   // AFTER the column is ensured above; otherwise older DBs predating the column fail.
@@ -1139,6 +1145,62 @@ export function initSchema() {
       // when it is made; an old one left unlinked is only missing from its
       // chat's meeting list.
       console.error('[migrate] meetings_chat_link_v1 skipped:', e.message)
+    }
+  })
+
+  // Point the chat notifications already in people's bells at their chat, so
+  // the fix is not only for messages sent after it. notify() ran in the same
+  // request as the message, straight after inserting it, so the line is the
+  // nearest one before the notification that the named person sent into a chat
+  // the reader is in — and, for plain text, the one whose words the
+  // notification quotes. Nearest, not "the only one": a call ending files its
+  // line and a "declined" line from the same caller within milliseconds.
+  // Anything that does not fit keeps opening the chat list, as every chat
+  // notification did before. Reactions are left alone: they name the reactor
+  // but point at the reader's own older line.
+  runOnce('notifications_chat_link_v1', () => {
+    try {
+      let linked = 0
+      db.transaction(() => {
+        const rows = db.prepare(`SELECT id, user_id, type, message, created_at FROM notifications
+          WHERE conversation_id IS NULL AND type IN ('chat_message','chat_mention','chat_call')`).all()
+        const before = db.prepare(`
+          SELECT m.id, m.conversation_id, m.call_id, m.body, m.kind, m.file_name, m.meeting_id, u.name FROM chat_messages m
+          JOIN chat_participants p ON p.conversation_id=m.conversation_id AND p.user_id=?
+          JOIN users u ON u.id=m.sender_id
+          WHERE m.created_at BETWEEN ? AND ? AND m.sender_id<>?
+          ORDER BY m.created_at DESC`)
+        const set = db.prepare('UPDATE notifications SET conversation_id=?, message_id=? WHERE id=?')
+        const fits = (n, m) => {
+          const text = n.message || ''
+          if (n.type === 'chat_call') {
+            const said = /^Missed (\w+) call from (.+)$/.exec(text)
+            return !!said && !!m.call_id && said[2] === m.name && String(m.body || '').toLowerCase().startsWith(said[1])
+          }
+          const named = n.type === 'chat_mention'
+            ? text.startsWith(`${m.name} mentioned you`)
+            : !text.startsWith(`${m.name} reacted `) &&
+              (text.startsWith(`${m.name}: `) || text.startsWith(`${m.name} in `) || text.startsWith(`${m.name} started "`))
+          if (!named) return false
+          // Plain text is quoted in the notification; anything else (a photo,
+          // a poll) is a fixed label, so the name and the timing have to do.
+          const plain = m.body && !m.kind && !m.file_name && !m.meeting_id && !m.call_id
+          return !plain || text.includes(m.body.trim().slice(0, 20)) || text.includes(' started "')
+        }
+        for (const n of rows) {
+          const t = Date.parse(n.created_at)
+          if (!Number.isFinite(t)) continue
+          const hit = before.all(n.user_id, new Date(t - 10000).toISOString(), n.created_at, n.user_id).find((m) => fits(n, m))
+          if (!hit) continue
+          set.run(hit.conversation_id, hit.id, n.id)
+          linked++
+        }
+      })()
+      if (linked) console.log(`[migrate] linked ${linked} chat notifications to their message`)
+    } catch (e) {
+      // Never block boot on this: an old notification left unlinked still
+      // opens the chat list, which is all it ever did.
+      console.error('[migrate] notifications_chat_link_v1 skipped:', e.message)
     }
   })
 }

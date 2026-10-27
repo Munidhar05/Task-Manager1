@@ -132,16 +132,24 @@ export function notifAllowed(userId, type) {
 // Create an in-app notification for a single recipient, and fire a native push
 // to their devices (no-op if FCM isn't configured). Push is fire-and-forget so a
 // slow/failed send never blocks the request.
-export function notify(orgId, userId, type, message, taskId = null) {
+//
+// `chat` is where a chat notification points: { conversationId, messageId }.
+// Without it the bell and the push could only open the chat LIST — "Abhiram:
+// hi" landed you on every conversation you have and left you to find his. The
+// message id is optional (a new group has no one line to point at); the
+// conversation alone still opens the right thread.
+export function notify(orgId, userId, type, message, taskId = null, chat = null) {
   if (!userId) return
   // A muted category is dropped outright rather than filed and hidden — a bell
   // that still counts messages you asked not to receive is not switched off.
   if (!notifAllowed(userId, type)) return
+  const conversationId = chat?.conversationId || null
+  const messageId = (conversationId && chat?.messageId) || null
   db.prepare(
-    `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, read, created_at)
-     VALUES (?,?,?,?,?,?,0,?)`
-  ).run(id('ntf'), orgId, userId, type, message, taskId, now())
-  sendPushToUser(userId, { title: PUSH_TITLES[type] || 'SmartTask', body: message, data: { type, taskId } })
+    `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, read, created_at)
+     VALUES (?,?,?,?,?,?,?,?,0,?)`
+  ).run(id('ntf'), orgId, userId, type, message, taskId, conversationId, messageId, now())
+  sendPushToUser(userId, { title: PUSH_TITLES[type] || 'SmartTask', body: message, data: { type, taskId, conversationId, messageId } })
     .catch(() => {})
 }
 
