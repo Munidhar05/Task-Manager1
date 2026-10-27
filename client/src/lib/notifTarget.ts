@@ -12,6 +12,7 @@ export interface NotifRef {
   conversationId?: string | null
   messageId?: string | null
   taskId?: string | null
+  commentId?: string | null
 }
 
 export function notifTarget(n: NotifRef): string | null {
@@ -21,7 +22,12 @@ export function notifTarget(n: NotifRef): string | null {
     return `/chats?${q}`
   }
   if (n.type?.startsWith('chat_')) return '/chats'
-  if (n.taskId) return `/tasks?task=${encodeURIComponent(n.taskId)}`
+  if (n.taskId) {
+    // A comment opens the task on that comment (the drawer scrolls to it).
+    const q = new URLSearchParams({ task: n.taskId })
+    if (n.commentId) q.set('comment', n.commentId)
+    return `/tasks?${q}`
+  }
   return null
 }
 

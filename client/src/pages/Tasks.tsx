@@ -493,10 +493,29 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
   // If navigated here with ?task=… (e.g. by clicking a notification) while already
   // on this page, open that task's drawer too.
+  //
+  // A comment notification adds &comment=…, which the drawer lands on. It is
+  // taken out of the URL once read, as the chat does with ?msg=: a second tap on
+  // the same notification is then a new URL and lands again, and a filter change
+  // later (which rewrites the URL) cannot pull the reader back to the comment.
+  const [focusComment, setFocusComment] = useState<{ taskId: string; commentId: string; n: number } | null>(null)
   useEffect(() => {
     const t = searchParams.get('task')
     if (t) setOpenId(t)
+    const c = searchParams.get('comment')
+    if (!c) return
+    if (t) setFocusComment((f) => ({ taskId: t, commentId: c, n: (f?.n || 0) + 1 }))
+    const next = new URLSearchParams(searchParams)
+    next.delete('comment')
+    setSearchParams(next, { replace: true })
   }, [searchParams])
+  // Only for the task it came with: opening another task, or this one again
+  // later from the list, opens at the top as usual.
+  useEffect(() => {
+    if (focusComment && focusComment.taskId !== openId) setFocusComment(null)
+  }, [openId])
+  const focusFor = (taskId: string | null) =>
+    focusComment && focusComment.taskId === taskId ? { focusCommentId: focusComment.commentId, focusKey: focusComment.n } : {}
 
   // Arrived from "Assign as task" in the chat: take the stashed draft, open the
   // real New task form on it, and drop ?new=1 so a reload doesn't reopen an empty
@@ -1049,7 +1068,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
           nothing, and took the Time column with it. */}
       {paneOpen && (
         <aside className="tasks-split-pane">
-          <TaskDrawer key={openId} taskId={openId!} variant="pane" onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />
+          <TaskDrawer key={openId} taskId={openId!} variant="pane" {...focusFor(openId)} onClose={closeDrawer} onChange={(t) => (t && t.status ? patchTask(t) : load())} />
         </aside>
       )}
 
@@ -1061,7 +1080,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
 
       {/* Drawer edits patch the single row in place when the mutation returned the
           updated task; anything else (delete, uploads) falls back to a reload. */}
-      {openId && !paneOpen && <TaskDrawer taskId={openId} onClose={closeDrawer} onChange={(t) => { setActivityTick((n) => n + 1); return t && t.status ? patchTask(t) : load() }} />}
+      {openId && !paneOpen && <TaskDrawer taskId={openId} {...focusFor(openId)} onClose={closeDrawer} onChange={(t) => { setActivityTick((n) => n + 1); return t && t.status ? patchTask(t) : load() }} />}
       {showNew && <NewTaskModal users={users} personal={personal} draft={draft} onUserCreated={(u) => setUsers((p) => [...p, u])} onClose={() => { setShowNew(false); setDraft(null) }} onCreated={() => { setShowNew(false); setDraft(null); load() }} />}
       {showTrash && <TrashModal onClose={() => setShowTrash(false)} onRestored={load} />}
       {searchOpen && <SearchDialog initial={filters.q} onApply={(f) => { setFilters({ ...filters, ...f }); if (f.status === 'Done') setQuickView('completed') }} onClose={() => setSearchOpen(false)} />}

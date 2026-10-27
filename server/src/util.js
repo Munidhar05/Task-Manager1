@@ -133,23 +133,26 @@ export function notifAllowed(userId, type) {
 // to their devices (no-op if FCM isn't configured). Push is fire-and-forget so a
 // slow/failed send never blocks the request.
 //
-// `chat` is where a chat notification points: { conversationId, messageId }.
-// Without it the bell and the push could only open the chat LIST — "Abhiram:
-// hi" landed you on every conversation you have and left you to find his. The
-// message id is optional (a new group has no one line to point at); the
-// conversation alone still opens the right thread.
-export function notify(orgId, userId, type, message, taskId = null, chat = null) {
+// `link` is the exact thing a notification is about, past the task it names.
+// For chat it is { conversationId, messageId }. Without it the bell and the push
+// could only open the chat LIST — "Abhiram: hi" landed you on every conversation
+// you have and left you to find his. The message id is optional (a new group has
+// no one line to point at); the conversation alone still opens the right thread.
+// For a task comment it is { commentId }: the task alone opened the drawer at its
+// title, with the comment at the very bottom under everything else.
+export function notify(orgId, userId, type, message, taskId = null, link = null) {
   if (!userId) return
   // A muted category is dropped outright rather than filed and hidden — a bell
   // that still counts messages you asked not to receive is not switched off.
   if (!notifAllowed(userId, type)) return
-  const conversationId = chat?.conversationId || null
-  const messageId = (conversationId && chat?.messageId) || null
+  const conversationId = link?.conversationId || null
+  const messageId = (conversationId && link?.messageId) || null
+  const commentId = (taskId && link?.commentId) || null
   db.prepare(
-    `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, read, created_at)
-     VALUES (?,?,?,?,?,?,?,?,0,?)`
-  ).run(id('ntf'), orgId, userId, type, message, taskId, conversationId, messageId, now())
-  sendPushToUser(userId, { title: PUSH_TITLES[type] || 'SmartTask', body: message, data: { type, taskId, conversationId, messageId } })
+    `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, comment_id, read, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,0,?)`
+  ).run(id('ntf'), orgId, userId, type, message, taskId, conversationId, messageId, commentId, now())
+  sendPushToUser(userId, { title: PUSH_TITLES[type] || 'SmartTask', body: message, data: { type, taskId, conversationId, messageId, commentId } })
     .catch(() => {})
 }
 

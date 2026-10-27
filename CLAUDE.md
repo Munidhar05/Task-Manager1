@@ -82,7 +82,8 @@ task change that skips it simply never happened as far as they show — and
 `notify()` / `notifyManagers()`, which write an in-app notification *and* fire FCM push.
 A chat notification must pass its last argument, `{ conversationId, messageId }`: the bell
 and the push tap both open `/chats?c=…&msg=…` from it (`client/src/lib/notifTarget.ts`),
-and without it they can only show the chat list.
+and without it they can only show the chat list. A task-comment notification passes
+`{ commentId }` the same way, which opens `/tasks?task=…&comment=…` on that comment.
 
 Two WebSocket hubs share the HTTP server: `ws/chatHub.js` (real-time chat) and
 `ws/liveTranscribe.js` (browser ↔ Sarvam audio relay). Browsers can't set headers on a WS
