@@ -923,11 +923,13 @@ r.post('/:id/comments', (req, res) => {
     .run(cid, t.id, req.user.id, body, now())
   audit(req.user.org_id, req.user.id, 'task.comment', 'task', t.id)
   // Notify the people involved (assignee + whoever assigned it), except the commenter.
+  // The comment's id goes with it, so tapping the notification opens the task on
+  // that comment instead of at the top of a long drawer.
   const snippet = body.length > 80 ? body.slice(0, 77) + '…' : body
   const recipients = new Set([t.assignee_id, t.assigned_by_id].filter(Boolean))
   recipients.delete(req.user.id)
   for (const uid of recipients) {
-    notify(t.org_id, uid, 'task_comment', `${req.user.name} commented on "${t.title}": ${snippet}`, t.id)
+    notify(t.org_id, uid, 'task_comment', `${req.user.name} commented on "${t.title}": ${snippet}`, t.id, { commentId: cid })
   }
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })

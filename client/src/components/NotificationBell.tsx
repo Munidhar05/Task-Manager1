@@ -7,6 +7,7 @@ import { notifTarget, replacesEntry } from '../lib/notifTarget'
 interface Notif {
   id: string; type: string; message: string; task_id?: string | null
   conversation_id?: string | null; message_id?: string | null // chat notifications: where to open
+  comment_id?: string | null // a task comment: which one to open the task on
   read: number; created_at: string
 }
 
@@ -156,7 +157,7 @@ export default function NotificationBell() {
 
   // Click a notification → jump to whatever it's about: the related task drawer,
   // or the chat and the very message it announced.
-  const targetOf = (n: Notif) => notifTarget({ type: n.type, conversationId: n.conversation_id, messageId: n.message_id, taskId: n.task_id })
+  const targetOf = (n: Notif) => notifTarget({ type: n.type, conversationId: n.conversation_id, messageId: n.message_id, taskId: n.task_id, commentId: n.comment_id })
   const openNotif = (n: Notif) => {
     setOpen(false)
     const to = targetOf(n)

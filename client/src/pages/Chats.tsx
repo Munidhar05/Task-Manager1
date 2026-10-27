@@ -724,7 +724,13 @@ export default function Chats() {
   const scrollToMessage = (id: string): boolean => {
     const el = logRef.current?.querySelector(`[data-msg="${id}"]`) as HTMLElement | null
     if (!el) return false
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // More than a couple of screens away, jump there, as WhatsApp does. A smooth
+    // scroll across hundreds of lines (a notification for an older message
+    // starts from the bottom) took 1.5 s even on a desktop, and the flash below,
+    // which starts now, was nearly over by the time the line arrived.
+    const r = el.getBoundingClientRect()
+    const far = Math.abs(r.top + r.height / 2 - innerHeight / 2) > innerHeight * 2
+    el.scrollIntoView({ behavior: far ? 'auto' : 'smooth', block: 'center' })
     setFlashId(id)
     setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1800)
     return true

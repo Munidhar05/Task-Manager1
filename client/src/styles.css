@@ -3004,6 +3004,14 @@ body:has(.rv-center) .va-dock { display: none; }
 .rv-conf { padding-top: 1px; flex-shrink: 0; }
 .comment { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--n-100); }
 .comment .body { background: var(--n-50); border-radius: 10px; padding: 8px 12px; flex: 1; }
+/* The comment a notification opened on: the chat's jump-to ring, held a little
+   longer with a tint, because the drawer slides in and scrolls first. */
+.comment.flash .body { animation: comment-flash 2.6s ease; }
+@keyframes comment-flash {
+  0%, 65% { box-shadow: 0 0 0 3px rgba(242,98,46,.45); background: rgba(242,98,46,.10); }
+  100% { box-shadow: 0 0 0 3px rgba(242,98,46,0); }
+}
+@media (prefers-reduced-motion: reduce) { .comment.flash .body { animation: none; outline: 2px solid var(--primary); } }
 
 @media (max-width: 1000px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }

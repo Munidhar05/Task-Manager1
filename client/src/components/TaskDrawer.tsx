@@ -18,7 +18,9 @@ const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reope
 // `variant` decides how the drawer is mounted, not what it contains. 'modal' is
 // the overlay it has always been; 'pane' docks the same content beside the list
 // on a wide screen, where covering the page to read one task wastes the room.
-export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal' }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void; variant?: 'modal' | 'pane' }) {
+// `focusCommentId` is a comment to open on (a tapped comment notification);
+// `focusKey` changes on each such arrival, so a second tap lands again.
+export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal', focusCommentId = null, focusKey = 0 }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void; variant?: 'modal' | 'pane'; focusCommentId?: string | null; focusKey?: number }) {
   const { user } = useAuth()
   const pane = variant === 'pane'
   const drawerRef = useDialog<HTMLDivElement>(onClose, !pane)
@@ -112,6 +114,41 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   useEffect(() => { setPendingAssignee(task?.assignee?.id || '') }, [task?.assignee?.id])
   // Reset the pending status whenever the saved status changes (incl. after Accept).
   useEffect(() => { setPendingStatus(task?.status || '') }, [task?.status])
+
+  // Open on the comment a notification announced: scroll the drawer to it and
+  // flash it. Comments sit at the very bottom, under the fields, timeline and
+  // attachments, so opening at the top left the reader to hunt for it. Once per
+  // arrival, not per render: the drawer re-renders on every edit and must not
+  // drag the reader back to the comment each time.
+  const [flashComment, setFlashComment] = useState<string | null>(null)
+  const landedRef = useRef('')
+  const refetchedRef = useRef('')
+  useEffect(() => {
+    if (!focusCommentId || !task || task.id !== taskId) return
+    const key = `${focusKey}:${focusCommentId}`
+    if (landedRef.current === key) return
+    const hit = !!task.comments?.some((c: any) => c.id === focusCommentId)
+    // A notification for the task already open names a comment posted after the
+    // drawer loaded it: read the task again once before calling it deleted.
+    if (!hit && refetchedRef.current !== key) { refetchedRef.current = key; load(); return }
+    landedRef.current = key
+    const box = drawerRef.current
+    const el = box?.querySelector<HTMLElement>(hit ? `[data-comment="${focusCommentId}"]` : '[data-comments]')
+    if (box && el) {
+      // The drawer's own scroll, not scrollIntoView, which would also scroll
+      // whatever page sits behind the drawer.
+      const r = el.getBoundingClientRect(), b = box.getBoundingClientRect()
+      const top = box.scrollTop + r.top - b.top - Math.max(16, (box.clientHeight - r.height) / 2)
+      // A jump from far off, as in chat: a long glide ends after the flash does.
+      const far = Math.abs(top - box.scrollTop) > box.clientHeight * 2
+      box.scrollTo({ top, behavior: far ? 'auto' : 'smooth' })
+    }
+    // A flash still fading from the last notification belongs to that one.
+    setFlashComment(null)
+    if (!hit) { toast.info('That comment has since been deleted'); return }
+    requestAnimationFrame(() => setFlashComment(focusCommentId))
+    setTimeout(() => setFlashComment((f) => (f === focusCommentId ? null : f)), 2600)
+  }, [focusCommentId, focusKey, task, taskId])
 
   const mutate = async (fn: () => Promise<any>) => {
     setBusy(true)
@@ -635,7 +672,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
             )}
           </div>
 
-          <div>
+          <div data-comments>
             <label>Comments ({task.comments?.length || 0})</label>
             {task.comments?.map((c: any) => {
               // Editing is your own words only, deliberately: the thread is the
@@ -645,7 +682,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               const mine = c.user_id === user?.id
               const editing = editingComment === c.id
               return (
-                <div className="comment" key={c.id}>
+                <div className={'comment' + (flashComment === c.id ? ' flash' : '')} key={c.id} data-comment={c.id}>
                   <Avatar name={c.user_name} color={c.avatar_color} size={28} />
                   <div className="body" style={{ minWidth: 0 }}>
                     <div className="spread">

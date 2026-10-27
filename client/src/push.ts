@@ -72,7 +72,7 @@ export async function registerPush() {
       // what is ringing as it comes up, wherever the app is.
       if (data.type === 'call' || data.type === 'call-cancel') return
       // FCM data is all strings; an absent id arrives as ''.
-      const dest = notifTarget({ type: data.type, conversationId: data.conversationId, messageId: data.messageId, taskId: data.taskId }) || '/tasks'
+      const dest = notifTarget({ type: data.type, conversationId: data.conversationId, messageId: data.messageId, taskId: data.taskId, commentId: data.commentId }) || '/tasks'
       if (go) go(dest, { replace: replacesEntry(dest, location.pathname) })
       else if (location.pathname + location.search !== dest) location.assign(dest)
     })

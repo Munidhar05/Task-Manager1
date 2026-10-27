@@ -993,6 +993,10 @@ export function initSchema() {
   // conversation and the line; both stay NULL for task notifications.
   ensureColumn('notifications', 'conversation_id', 'TEXT')
   ensureColumn('notifications', 'message_id', 'TEXT')
+  // The same for a task comment: "Ravi commented on …" named only the task, so
+  // tapping it opened the drawer at the title with the comment out of sight at
+  // the bottom. NULL for everything that is not a comment.
+  ensureColumn('notifications', 'comment_id', 'TEXT')
 
   // Index on conversation_id — created here (not in the inline schema) so it runs
   // AFTER the column is ensured above; otherwise older DBs predating the column fail.
@@ -1201,6 +1205,43 @@ export function initSchema() {
       // Never block boot on this: an old notification left unlinked still
       // opens the chat list, which is all it ever did.
       console.error('[migrate] notifications_chat_link_v1 skipped:', e.message)
+    }
+  })
+
+  // Point the comment notifications already in people's bells at their comment.
+  // notify() ran in the same request, straight after the comment was inserted,
+  // so it is the nearest comment on that task, a moment before, by the person
+  // the notification names. Of several, the one whose words it quotes (the
+  // quote is the original text, so an edited comment is matched on name alone).
+  // A comment since deleted is simply not found; that notification keeps
+  // opening the task, as it always did.
+  runOnce('notifications_comment_link_v1', () => {
+    try {
+      let linked = 0
+      db.transaction(() => {
+        const rows = db.prepare(`SELECT id, user_id, task_id, message, created_at FROM notifications
+          WHERE type='task_comment' AND comment_id IS NULL AND task_id IS NOT NULL`).all()
+        const before = db.prepare(`
+          SELECT c.id, c.body, u.name FROM task_comments c JOIN users u ON u.id=c.user_id
+          WHERE c.task_id=? AND c.created_at BETWEEN ? AND ? AND c.user_id<>?
+          ORDER BY c.created_at DESC`)
+        const set = db.prepare('UPDATE notifications SET comment_id=? WHERE id=?')
+        for (const n of rows) {
+          const t = Date.parse(n.created_at)
+          if (!Number.isFinite(t)) continue
+          const text = n.message || ''
+          const named = before.all(n.task_id, new Date(t - 10000).toISOString(), n.created_at, n.user_id)
+            .filter((c) => text.startsWith(`${c.name} commented on `))
+          const hit = named.find((c) => text.includes(String(c.body).slice(0, 20))) || named[0]
+          if (!hit) continue
+          set.run(hit.id, n.id)
+          linked++
+        }
+      })()
+      if (linked) console.log(`[migrate] linked ${linked} comment notifications to their comment`)
+    } catch (e) {
+      // Never block boot on this: an unlinked one still opens the task.
+      console.error('[migrate] notifications_comment_link_v1 skipped:', e.message)
     }
   })
 }
