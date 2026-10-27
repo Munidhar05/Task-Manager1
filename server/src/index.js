@@ -19,7 +19,7 @@ import dashboardRoutes from './routes/dashboards.js'
 import assistantRoutes from './routes/assistant.js'
 import notificationRoutes from './routes/notifications.js'
 import digestRoutes from './routes/digest.js'
-import chatRoutes from './routes/chat.js'
+import chatRoutes, { callLiveHooks } from './routes/chat.js'
 import platformRoutes from './routes/platform.js'
 import usageRoutes from './routes/usage.js'
 import scoreRoutes from './routes/scores.js'
@@ -29,7 +29,7 @@ import apiKeyRoutes from './routes/apiKeys.js'
 import departmentRoutes from './routes/departments.js'
 import mcpRoutes from './routes/mcp.js'
 import { startScheduler } from './scheduler.js'
-import { attachLiveTranscribe, attachAssistantLive } from './ws/liveTranscribe.js'
+import { attachLiveTranscribe, attachAssistantLive, attachCallLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
 import { hasEmbeddings, embedModel } from './ai/embeddings.js'
 import { syncAll } from './ai/ragIndex.js'
@@ -172,6 +172,9 @@ attachLiveTranscribe(server)
 // commands WHILE the user speaks, so a turn needs no upload+transcribe round-trip
 // after they stop — the single biggest latency cut in the voice loop.
 attachAssistantLive(server)
+// A call's transcript: each participant's own microphone, streamed to Sarvam
+// while they talk (same relay again; the call decides who may open one).
+attachCallLive(server, callLiveHooks)
 // Real-time internal chat push shares the same HTTP server (different path).
 attachChatHub(server)
 

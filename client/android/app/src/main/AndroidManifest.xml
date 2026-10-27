@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -20,6 +21,33 @@
             </intent-filter>
         </activity>
 
+        <!-- "X is calling you" over the lock screen. Its own task (taskAffinity,
+             singleInstance) so ringing never drags the app's WebView forward or
+             leaves the ringing screen in the app's back stack. -->
+        <activity
+            android:name=".IncomingCallActivity"
+            android:theme="@style/AppTheme.IncomingCall"
+            android:launchMode="singleInstance"
+            android:taskAffinity="io.smarttask.app.incomingcall"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:exported="false" />
+
+        <receiver android:name=".CallActionReceiver" android:exported="false" />
+
+        <!-- Our subclass replaces Capacitor's FCM service: Android gives the
+             MESSAGING_EVENT to one service only, and calls must be handled
+             natively to ring while the app is closed. -->
+        <service android:name=".CallMessagingService" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <service
+            android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"
+            tools:node="remove" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -37,4 +65,14 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Push notifications (Android 13+ runtime permission). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Calls. Without CAMERA the WebView's getUserMedia({video}) is refused
+         outright, so video calls in the app never got a camera. The camera
+         feature is optional so phones without one can still install. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Ringing: take the screen when locked (Android 14+ also asks the user),
+         buzz, and keep the CPU up while the ring is posted. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>

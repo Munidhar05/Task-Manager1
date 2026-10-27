@@ -714,6 +714,8 @@ function Summary({ convId, meetingId, me, autoReview, onChanged }: React.Compone
           ))}
       </section>
 
+      {typeof m.transcript === 'string' && <TranscriptSection text={m.transcript} />}
+
       {/* The meeting page's route is manager-only: anyone else following this
           link would be bounced straight back to the dashboard. */}
       {me.role === 'manager' && (
@@ -730,6 +732,39 @@ function Summary({ convId, meetingId, me, autoReview, onChanged }: React.Compone
         document.body,
       )}
     </div>
+  )
+}
+
+// What was actually heard, "Name: words" a line (the shape callTranscript
+// writes). The summary is only ever as good as this; showing it is what tells
+// a thin summary of a good transcript apart from a call that was barely heard.
+// Long ones fold, since the summary above is what most people came for.
+const TRANSCRIPT_FOLD = 14
+function TranscriptSection({ text }: { text: string }) {
+  const [all, setAll] = useState(false)
+  const lines = useMemo(() => text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const m = /^([^:]{1,60}):\s+([\s\S]+)$/.exec(l)
+    return m ? { who: m[1], said: m[2] } : { who: '', said: l }
+  }), [text])
+  const shown = all ? lines : lines.slice(0, TRANSCRIPT_FOLD)
+  return (
+    <section className="ci-section">
+      <div className="ci-section-title">Transcript ({plural(lines.length, 'line')})</div>
+      {lines.length === 0
+        ? <div className="ci-mt-none">Nothing was heard on this call.</div>
+        : (
+          <div className="ci-mt-transcript">
+            {shown.map((l, i) => (
+              <p key={i} className="ci-mt-tline">{l.who && <b>{l.who}</b>}{l.said}</p>
+            ))}
+            {lines.length > TRANSCRIPT_FOLD && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAll((a) => !a)}>
+                {all ? 'Show less' : `Show all ${lines.length} lines`}
+              </button>
+            )}
+          </div>
+        )}
+    </section>
   )
 }
 

@@ -61,14 +61,14 @@ async function getAccessToken() {
 }
 
 // Persist a device's FCM token for a user (idempotent: one row per token).
-export function saveDeviceToken(userId, token, platform = 'android') {
+export function saveDeviceToken(userId, token, platform = 'android', { callRing = false } = {}) {
   if (!userId || !token) return
   // A token can migrate between users (shared device / re-login) — keep it tied to
   // the latest user so pushes never leak to a previous account.
   db.prepare('DELETE FROM device_tokens WHERE token=?').run(token)
   db.prepare(
-    `INSERT INTO device_tokens (id, user_id, token, platform, created_at) VALUES (?,?,?,?,?)`
-  ).run(`dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, userId, token, platform, new Date().toISOString())
+    `INSERT INTO device_tokens (id, user_id, token, platform, created_at, call_ring) VALUES (?,?,?,?,?,?)`
+  ).run(`dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, userId, token, platform, new Date().toISOString(), callRing ? 1 : 0)
 }
 
 export function removeDeviceToken(token) {
@@ -118,6 +118,69 @@ export async function sendPushToUser(userId, { title, body, data }) {
       }
     } catch (e) {
       console.warn('  [push] send error:', e.message)
+    }
+  }))
+}
+
+// An incoming call, WhatsApp-style. Two shapes, because two generations of the
+// app are installed:
+//
+// - An app that can ring natively (registered with call_ring=1) gets a DATA-ONLY
+//   message. That is the whole trick: a message with a `notification` block is
+//   drawn by Android itself while the app is in the background and never reaches
+//   our code, so it could only ever be an ordinary one-line notification. Data
+//   alone always wakes the app's messaging service, which puts up a full-screen
+//   ringing call over the lock screen.
+// - An older app would silently drop a data-only message, so it gets a normal
+//   high-priority notification instead — at least the phone buzzes and says who
+//   is calling. `tag` makes a second ring for the same call replace the first.
+//
+// TTL is the ring window: a push still queued after the call stopped ringing
+// (a phone that was off, a network that came back late) must not ring at all.
+export async function sendCallPush(userId, data, { ttlSec = 60, title = '', body = '' } = {}) {
+  const sa = getServiceAccount()
+  if (!sa || !userId) return
+  const rows = db.prepare('SELECT token, call_ring FROM device_tokens WHERE user_id=?').all(userId)
+  if (!rows.length) return
+  let accessToken
+  try { accessToken = await getAccessToken() } catch (e) { console.warn('  [push] auth failed:', e.message); return }
+  if (!accessToken) return
+
+  const stringData = {}
+  for (const [k, v] of Object.entries(data || {})) stringData[k] = v == null ? '' : String(v)
+  const cancel = stringData.type === 'call-cancel'
+  const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`
+  await Promise.all(rows.map(async ({ token: tok, call_ring: native }) => {
+    // A cancel means nothing to an app that never put up a ringing screen.
+    if (cancel && !native) return
+    const message = native
+      ? { token: tok, data: stringData, android: { priority: 'high', ttl: `${ttlSec}s` } }
+      : {
+          token: tok,
+          notification: { title, body },
+          data: stringData,
+          android: { priority: 'high', ttl: `${ttlSec}s`, notification: { sound: 'default', channel_id: 'smarttask_v2', tag: `call_${stringData.call_id}` } },
+        }
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ message }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const status = err?.error?.status || ''
+        // Unlike sendPushToUser, INVALID_ARGUMENT does not prune here: it is
+        // also what FCM answers to a malformed message, and a mistake in this
+        // payload must not quietly delete every phone's token.
+        if (res.status === 404 || status === 'NOT_FOUND' || status === 'UNREGISTERED') {
+          db.prepare('DELETE FROM device_tokens WHERE token=?').run(tok)
+        } else {
+          console.warn('  [push] call push failed', res.status, JSON.stringify(err).slice(0, 150))
+        }
+      }
+    } catch (e) {
+      console.warn('  [push] call push error:', e.message)
     }
   }))
 }

@@ -16,6 +16,14 @@
     </style>
 
 
+    <!-- The incoming-call screen: dark, no action bar, no splash. A framework
+         theme because IncomingCallActivity is a plain Activity, not AppCompat. -->
+    <style name="AppTheme.IncomingCall" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@drawable/bg_call_screen</item>
+        <item name="android:statusBarColor">#1F2C34</item>
+        <item name="android:navigationBarColor">#0B141A</item>
+    </style>
+
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>

@@ -6,7 +6,8 @@
 // (/notifications/register-device) so notify() can push to it. Tapping a push
 // opens the relevant screen.
 import { Capacitor } from '@capacitor/core'
-import { api } from './api'
+import { api, API_BASE } from './api'
+import { nativeCallsAvailable, configureNativeCalls } from './lib/nativeCall'
 
 let started = false
 let lastToken: string | null = null
@@ -45,15 +46,23 @@ export async function registerPush() {
 
     await PushNotifications.register()
 
+    // call_ring: this build has the native ringing screen, so the server may
+    // send calls to it as silent data pushes (see sendCallPush). An older build
+    // registers without it and keeps getting an ordinary notification.
+    const callRing = nativeCallsAvailable()
+    if (callRing) configureNativeCalls(API_BASE || location.origin)
     PushNotifications.addListener('registration', async (token) => {
       lastToken = token.value
-      try { await api.post('/notifications/register-device', { token: token.value, platform: 'android' }) } catch {}
+      try { await api.post('/notifications/register-device', { token: token.value, platform: 'android', call_ring: callRing }) } catch {}
     })
     PushNotifications.addListener('registrationError', (e) => console.warn('[push] registration error', e))
 
     // Tap on a notification → open the matching screen.
     PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
       const data: any = action.notification?.data || {}
+      // A call: stay put. Opening the app is the point — the call screen asks
+      // what is ringing as it comes up, wherever the app is.
+      if (data.type === 'call' || data.type === 'call-cancel') return
       const dest = data.type === 'chat_message' ? '/chats' : '/tasks'
       if (location.pathname !== dest) location.assign(dest)
     })

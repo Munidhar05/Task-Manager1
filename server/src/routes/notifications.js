@@ -9,9 +9,10 @@ r.use(authRequired)
 // Register this device's FCM token so the user gets native push. Called by the
 // app after it obtains a token (and on every login, in case the token rotated).
 r.post('/register-device', (req, res) => {
-  const { token, platform } = req.body || {}
+  const { token, platform, call_ring: callRing } = req.body || {}
   if (!token) return res.status(400).json({ error: 'token required' })
-  saveDeviceToken(req.user.id, token, platform || 'android')
+  // call_ring: this build can put up a full-screen incoming call (see sendCallPush).
+  saveDeviceToken(req.user.id, token, platform || 'android', { callRing: !!callRing })
   res.json({ ok: true })
 })
 

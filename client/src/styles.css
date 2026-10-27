@@ -1936,9 +1936,21 @@ tbody tr:hover { background: var(--n-50); }
   background: var(--surface); border-radius: 18px; box-shadow: var(--shadow-lg);
   padding: 26px 28px; display: grid; justify-items: center; gap: 6px; width: 100%; max-width: 320px;
 }
-.call-ring-who { font-size: 18px; font-weight: 700; margin-top: 8px; text-align: center; }
-.call-ring-sub { font-size: 12.5px; color: var(--muted); text-align: center; text-transform: capitalize; }
-.call-ring-actions { display: flex; gap: 26px; margin-top: 18px; }
+.call-ring-who { font-size: 20px; font-weight: 700; margin-top: 14px; text-align: center; overflow-wrap: anywhere; }
+.call-ring-sub { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); text-align: center; }
+.call-ring-actions { display: flex; gap: 44px; margin-top: 22px; }
+.call-ring-act { display: grid; justify-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.call-ring-actions .call-btn { width: 60px; height: 60px; }
+/* Two rings spreading out from the caller's face: the eye reads "ringing" before
+   it reads a word. */
+.call-ring-face { position: relative; display: grid; place-items: center; margin-top: 4px; }
+.call-ring-face::before, .call-ring-face::after {
+  content: ''; position: absolute; inset: -8px; border-radius: 50%;
+  border: 2px solid rgba(22,163,74,.5); animation: ring-wave 2s ease-out infinite;
+}
+.call-ring-face::after { animation-delay: 1s; }
+@keyframes ring-wave { from { transform: scale(.9); opacity: 1; } to { transform: scale(1.45); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .call-ring-face::before, .call-ring-face::after { animation: none; opacity: 0; } }
 
 .call-btn {
   width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--border);
@@ -1950,6 +1962,11 @@ tbody tr:hover { background: var(--n-50); }
 .call-btn.decline { background: #ef4444; border-color: #ef4444; color: #fff; }
 .call-btn.off { background: #ef4444; border-color: #ef4444; color: #fff; }
 .call-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* The site-wide focus ring squares buttons off (border-radius: 8px); a round
+   call button has to stay round, or the Answer button — focused the moment a
+   call rings — turns into a rounded square beside a round Decline. */
+.call-btn:focus-visible { border-radius: 50%; }
+.call-btn:disabled { opacity: .45; cursor: default; transform: none; }
 /* The answer button pulses so the eye lands on it before the decline. */
 .call-ring-actions .call-btn.accept { animation: call-pulse 1.5s ease-in-out infinite; }
 @keyframes call-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(22,163,74,.5); } 50% { box-shadow: 0 0 0 12px rgba(22,163,74,0); } }
@@ -2002,6 +2019,22 @@ tbody tr:hover { background: var(--n-50); }
 .call-btn.recording { background: #dc2626; border-color: #dc2626; color: #fff; animation: rec-pulse 1.6s ease-in-out infinite; }
 @keyframes rec-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.5); } 50% { box-shadow: 0 0 0 9px rgba(220,38,38,0); } }
 @media (prefers-reduced-motion: reduce) { .call-btn.recording { animation: none; } }
+/* The live transcript: everyone's words as the server filed them, under the
+   video. Capped in height so the call itself stays the main thing. */
+.call-captions { border-top: 1px solid var(--border); background: var(--bg); }
+.call-captions-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 7px 12px 2px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
+}
+.call-captions-n { font-weight: 600; letter-spacing: 0; text-transform: none; }
+.call-captions-note { margin: 2px 12px 4px; font-size: 11.5px; line-height: 1.4; color: #b45309; }
+.call-captions-body { max-height: 132px; overflow-y: auto; padding: 2px 12px 9px; }
+.call-stage.max .call-captions-body { max-height: 28vh; }
+.call-caption { margin: 3px 0; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.call-caption b { margin-right: 6px; font-weight: 700; color: var(--primary); }
+.call-caption.me b { color: #16a34a; }
+.call-captions-empty { padding: 6px 0; font-size: 12.5px; color: var(--muted); }
+
 /* Everyone in the call sees this, not just the person who pressed record. */
 .rec-badge { display: inline-flex; align-items: center; gap: 4px; margin-left: 7px; color: #dc2626; font-weight: 800; font-size: 10px; letter-spacing: .04em; }
 .rec-dot { width: 7px; height: 7px; border-radius: 50%; background: #dc2626; animation: rec-blink 1.2s steps(2, start) infinite; }
@@ -3097,6 +3130,22 @@ body:has(.rv-center) .va-dock { display: none; }
   body.chat-thread-open .call-stage { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
   .call-stage.mini { width: auto; }
   .call-grid { min-height: 120px; }
+  .call-captions-body { max-height: 96px; }
+
+  /* An incoming call on a phone takes the whole screen, the way the phone's own
+     call screen does: who is calling up top, Decline and Answer at the bottom
+     under the thumbs, far enough apart that one is never hit for the other. */
+  .call-ringer { padding: 0; place-items: stretch; background: linear-gradient(180deg, #14532d 0%, #0b1220 72%); backdrop-filter: none; }
+  .call-ring-card {
+    max-width: none; border-radius: 0; background: transparent; box-shadow: none; color: #fff;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: calc(84px + env(safe-area-inset-top, 0px)) 24px calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+  .call-ring-who { font-size: 27px; margin-top: 26px; }
+  .call-ring-sub { color: rgba(255,255,255,.78); font-size: 14px; }
+  .call-ring-actions { margin-top: auto; width: 100%; max-width: 360px; justify-content: space-between; padding: 0 12px; }
+  .call-ring-actions .call-btn { width: 72px; height: 72px; }
+  .call-ring-act { color: rgba(255,255,255,.88); font-size: 13px; }
   .sched-btn { width: 42px; height: 42px; padding: 0; border-radius: 50%; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; }
   .jump-pop { right: -40px; width: 220px; }
   .chat-input .btn-primary { flex-shrink: 0; padding: 0 18px; height: 42px; }
@@ -5006,6 +5055,9 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ci-mt-quote { margin-top: 7px; padding-left: 9px; border-left: 2px solid var(--border); font-size: 12px; font-style: italic; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* The way out to the whole meeting page (managers only: the route is theirs). */
+.ci-mt-transcript { display: grid; gap: 7px; justify-items: start; }
+.ci-mt-tline { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.ci-mt-tline b { margin-right: 6px; font-weight: 700; }
 .ci-mt-full { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; padding: 14px 16px; font-size: 13px; font-weight: 600; color: var(--link); text-decoration: none; }
 .ci-mt-full:hover { text-decoration: underline; }
 

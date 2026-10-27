@@ -38,6 +38,51 @@ function downsampleTo16k(input: Float32Array, inputRate: number): Float32Array {
   return out
 }
 
+// Stream an audio track that is already open — a call's own microphone — rather
+// than opening the microphone a second time. A second getUserMedia during a
+// call is a second capture with its own echo cancellation, and on some phones
+// it steals the mic from the call outright. Stopping this leaves the track
+// running: the call owns it.
+export function startPcmFromTrack(track: MediaStreamTrack, onFrame: (base64: string) => void): PcmStream {
+  const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext
+  const ctx: AudioContext = new AudioCtx()
+  // A context made without a recent tap (a call rejoined by itself after a
+  // reload) can start suspended, and a suspended context streams nothing at
+  // all — the transcript would just stay empty. So it is woken on the next
+  // touch or key, whenever that comes.
+  const wake = () => { ctx.resume?.().catch(() => {}) }
+  const evs = ['pointerdown', 'keydown', 'touchstart'] as const
+  wake()
+  if (ctx.state === 'suspended') for (const e of evs) window.addEventListener(e, wake, { capture: true })
+  const unwake = () => { for (const e of evs) window.removeEventListener(e, wake, { capture: true }) }
+  ctx.onstatechange = () => { if (ctx.state !== 'suspended') unwake() }
+  const source = ctx.createMediaStreamSource(new MediaStream([track]))
+  const processor = ctx.createScriptProcessor(4096, 1, 1)
+  // Nothing may come out of the speakers: a zero-gain sink keeps the node
+  // pulled (onaudioprocess needs a path to the destination) without playing
+  // your own voice back to you.
+  const sink = ctx.createGain()
+  sink.gain.value = 0
+  processor.onaudioprocess = (e) => onFrame(float32ToBase64Pcm16(downsampleTo16k(e.inputBuffer.getChannelData(0), ctx.sampleRate)))
+  source.connect(processor)
+  processor.connect(sink)
+  sink.connect(ctx.destination)
+  return {
+    stop: () => {
+      unwake()
+      try { processor.disconnect() } catch {}
+      try { source.disconnect() } catch {}
+      try { sink.disconnect() } catch {}
+      try { ctx.close() } catch {}
+    },
+  }
+}
+
+/** Silence in the same framing — lets a recogniser hear that the last sentence ended. */
+export function silentFrame(ms = 250): string {
+  return float32ToBase64Pcm16(new Float32Array(Math.round(16000 * ms / 1000)))
+}
+
 // Start streaming mic PCM to `onFrame` (called with each base64 chunk).
 // `onError` fires if mic access fails. `onLevel` (optional) reports the RMS level
 // (0..1) of each frame — the voice assistant runs its silence detection on the

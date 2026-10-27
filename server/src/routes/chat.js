@@ -5,7 +5,7 @@ import path from 'node:path'
 import { pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
-import { authRequired, requireRole, verifyToken } from '../auth.js'
+import { authRequired, requireRole, verifyToken, signScoped, verifyScoped } from '../auth.js'
 import { id, now, notify, audit } from '../util.js'
 import { pushToUser, getOnlineUsers, onUserOnline } from '../ws/chatHub.js'
 import { indexChatMessage, removeEmbedding } from '../ai/ragIndex.js'
@@ -15,6 +15,7 @@ import { persistMeeting, attendeesFor, createTaskFromSuggestion } from './meetin
 import { parseDueDate } from '../ai/dates.js'
 import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
+import { sendCallPush } from '../push.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
 // real-time delivery, replies (also privately, from a group), reactions, stars,
@@ -639,6 +640,19 @@ r.get('/conversations/:id/avatar', (req, res) => {
   const ext = path.extname(conv.avatar_file); if (ext) res.type(ext)
   res.setHeader('Cache-Control', 'private, max-age=300')
   fs.createReadStream(abs).pipe(res)
+})
+
+// Decline from a phone's ringing screen, which holds no session — only the
+// signature its ring carried (see ringFor). It can decline that one call, as
+// that one person, and nothing else.
+r.post('/call/:id/decline-push', (req, res) => {
+  const uid = String(req.body?.uid || '')
+  if (!uid || !verifyScoped(`decline:${req.params.id}:${uid}`, req.body?.sig)) return res.status(403).json({ error: 'Forbidden' })
+  const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
+  const me = uid ? db.prepare('SELECT * FROM users WHERE id=?').get(uid) : null
+  if (!call || !me || me.org_id !== call.org_id || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
+  declineCall(call, me)
+  res.json({ ok: true })
 })
 
 r.use(authRequired)
@@ -1433,6 +1447,91 @@ r.get('/mentions', (req, res) => {
 
 const liveCall = (convId) => db.prepare("SELECT * FROM chat_calls WHERE conversation_id=? AND status IN ('ringing','active') ORDER BY started_at DESC LIMIT 1").get(convId)
 
+// How long a call rings before it counts as unanswered. One number for the
+// reaper, the push's time-to-live and both ends' timers, so the callee's phone
+// stops ringing at the moment the caller's screen gives up — not a minute later
+// on a call that is long over.
+export const RING_MS = 60000
+
+// Where a call's transcript comes from, decided by what this server can do:
+//   stream  — each person's microphone is streamed to Sarvam while they talk.
+//             The accurate one: it copes with Telugu, Hindi and English mixed
+//             in one sentence, which the browser's own recogniser mangles.
+//   upload  — the same, in 25-second recordings, for a Whisper-style provider
+//             that has no streaming socket.
+//   browser — no speech service configured: each browser's built-in
+//             recogniser, the only option that costs nothing.
+// CALL_STT=browser forces the free path on a server that has a key.
+function callSttMode() {
+  if ((process.env.CALL_STT || '').toLowerCase() === 'browser') return 'browser'
+  const provider = (process.env.TRANSCRIPTION_PROVIDER || '').toLowerCase()
+  if (provider === 'sarvam' && process.env.SARVAM_API_KEY) return 'stream'
+  if ((provider === 'openai' && process.env.OPENAI_API_KEY) || (provider === 'groq' && process.env.GROQ_API_KEY)) return 'upload'
+  return 'browser'
+}
+
+// Everyone a call rings: the conversation, minus whoever placed it.
+const calleesOf = (call) => participantsOf(call.conversation_id).filter((uid) => uid !== call.started_by)
+
+// The ring as one person receives it. Per person, not per conversation,
+// because it carries a Decline signed for THEM: a phone answering a push has
+// no session in its native layer, and this signature lets it turn down this
+// one call and nothing else (see signScoped).
+function ringFor(call, conv, caller, uid) {
+  const group = conv.type === 'group'
+  const title = group ? (conv.name || 'Group') : caller.name
+  const base = (process.env.PUBLIC_API_URL || '').replace(/\/+$/, '')
+  return {
+    type: 'call-ring', callId: call.id, conversationId: conv.id, kind: call.kind,
+    from: { id: caller.id, name: caller.name }, conversationName: title, conversationType: conv.type,
+    transcribe: call.transcribe ?? 1,
+    startedAt: call.started_at,
+    expiresAt: new Date(new Date(call.started_at).getTime() + RING_MS).toISOString(),
+    // What is left of the ring by THIS server's clock. A device times the ring
+    // from this, not from expiresAt, so a phone whose clock is a few minutes
+    // off neither drops the ring at once nor rings on for a call that is over.
+    remainingMs: Math.max(0, new Date(call.started_at).getTime() + RING_MS - Date.now()),
+    // For the phone's native ringer. url stays empty unless the server is told
+    // its public address; the app then uses the API base it already talks to.
+    decline: { uid, sig: signScoped(`decline:${call.id}:${uid}`), url: base ? `${base}/api/chat/call/${call.id}/decline-push` : '' },
+    title, group,
+  }
+}
+
+// Ring them: on every open tab (the socket) AND on their phones (a push). A
+// phone in a pocket has no open socket at all, which is why nobody's phone
+// ever rang.
+function ringCallees(call, conv, caller) {
+  for (const uid of calleesOf(call)) {
+    const ring = ringFor(call, conv, caller, uid)
+    pushToUser(uid, ring)
+    sendCallPush(uid, {
+      type: 'call', call_id: call.id, conversation_id: conv.id, kind: call.kind,
+      from_name: caller.name, title: ring.title, group: ring.group ? '1' : '0',
+      expires_at: ring.expiresAt, decline_url: ring.decline.url, decline_sig: ring.decline.sig, uid,
+    }, {
+      ttlSec: Math.round(RING_MS / 1000),
+      title: ring.group ? `${caller.name} is calling ${ring.title}` : `${caller.name} is calling you`,
+      body: `Incoming VoTask ${call.kind} call — open the app to answer`,
+    }).catch(() => {})
+  }
+}
+
+// Stop ringing for these people, on their open tabs and their phones. Without
+// this a ring outlived its call: the screen kept saying "Abhiram is calling
+// you" until someone pressed Decline — a day later, on a call long over.
+function stopRinging(call, uids) {
+  for (const uid of uids) {
+    pushToUser(uid, { type: 'call-ring-stop', callId: call.id })
+    sendCallPush(uid, { type: 'call-cancel', call_id: call.id }, { ttlSec: Math.round(RING_MS / 1000) }).catch(() => {})
+  }
+}
+// Callees still being rung: neither picked up nor said no.
+const stillRinging = (call) => {
+  const settled = new Set(db.prepare('SELECT user_id FROM chat_call_participants WHERE call_id=? AND (joined_at IS NOT NULL OR declined_at IS NOT NULL)').all(call.id).map((p) => p.user_id))
+  return calleesOf(call).filter((uid) => !settled.has(uid))
+}
+
 // Write the "Video call · 4m" line into the thread. Deliberately NOT deliver():
 // a call that just ended has already interrupted everyone in it, and a push
 // notification for its own receipt is noise.
@@ -1467,7 +1566,9 @@ r.post('/conversations/:id/call', (req, res) => {
     db.prepare('INSERT OR IGNORE INTO chat_call_participants (call_id, user_id, joined_at) VALUES (?,?,?)').run(existing.id, me.id, now())
     db.prepare('UPDATE chat_call_participants SET joined_at=COALESCE(joined_at,?), left_at=NULL WHERE call_id=? AND user_id=?').run(now(), existing.id, me.id)
     pushToConversation(conv.id, { type: 'call-joined', callId: existing.id, userId: me.id, name: me.name }, me.id)
-    return res.json({ ...existing, joined: true, peers: callPeers(existing.id, me.id) })
+    // Joining from the chat's call button is picking up: my other devices stop.
+    stopRinging(existing, [me.id])
+    return res.json({ ...existing, joined: true, peers: callPeers(existing.id, me.id), stt: callSttMode(), ring_ms: RING_MS })
   }
 
   const cid = id('call')
@@ -1475,12 +1576,8 @@ r.post('/conversations/:id/call', (req, res) => {
   db.prepare('INSERT INTO chat_calls (id, org_id, conversation_id, started_by, kind, status, started_at) VALUES (?,?,?,?,?,?,?)')
     .run(cid, conv.org_id, conv.id, me.id, kind, 'ringing', ts)
   db.prepare('INSERT INTO chat_call_participants (call_id, user_id, joined_at) VALUES (?,?,?)').run(cid, me.id, ts)
-  const label = conv.type === 'group' ? (conv.name || 'Group') : me.name
-  pushToConversation(conv.id, {
-    type: 'call-ring', callId: cid, conversationId: conv.id, kind,
-    from: { id: me.id, name: me.name }, conversationName: label, conversationType: conv.type, transcribe: 1,
-  }, me.id)
-  res.status(201).json({ id: cid, conversation_id: conv.id, kind, status: 'ringing', started_by: me.id, transcribe: 1, peers: [] })
+  ringCallees(db.prepare('SELECT * FROM chat_calls WHERE id=?').get(cid), conv, me)
+  res.status(201).json({ id: cid, conversation_id: conv.id, kind, status: 'ringing', started_by: me.id, transcribe: 1, peers: [], stt: callSttMode(), ring_ms: RING_MS })
 })
 
 // Everyone else already in the call, so a joiner knows who to offer to.
@@ -1495,14 +1592,23 @@ r.post('/call/:id/answer', (req, res) => {
   const me = req.user
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
   if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
-  if (call.status === 'ended') return res.status(409).json({ error: 'Call already ended' })
+  // Only a call that is still going. A missed or declined one used to be
+  // "answerable" too, which is how a ring left on screen for hours put someone
+  // into a call that was long over — and then, being "busy" in it, their
+  // browser turned down the real call that came in next.
+  if (call.status !== 'ringing' && call.status !== 'active') {
+    stopRinging(call, [me.id])
+    return res.status(409).json({ error: 'This call has already ended', code: 'CALL_OVER' })
+  }
   const ts = now()
   const peers = callPeers(call.id, me.id)
   if (call.status === 'ringing') db.prepare('UPDATE chat_calls SET status=?, answered_at=COALESCE(answered_at,?) WHERE id=?').run('active', ts, call.id)
   db.prepare('INSERT OR IGNORE INTO chat_call_participants (call_id, user_id, joined_at) VALUES (?,?,?)').run(call.id, me.id, ts)
-  db.prepare('UPDATE chat_call_participants SET joined_at=COALESCE(joined_at,?), left_at=NULL WHERE call_id=? AND user_id=?').run(ts, call.id, me.id)
+  db.prepare('UPDATE chat_call_participants SET joined_at=COALESCE(joined_at,?), left_at=NULL, declined_at=NULL WHERE call_id=? AND user_id=?').run(ts, call.id, me.id)
   pushToConversation(call.conversation_id, { type: 'call-joined', callId: call.id, userId: me.id, name: me.name }, me.id)
-  res.json({ ...db.prepare('SELECT * FROM chat_calls WHERE id=?').get(call.id), peers })
+  // Picked up on one device: every other tab and phone of mine stops ringing.
+  stopRinging(call, [me.id])
+  res.json({ ...db.prepare('SELECT * FROM chat_calls WHERE id=?').get(call.id), peers, stt: callSttMode(), ring_ms: RING_MS })
 })
 
 // Decline: only meaningful while it is still ringing, and only ends the call for
@@ -1511,15 +1617,27 @@ r.post('/call/:id/decline', (req, res) => {
   const me = req.user
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
   if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
-  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
+  declineCall(call, me)
+  res.json({ ok: true })
+})
+
+// Turning a ring down, from the app or from the phone's ringing screen. A
+// decline of a call that is already over is a no-op, not an error: it is only
+// a ring that was still on someone's screen.
+function declineCall(call, me) {
+  if (call.status !== 'ringing' && call.status !== 'active') { stopRinging(call, [me.id]); return }
+  const ts = now()
+  db.prepare('INSERT OR IGNORE INTO chat_call_participants (call_id, user_id) VALUES (?,?)').run(call.id, me.id)
+  db.prepare('UPDATE chat_call_participants SET declined_at=? WHERE call_id=? AND user_id=? AND joined_at IS NULL').run(ts, call.id, me.id)
+  stopRinging(call, [me.id])
   pushToUser(call.started_by, { type: 'call-declined', callId: call.id, userId: me.id, name: me.name })
-  if (conv.type === 'direct' && call.status === 'ringing') {
-    db.prepare('UPDATE chat_calls SET status=?, ended_at=? WHERE id=?').run('declined', now(), call.id)
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
+  if (conv && conv.type === 'direct' && call.status === 'ringing') {
+    db.prepare('UPDATE chat_calls SET status=?, ended_at=? WHERE id=?').run('declined', ts, call.id)
     pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
     postCallLine(conv, { ...callSummary(call.id), status: 'declined' })
   }
-  res.json({ ok: true })
-})
+}
 
 // Leave. The last person out ends the call and files the ledger line.
 r.post('/call/:id/end', (req, res) => {
@@ -1530,6 +1648,11 @@ r.post('/call/:id/end', (req, res) => {
   const ts = now()
   db.prepare('UPDATE chat_call_participants SET left_at=? WHERE call_id=? AND user_id=? AND left_at IS NULL').run(ts, call.id, me.id)
   pushToConversation(call.conversation_id, { type: 'call-left', callId: call.id, userId: me.id }, me.id)
+  // A one-to-one call is over when either side hangs up, as on a phone. Only a
+  // group call carries on without someone. Before this the other person was
+  // left alone in a call nobody else was in — and being "in a call", their
+  // browser turned down the next one that came in.
+  if (conv?.type === 'direct') db.prepare('UPDATE chat_call_participants SET left_at=? WHERE call_id=? AND left_at IS NULL').run(ts, call.id)
 
   const stillIn = db.prepare('SELECT COUNT(*) n FROM chat_call_participants WHERE call_id=? AND joined_at IS NOT NULL AND left_at IS NULL').get(call.id).n
   // 'declined' and 'missed' are already terminal and have already filed their
@@ -1539,6 +1662,7 @@ r.post('/call/:id/end', (req, res) => {
   if (stillIn === 0 && !settled) {
     // Nobody ever answered → it was a missed call, not a zero-second one.
     const status = call.answered_at ? 'ended' : 'missed'
+    stopRinging(call, stillRinging(call))
     db.prepare('UPDATE chat_calls SET status=?, ended_at=? WHERE id=?').run(status, ts, call.id)
     pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
     const sum = callSummary(call.id)
@@ -1570,6 +1694,50 @@ function canTranscribe(call, userId) {
   return call.status === 'ended' && !!call.ended_at && Date.now() - new Date(call.ended_at).getTime() < 90000
 }
 
+// File one line of a call's transcript and show it, live, to everyone on the
+// call. Every way of hearing a call ends here — the Sarvam stream, a recorded
+// piece, the browser's own recogniser — so the captions on screen and the
+// transcript the summary is written from are the same lines, and a line that
+// did not reach the server never looks as if it had.
+function addCallSegment(call, user, text, at = now()) {
+  const clean = String(text || '').trim().slice(0, 8000)
+  // A breath or a click between sentences comes back from the recogniser as a
+  // lone syllable — often in a script nobody on the call speaks (auto-detect
+  // turned a pause into "ಆ..." in testing). Under two letters — vowel signs
+  // count, so Hindi "हाँ" survives — is never a line worth putting in the
+  // transcript or in front of the summariser.
+  if ((clean.match(/[\p{L}\p{M}]/gu) || []).length < 2) return null
+  const sid = id('seg')
+  db.prepare('INSERT INTO chat_call_segments (id, call_id, user_id, text, created_at) VALUES (?,?,?,?,?)').run(sid, call.id, user.id, clean, at)
+  const line = { type: 'call-caption', callId: call.id, id: sid, userId: user.id, name: user.name, text: clean, at }
+  for (const p of db.prepare('SELECT user_id FROM chat_call_participants WHERE call_id=? AND joined_at IS NOT NULL AND left_at IS NULL').all(call.id)) {
+    pushToUser(p.user_id, line)
+  }
+  return sid
+}
+
+// The Sarvam stream for one person on one call (ws/liveTranscribe.js owns the
+// socket; these decide who may open one and where its words go). Checked at
+// connect AND on every line, because the call can end, or its transcription be
+// switched off, while the socket is still open.
+export const callLiveHooks = {
+  accept(user, url) {
+    const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(String(url.searchParams.get('callId') || ''))
+    if (!call || call.org_id !== user.org_id || !member(call.conversation_id, user.id) || !canTranscribe(call, user.id)) return null
+    return { callId: call.id, user }
+  },
+  onTranscript(ctx, text) {
+    const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(ctx.callId)
+    if (call && canTranscribe(call, ctx.user.id)) addCallSegment(call, ctx.user, text)
+  },
+  // Asked every 20s while the stream is open. canTranscribe's grace after the
+  // call ends covers the last sentence; after that the socket is closed.
+  stillAllowed(ctx) {
+    const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(ctx.callId)
+    return !!call && canTranscribe(call, ctx.user.id)
+  },
+}
+
 // One utterance, from one person's own browser, during a recorded call.
 // Deliberately tiny and unvalidated beyond membership: it is called every few
 // seconds by every participant, and a slow endpoint here would be felt as the
@@ -1581,9 +1749,7 @@ r.post('/call/:id/segment', (req, res) => {
   if (!canTranscribe(call, me.id)) return res.json({ ok: true, ignored: true })
   const text = String(req.body?.text || '').trim().slice(0, 2000)
   if (!text) return res.json({ ok: true })
-  db.prepare('INSERT INTO chat_call_segments (id, call_id, user_id, text, created_at) VALUES (?,?,?,?,?)')
-    .run(id('seg'), call.id, me.id, text, now())
-  res.json({ ok: true })
+  res.json({ ok: true, id: addCallSegment(call, me, text) })
 })
 
 // A browser that cannot recognise speech itself (Firefox, an iPhone app's
@@ -1604,15 +1770,12 @@ r.post('/call/:id/audio', smallUpload.single('file'), async (req, res) => {
   try {
     const buf = fs.readFileSync(path.join(UPLOAD_DIR, req.file.filename))
     const { text } = await transcribeAudio(buf, req.file.originalname || 'call.webm', req.file.mimetype || 'audio/webm')
-    const clean = String(text || '').trim().slice(0, 8000)
-    if (clean) {
-      // Filed at the moment the piece STARTED, so it sits among everyone
-      // else's lines in the order things were said.
-      const at = new Date(String(req.body?.started_at || ''))
-      const when = isNaN(at.getTime()) || at.toISOString() < call.started_at ? now() : at.toISOString()
-      db.prepare('INSERT INTO chat_call_segments (id, call_id, user_id, text, created_at) VALUES (?,?,?,?,?)').run(id('seg'), call.id, me.id, clean, when)
-    }
-    res.json({ ok: true, captured: !!clean })
+    // Filed at the moment the piece STARTED, so it sits among everyone else's
+    // lines in the order things were said.
+    const at = new Date(String(req.body?.started_at || ''))
+    const when = isNaN(at.getTime()) || at.toISOString() < call.started_at ? now() : at.toISOString()
+    const sid = addCallSegment(call, me, text, when)
+    res.json({ ok: true, captured: !!sid })
   } catch (err) {
     res.status(err.code === 'NO_PROVIDER' ? 400 : 502).json({ error: err.message, code: err.code || null })
   } finally {
@@ -1678,6 +1841,25 @@ async function summariseCall(call, actorId, { autoAssign }) {
   // re-file everything said in the first one.
   db.prepare('DELETE FROM chat_call_segments WHERE call_id=?').run(call.id)
 
+  // On a call between two people, an ask can only be for the other one. "Also,
+  // check the delivery schedule" from Priya, on a call with Ravi alone, is
+  // Ravi's; the extractor leaves it unowned because no name was said, and it
+  // then sat waiting for a manager to assign what both of them already knew.
+  // Only when the asker is known and was on the call — a line nobody can be
+  // tied to stays for review.
+  if (conv?.type === 'direct' && joined.length === 2) {
+    // The model's own reasoning ("no assignee was named") is replaced, not
+    // kept: left in place it would argue against the owner shown beside it.
+    const fill = db.prepare(`UPDATE suggested_tasks SET suggested_assignee_id=?, suggested_assignee_raw=?, assignee_reasoning=?
+      WHERE id=? AND suggested_assignee_id IS NULL`)
+    for (const sg of db.prepare("SELECT id, suggested_assigner_id FROM suggested_tasks WHERE meeting_id=? AND status='pending' AND suggested_assignee_id IS NULL AND suggested_assigner_id IS NOT NULL").all(mid)) {
+      if (!joined.includes(sg.suggested_assigner_id)) continue
+      const other = joined.find((uid) => uid !== sg.suggested_assigner_id)
+      const name = other && db.prepare('SELECT name FROM users WHERE id=? AND org_id=?').get(other, call.org_id)?.name
+      if (name) fill.run(other, name, 'Asked of the only other person on a one-to-one call', sg.id)
+    }
+  }
+
   let assigned = 0
   if (autoAssign) {
     const owned = db.prepare("SELECT * FROM suggested_tasks WHERE meeting_id=? AND status='pending' AND suggested_assignee_id IS NOT NULL").all(mid)
@@ -1708,9 +1890,11 @@ async function summariseCall(call, actorId, { autoAssign }) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The end of every call that was answered. A short wait first: the last
-// lines spoken are still on their way from people's browsers when the last
-// person hangs up, and a recording piece may still be being transcribed.
-function scheduleFinalize(callId, delayMs = 4000, tries = 0) {
+// lines spoken are still on their way when the last person hangs up — each
+// side gives the speech service up to a few seconds to finish its sentence
+// before closing (CallCenter's flushStream) — and a recording piece may still
+// be being transcribed.
+function scheduleFinalize(callId, delayMs = 6000, tries = 0) {
   setTimeout(() => { finalizeCall(callId, tries).catch((e) => console.error('[chat] call summary failed:', e.message)) }, delayMs)
 }
 // Claimed in one statement, so the end-of-call path and the manual button
@@ -1848,7 +2032,32 @@ r.get('/calls/active', (req, res) => {
     ...row,
     peers: callPeers(row.id, me.id),
     title: conv?.type === 'group' ? (conv.name || 'Group') : (others[0] || 'Call'),
+    stt: callSttMode(), ring_ms: RING_MS,
   } })
+})
+
+// What is ringing for me right now. Asked whenever a device comes back — the
+// app opened from a call push, a laptop woken from sleep, a socket that
+// reconnected — so a ring missed while away still shows if it is still
+// ringing, and a ring left on screen is dropped if it is not. The socket alone
+// can do neither: it only knows what happened while it was open.
+r.get('/calls/ringing', (req, res) => {
+  const me = req.user
+  const since = new Date(Date.now() - RING_MS).toISOString()
+  const rows = db.prepare(`
+    SELECT c.* FROM chat_calls c
+    JOIN chat_participants p ON p.conversation_id=c.conversation_id AND p.user_id=?
+    LEFT JOIN chat_call_participants cp ON cp.call_id=c.id AND cp.user_id=?
+    WHERE c.org_id=? AND c.status IN ('ringing','active') AND c.started_by<>? AND c.started_at>?
+      AND (cp.user_id IS NULL OR (cp.joined_at IS NULL AND cp.declined_at IS NULL))
+    ORDER BY c.started_at DESC LIMIT 5`).all(me.id, me.id, me.org_id, me.id, since)
+  const items = []
+  for (const call of rows) {
+    const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
+    const caller = db.prepare('SELECT id, name FROM users WHERE id=? AND org_id=?').get(call.started_by, me.org_id)
+    if (conv && caller) items.push(ringFor(call, conv, caller, me.id))
+  }
+  res.json({ items })
 })
 
 // Current live call in a conversation, so a refresh mid-call can rejoin.
@@ -1856,7 +2065,7 @@ r.get('/conversations/:id/call', (req, res) => {
   if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Not found' })
   const call = liveCall(req.params.id)
   if (!call) return res.json({ call: null })
-  res.json({ call: { ...call, peers: callPeers(call.id, req.user.id) } })
+  res.json({ call: { ...call, peers: callPeers(call.id, req.user.id), stt: callSttMode(), ring_ms: RING_MS } })
 })
 
 // ---------- chat → task ----------
@@ -2502,10 +2711,14 @@ r.get('/conversations/:id/meetings', (req, res) => {
 
 // One meeting, shaped like GET /api/meetings/:id so the review screen
 // (MeetingDetail's ReviewAssignModal) takes it as it is — but only a meeting
-// filed from THIS conversation, and without the raw transcript: the summary's
-// evidence quotes carry the lines that matter, and reading a summary in a group
-// is not a reason to hand every member the whole recording's text. Every member
-// may read it; reviewing stays manager-only on the /meetings routes it calls.
+// filed from THIS conversation. Every member may read the summary; reviewing
+// stays manager-only on the /meetings routes it calls.
+//
+// The transcript goes to the people who were IN it — everyone who joined the
+// call, whoever posted the recording — and to managers. Without it a thin
+// summary was a dead end: nobody could see what had actually been heard, so
+// "the summary is empty" and "the call was never transcribed" looked the same.
+// A group member who missed the call still gets the summary, not every word.
 r.get('/conversations/:id/meetings/:mid', (req, res) => {
   const me = req.user
   const conv = infoConv(req)
@@ -2536,6 +2749,8 @@ r.get('/conversations/:id/meetings/:mid', (req, res) => {
     WHERE t.meeting_id=? AND t.org_id=? AND COALESCE(t.visible_to_manager, 1)=1
     ORDER BY t.created_at`).all(m.id, me.org_id)
   const k = m.call_id ? db.prepare('SELECT * FROM chat_calls WHERE id=? AND org_id=?').get(m.call_id, me.org_id) : null
+  const wasOnIt = me.role === 'manager' || me.role === 'admin' || m.uploaded_by === me.id
+    || (!!k && !!db.prepare('SELECT 1 FROM chat_call_participants WHERE call_id=? AND user_id=? AND joined_at IS NOT NULL').get(k.id, me.id))
   let languages = []
   try { languages = JSON.parse(m.detected_languages || '[]') } catch {}
 
@@ -2550,6 +2765,7 @@ r.get('/conversations/:id/meetings/:mid', (req, res) => {
     participants,
     suggestions,
     tasks,
+    transcript: wasOnIt ? (_transcript || '') : null,
     call: k ? {
       id: k.id, kind: k.kind === 'video' ? 'video' : 'audio', status: k.status,
       started_at: normTs(k.started_at), ended_at: normTs(k.ended_at), duration_sec: talkSeconds(k),
@@ -2919,10 +3135,14 @@ export function runChatDue() {
         // The grace period is what makes a reload survivable: the socket drops
         // and comes back within seconds, and the call must still be there.
         const abandoned = !anyoneHere && ageMs > 120000
-        const ringingTooLong = call.status === 'ringing' && ageMs > 90000
+        // A little past the ring window, so the caller's own "No answer" (which
+        // ends the call properly) normally gets there first, and this only
+        // catches a caller who vanished mid-ring.
+        const ringingTooLong = call.status === 'ringing' && ageMs > RING_MS + 5000
         if (!abandoned && !ringingTooLong) continue
 
         const status = call.answered_at ? 'ended' : 'missed'
+        stopRinging(call, stillRinging(call))
         db.prepare('UPDATE chat_calls SET status=?, ended_at=? WHERE id=?').run(status, ts, call.id)
         db.prepare('UPDATE chat_call_participants SET left_at=? WHERE call_id=? AND left_at IS NULL').run(ts, call.id)
         const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
