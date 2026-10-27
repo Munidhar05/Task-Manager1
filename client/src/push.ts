@@ -8,9 +8,17 @@
 import { Capacitor } from '@capacitor/core'
 import { api, API_BASE } from './api'
 import { nativeCallsAvailable, configureNativeCalls } from './lib/nativeCall'
+import { notifTarget, replacesEntry } from './lib/notifTarget'
 
 let started = false
 let lastToken: string | null = null
+
+// The app's router, once it is mounted (App sets it). A tap then moves inside
+// the running app, as the bell does, instead of reloading all of it to get
+// there — a reload also threw away whatever chat or form was open.
+type Go = (to: string, opts: { replace: boolean }) => void
+let go: Go | null = null
+export function setPushNavigator(fn: Go | null) { go = fn }
 
 export async function registerPush() {
   if (started || !Capacitor.isNativePlatform()) return
@@ -63,8 +71,10 @@ export async function registerPush() {
       // A call: stay put. Opening the app is the point — the call screen asks
       // what is ringing as it comes up, wherever the app is.
       if (data.type === 'call' || data.type === 'call-cancel') return
-      const dest = data.type === 'chat_message' ? '/chats' : '/tasks'
-      if (location.pathname !== dest) location.assign(dest)
+      // FCM data is all strings; an absent id arrives as ''.
+      const dest = notifTarget({ type: data.type, conversationId: data.conversationId, messageId: data.messageId, taskId: data.taskId }) || '/tasks'
+      if (go) go(dest, { replace: replacesEntry(dest, location.pathname) })
+      else if (location.pathname + location.search !== dest) location.assign(dest)
     })
   } catch (e) {
     started = false

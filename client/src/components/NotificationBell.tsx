@@ -2,8 +2,13 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { Ic } from '../ui'
+import { notifTarget, replacesEntry } from '../lib/notifTarget'
 
-interface Notif { id: string; type: string; message: string; task_id?: string; read: number; created_at: string }
+interface Notif {
+  id: string; type: string; message: string; task_id?: string | null
+  conversation_id?: string | null; message_id?: string | null // chat notifications: where to open
+  read: number; created_at: string
+}
 
 // Each notification type → a line glyph + a semantic tone. Replaces the emoji
 // (📩📌💬…) which rendered differently per-OS and read informal; the tinted
@@ -149,12 +154,13 @@ export default function NotificationBell() {
     if (next && unread > 0) { await api.post('/notifications/read-all'); setUnread(0); load() }
   }
 
-  // Click a notification → jump to whatever it's about: the related task drawer, or
-  // the Chats page for message notifications.
+  // Click a notification → jump to whatever it's about: the related task drawer,
+  // or the chat and the very message it announced.
+  const targetOf = (n: Notif) => notifTarget({ type: n.type, conversationId: n.conversation_id, messageId: n.message_id, taskId: n.task_id })
   const openNotif = (n: Notif) => {
     setOpen(false)
-    if (n.type === 'chat_message' || n.type === 'chat_mention' || n.type === 'chat_call' || n.type === 'chat_reminder') navigate('/chats')
-    else if (n.task_id) navigate(`/tasks?task=${n.task_id}`)
+    const to = targetOf(n)
+    if (to) navigate(to, { replace: replacesEntry(to, location.pathname) })
   }
 
   return (
@@ -190,7 +196,7 @@ export default function NotificationBell() {
           </div>
           {items.length === 0 && <div className="empty" style={{ padding: 24 }}>You're all caught up</div>}
           {items.map((n) => {
-            const actionable = n.type === 'chat_message' || n.type === 'chat_mention' || n.type === 'chat_call' || n.type === 'chat_reminder' || !!n.task_id
+            const actionable = !!targetOf(n)
             return (
               <div
                 key={n.id}

@@ -1027,6 +1027,7 @@ function deliver(conv, msgRow, sender, mentioned = []) {
   const preview = snippet(msgRow)
   const short = preview.length > 70 ? preview.slice(0, 70) + '…' : preview
   const pinged = new Set(mentioned)
+  const at = { conversationId: conv.id, messageId: msgRow.id } // tapping it opens this line
   for (const uid of others) {
     const p = db.prepare('SELECT muted, muted_until FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, uid)
     // A timed mute that has run out is not a mute any more. Checked on read
@@ -1038,7 +1039,7 @@ function deliver(conv, msgRow, sender, mentioned = []) {
     // typing someone's name instead of just talking. Muting still silences every
     // other message in the thread.
     if (pinged.has(uid) && !dndLive) {
-      notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null)
+      notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null, at)
       continue
     }
     // DND silences everything, including a direct mention — that is the contract
@@ -1046,7 +1047,7 @@ function deliver(conv, msgRow, sender, mentioned = []) {
     // make the setting useless. The message still arrives live in the thread.
     if (dndLive) continue
     if (muteLive) continue // muted: deliver the message live, but no notification
-    notify(conv.org_id, uid, 'chat_message', `${label}: ${short}`, null)
+    notify(conv.org_id, uid, 'chat_message', `${label}: ${short}`, null, at)
   }
   // Recipients with the app open have it now: that is the second tick. The
   // rest get theirs when a device of theirs next checks in (deliverPending).
@@ -1275,7 +1276,7 @@ r.post('/message/:id/reactions', (req, res) => {
   // reaction, only to the author, and only if they have not muted the chat.
   if (added && m.sender_id !== me.id && m.kind !== 'system' && member(m.conversation_id, m.sender_id) && wantsPing(m.conversation_id, m.sender_id)) {
     const what = snippet(m)
-    notify(m.org_id, m.sender_id, 'chat_message', `${me.name} reacted ${emoji} to: "${what.length > 50 ? what.slice(0, 50) + '…' : what}"`, null)
+    notify(m.org_id, m.sender_id, 'chat_message', `${me.name} reacted ${emoji} to: "${what.length > 50 ? what.slice(0, 50) + '…' : what}"`, null, { conversationId: m.conversation_id, messageId: m.id })
   }
   res.json({ reactions })
 })
@@ -1534,7 +1535,8 @@ const stillRinging = (call) => {
 
 // Write the "Video call · 4m" line into the thread. Deliberately NOT deliver():
 // a call that just ended has already interrupted everyone in it, and a push
-// notification for its own receipt is noise.
+// notification for its own receipt is noise. Returns the line's id, which a
+// missed-call notification points at.
 function postCallLine(conv, call) {
   const mins = Math.round((call.duration_sec || 0) / 60)
   const label = call.kind === 'video' ? 'Video call' : 'Audio call'
@@ -1550,6 +1552,7 @@ function postCallLine(conv, call) {
   touchConvo(conv.id)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   for (const uid of participantsOf(conv.id)) pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(row, uid, {}) })
+  return mid
 }
 
 // Start ringing everyone else in the conversation.
@@ -1666,13 +1669,13 @@ r.post('/call/:id/end', (req, res) => {
     db.prepare('UPDATE chat_calls SET status=?, ended_at=? WHERE id=?').run(status, ts, call.id)
     pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
     const sum = callSummary(call.id)
-    postCallLine(conv, sum)
+    const lineId = postCallLine(conv, sum)
     // Everyone is off the call: what was said becomes its summary and tasks.
     if (status === 'ended') scheduleFinalize(call.id)
     if (status === 'missed') {
       for (const uid of participantsOf(conv.id)) {
         if (uid === call.started_by) continue
-        notify(conv.org_id, uid, 'chat_call', `Missed ${call.kind} call from ${db.prepare('SELECT name FROM users WHERE id=?').get(call.started_by)?.name || 'a teammate'}`, null)
+        notify(conv.org_id, uid, 'chat_call', `Missed ${call.kind} call from ${db.prepare('SELECT name FROM users WHERE id=?').get(call.started_by)?.name || 'a teammate'}`, null, { conversationId: conv.id, messageId: lineId })
       }
     }
   }
@@ -2938,7 +2941,7 @@ r.post('/message/:id/fork', (req, res) => {
     .run(mid, me.org_id, cid, me.id, '', `Forked from ${origin}: "${carried}"`, ts)
 
   pushToConversation(cid, { type: 'conversation', action: 'created', conversationId: cid })
-  for (const uid of valid) if (uid !== me.id) notify(me.org_id, uid, 'chat_message', `${me.name} started "${name}" from a message`, null)
+  for (const uid of valid) if (uid !== me.id) notify(me.org_id, uid, 'chat_message', `${me.name} started "${name}" from a message`, null, { conversationId: cid, messageId: mid })
   res.status(201).json(summarizeConvo(db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(cid), me.id))
 })
 
@@ -3160,7 +3163,7 @@ export function runChatDue() {
     try {
       const m = rem.message_id ? db.prepare('SELECT body, file_name FROM chat_messages WHERE id=?').get(rem.message_id) : null
       const preview = rem.note || (m ? (m.body || m.file_name || '') : '')
-      notify(rem.org_id, rem.user_id, 'chat_reminder', `Reminder: ${preview.slice(0, 80)}`, null)
+      notify(rem.org_id, rem.user_id, 'chat_reminder', `Reminder: ${preview.slice(0, 80)}`, null, { conversationId: rem.conversation_id, messageId: rem.message_id })
       pushToUser(rem.user_id, { type: 'reminder', conversationId: rem.conversation_id, messageId: rem.message_id, preview })
     } catch (e) { console.error('[chat] reminder failed:', e.message) }
   }

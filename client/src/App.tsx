@@ -5,6 +5,7 @@ import { useAuth } from './auth'
 import { confirmLogout } from './lib/confirm'
 import { savedAccounts, SavedAccount } from './accounts'
 import { runBackHandlers } from './back'
+import { setPushNavigator } from './push'
 import { useEscape } from './lib/useEscape'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
@@ -514,9 +515,19 @@ function useAndroidBackButton() {
   }, [navigate])
 }
 
+// A tapped push notification opens its screen through the router (see push.ts).
+function usePushNavigator() {
+  const navigate = useNavigate()
+  useEffect(() => {
+    setPushNavigator((to, opts) => navigate(to, opts))
+    return () => setPushNavigator(null)
+  }, [navigate])
+}
+
 export default function App() {
   const { user } = useAuth()
   useAndroidBackButton()
+  usePushNavigator()
   return (
     <>
     <ToastHost />
