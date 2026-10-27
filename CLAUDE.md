@@ -92,8 +92,13 @@ receipt), and `chat_receipt_marks` records each move so Message info can say *wh
 through `markRead` / `markDelivered` / `pushReceipts`, never a bare `UPDATE`. And every
 answered call is summarised server-side when the last person leaves (`finalizeCall` →
 `summariseCall`, claimed once via `chat_calls.processed_at`), which assigns the tasks whose
-owner was named; the client only streams each person's own speech up as
-`chat_call_segments`. Group event lines are `kind='system'` messages, never `deliver()`ed.
+owner was named; each person's own speech is heard on their device and filed as
+`chat_call_segments` through `addCallSegment`, the one path that also shows it live as a
+caption — streamed to Sarvam over `/api/chat/call/live` when the server has a key
+(`callSttMode`), the browser's recogniser otherwise. A ring is a lifecycle, not one socket
+message: `ringCallees` / `stopRinging` reach open tabs and phones (FCM, `sendCallPush`),
+every state change that ends a ring must call `stopRinging`, and devices re-ask
+`/calls/ringing` when they come back. Group event lines are `kind='system'` messages, never `deliver()`ed.
 A meeting filed from a chat records which chat and which call it came from
 (`meetings.conversation_id` / `call_id`, passed to `persistMeeting`): the info panel
 (`components/ChatInfoPanel`, `ChatMedia`, `ChatMeetings` over `lib/chatInfo.ts`, read from
@@ -175,6 +180,14 @@ existing install. `versionCode` climbs and is never reused; `versionName` is jus
 facing label and doesn't have to track it (currently `versionCode 5` / `"3.1"`).
 `client/.env.production` must point `VITE_API_BASE` at the deployed API before the build,
 and signing lives in `client/android/keystore.properties`.
+
+Incoming calls ring natively: `CallMessagingService` *replaces* Capacitor's FCM service
+(removed in the manifest — Android delivers a push to one service only) and turns data-only
+`type: 'call'` pushes into a full-screen ringing `CallRinger` notification /
+`IncomingCallActivity`; everything else goes to `super`. The web side talks to it through
+the `CallRing` plugin (`lib/nativeCall.ts`). A build registers its push token with
+`call_ring: true`; older builds get an ordinary notification instead, since they would drop
+a data-only push.
 
 ## Conventions
 

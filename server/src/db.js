@@ -964,6 +964,15 @@ export function initSchema() {
   ensureColumn('chat_calls', 'transcribe', 'INTEGER DEFAULT 1')
   ensureColumn('chat_calls', 'meeting_id', 'TEXT')
   ensureColumn('chat_calls', 'processed_at', 'TEXT')
+  // Turning a ring down in a GROUP call does not end the call — the others may
+  // still be talking — so the decline has to be remembered per person, or the
+  // next "is anything ringing for me?" check (on reload, on waking a phone)
+  // would ring them again for a call they already said no to.
+  ensureColumn('chat_call_participants', 'declined_at', 'TEXT')
+  // Phones whose app can ring natively (a full-screen incoming call). Only they
+  // get the call as a silent data push; an older app would drop that push on
+  // the floor, so it gets an ordinary "is calling you" notification instead.
+  ensureColumn('device_tokens', 'call_ring', 'INTEGER DEFAULT 0')
   // WHERE A MEETING CAME FROM. A meeting filed out of a chat — a call's
   // transcript, a recording posted in the thread — kept its only trail on the
   // chat side (chat_calls.meeting_id, the "Summary of …" card), so nothing on

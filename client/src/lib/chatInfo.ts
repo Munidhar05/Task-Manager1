@@ -209,9 +209,9 @@ export interface MeetingsPayload {
 }
 
 // One meeting, shaped like GET /api/meetings/:id so it can be handed straight
-// to MeetingDetail's ReviewAssignModal. No raw transcript: the summary's
-// evidence quotes already carry the lines that matter, and a member of the
-// group does not need the whole recording's text to review it.
+// to MeetingDetail's ReviewAssignModal. `transcript` is the text for people who
+// were on the call (and managers), null for a member who was not — they get
+// the summary, not every word.
 export interface MeetingDetailPayload {
   id: string
   title: string
@@ -246,6 +246,7 @@ export interface MeetingDetailPayload {
     assigned_by_name: string | null
   }[]
   call: { id: string; kind: 'audio' | 'video'; status: CallStatus; started_at: string; ended_at: string | null; duration_sec: number } | null
+  transcript?: string | null
 }
 
 // ---------------------------------------------------------------- endpoints

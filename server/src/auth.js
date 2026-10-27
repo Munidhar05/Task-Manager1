@@ -62,6 +62,18 @@ export function verifyToken(token) {
   }
 }
 
+// A signature over one specific thing ("decline call X as user Y"), for a
+// caller that holds no session. A phone ringing from a push has no JWT in
+// native code — handing the app's 30-day token to the native layer just so a
+// Decline button can work would put a full credential somewhere it never had
+// to be. This proves only the one action it was minted for.
+export const signScoped = (value) => crypto.createHmac('sha256', SECRET).update(String(value)).digest('hex')
+export function verifyScoped(value, sig) {
+  const want = Buffer.from(signScoped(value), 'hex')
+  const got = Buffer.from(String(sig || ''), 'hex')
+  return got.length === want.length && crypto.timingSafeEqual(got, want)
+}
+
 // ---- API keys ---------------------------------------------------------------
 // The non-browser way in. See the api_keys table in db.js for the model; the
 // short version is that a key IS a user, with that user's role and org.

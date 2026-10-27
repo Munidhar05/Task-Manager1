@@ -26,7 +26,7 @@ import { verifyToken } from '../auth.js'
 // not something a test can wait for.
 const SARVAM_WS = process.env.SARVAM_WS_URL || 'wss://api.sarvam.ai/speech-to-text/ws'
 
-function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
+function attachSarvamRelay(server, { path, allowUser, pickLanguage, accept, onTranscript, stillAllowed }) {
   // `noServer` + manual upgrade routing so multiple WS endpoints can share one
   // HTTP server. (Binding with `{ server, path }` makes ws abort every mismatched
   // upgrade with a 400, which would kill the other endpoints' handshakes.)
@@ -48,6 +48,13 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
     if (!user || !allowUser(user)) {
       try { client.send(JSON.stringify({ error: 'Authentication required' })) } catch {}
       return client.close(4401, 'unauthorized')
+    }
+    // A relay that serves one thing (a call) decides here whether this person
+    // may open it, and gets back whatever it needs to file the words.
+    const ctx = accept ? accept(user, url) : null
+    if (accept && !ctx) {
+      try { client.send(JSON.stringify({ error: 'Not transcribing this call' })) } catch {}
+      return client.close(4403, 'forbidden')
     }
 
     // --- Provider guard ---
@@ -142,7 +149,10 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
       sarvam.on('message', (raw) => {
         let msg
         try { msg = JSON.parse(raw.toString()) } catch { return }
-        if (msg.type === 'data' && msg.data?.transcript) toClient({ transcript: msg.data.transcript })
+        if (msg.type === 'data' && msg.data?.transcript) {
+          toClient({ transcript: msg.data.transcript })
+          if (onTranscript) { try { onTranscript(ctx, msg.data.transcript) } catch (e) { console.warn('[live] transcript hook failed:', e.message) } }
+        }
         else if (msg.type === 'error') toClient({ error: msg.data?.message || 'Sarvam error' })
       })
 
@@ -173,6 +183,11 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage }) {
     // Both sockets get pings. An idle stretch — a pause in the room — must not
     // be mistaken for a dead peer and closed by an intermediary.
     const keepAlive = setInterval(() => {
+      // Sarvam bills for every second streamed. A socket whose reason to exist
+      // is gone (the call ended, its transcription was switched off) is closed
+      // here rather than trusting the browser to: a crashed or stuck tab would
+      // otherwise stream silence to Sarvam for as long as it stayed open.
+      if (stillAllowed && !stillAllowed(ctx)) { try { client.close(4403, 'done') } catch {}; return }
       if (sarvam && sarvam.readyState === WebSocket.OPEN) { try { sarvam.ping() } catch {} }
       if (client.readyState === WebSocket.OPEN) { try { client.ping() } catch {} }
     }, 20000)
@@ -220,5 +235,23 @@ export function attachAssistantLive(server) {
     // meeting-style en-IN lock mangles them. VOICE_STT_LANGUAGE pins it if a
     // deployment finds auto-detect drifting into other languages.
     pickLanguage: () => process.env.VOICE_STT_LANGUAGE || 'unknown',
+  })
+}
+
+// A call: each person on it streams their OWN microphone here, so every line
+// arrives already attributed to whoever said it — and the server files it into
+// the call's transcript itself (hooks from routes/chat.js) rather than trusting
+// the browser to post it back, which is one more hop to lose a line on.
+// Auto-detected language: calls here are Telugu, Hindi and English mixed in one
+// sentence, which a locked en-IN turns into English mush. CALL_STT_LANGUAGE pins
+// it if a deployment finds detection drifting.
+export function attachCallLive(server, hooks) {
+  return attachSarvamRelay(server, {
+    path: '/api/chat/call/live',
+    allowUser: () => true,
+    pickLanguage: () => process.env.CALL_STT_LANGUAGE || 'unknown',
+    accept: hooks.accept,
+    onTranscript: hooks.onTranscript,
+    stillAllowed: hooks.stillAllowed,
   })
 }

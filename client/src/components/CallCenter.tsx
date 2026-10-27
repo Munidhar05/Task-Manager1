@@ -3,9 +3,16 @@ import { api, getToken, wsUrl, API_BASE } from '../api'
 import { useAuth } from '../auth'
 import { Avatar, Ic } from '../ui'
 import { toast } from '../lib/toast'
+import { confirmDialog } from '../lib/confirm'
 import { audioFilename } from '../lib/audioFile'
 import { subscribeCalls, CallKind } from '../lib/call'
 import { startLiveSpeech, isSupported as speechSupported, LiveSpeech } from '../lib/liveSpeech'
+import { startPcmFromTrack, silentFrame, PcmStream } from '../lib/pcmStream'
+import { startRingtone, startRingback } from '../lib/ringtone'
+import {
+  RingMsg, nativeCallsAvailable, ringNatively, stopNativeRing, takeNativeAction,
+  onNativeCallAction, nativeCallDone, configureNativeCalls, nativeFullScreenStatus, openNativeFullScreenSettings,
+} from '../lib/nativeCall'
 
 // Audio / video / screen-share calling.
 //
@@ -24,6 +31,17 @@ import { startLiveSpeech, isSupported as speechSupported, LiveSpeech } from '../
 // Signalling rule that keeps it simple: THE JOINER ALWAYS OFFERS. Whoever picks
 // up sends an offer to everyone already in the call, so for any pair exactly one
 // side initiates and there is no glare to resolve.
+//
+// RINGING. A ring is not "a message that arrived once". It used to be — the
+// socket said "call-ring", the card went up, and only Answer or Decline took it
+// down — so a ring outlived its call: answered on another tab, hung up by the
+// caller, or simply never answered, the card stayed until someone pressed
+// Decline, the next day, on a call long over (and pressing Answer instead put
+// them into it). Now a ring ends when the server says so (call-ring-stop,
+// call-ended), when its time is up, and whenever this device comes back
+// (reconnect, tab shown, app resumed) and asks what is actually ringing. The
+// server also pushes every ring to the callee's phones, where the app's native
+// layer rings like a phone call (lib/nativeCall.ts).
 
 // Public STUN only. It gets a direct path on ordinary home and office networks;
 // symmetric NAT (some corporate firewalls, a few mobile carriers) needs a TURN
@@ -33,8 +51,46 @@ const ICE: RTCConfiguration = {
   iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
 }
 
-interface Incoming { callId: string; conversationId: string; kind: CallKind; fromName: string; fromId: string; title: string }
+// The server's ring window (routes/chat.js RING_MS), for a server too old to send it.
+const DEFAULT_RING_MS = 60000
+
+type SttMode = 'stream' | 'upload' | 'browser'
+
+interface Incoming {
+  callId: string; conversationId: string; kind: CallKind; fromName: string; fromId: string; title: string
+  expiresAt: number   // by THIS device's clock (see remainingMs)
+  shownAt: number
+  ring: RingMsg
+}
 interface Peer { id: string; name: string; stream: MediaStream | null }
+interface Caption { id: string; userId: string; name: string; text: string; at: string }
+// One Sarvam stream: my microphone, for as long as I am unmuted on a call
+// whose transcription is on.
+interface StreamHandle { ws: WebSocket; pcm: PcmStream | null; ready: boolean; closing: boolean; error: string | null }
+
+function toIncoming(msg: any): Incoming {
+  const left = typeof msg.remainingMs === 'number' ? msg.remainingMs : DEFAULT_RING_MS
+  return {
+    callId: msg.callId, conversationId: msg.conversationId, kind: msg.kind === 'video' ? 'video' : 'audio',
+    fromName: msg.from?.name || 'Teammate', fromId: msg.from?.id,
+    title: msg.title || (msg.conversationType === 'group' ? msg.conversationName : (msg.from?.name || 'Call')),
+    expiresAt: Date.now() + Math.max(0, Math.min(left, 5 * 60000)),
+    shownAt: Date.now(),
+    ring: msg,
+  }
+}
+
+// Desktop only: the system notification is what reaches someone whose VoTask
+// tab is behind another window. Asked for on a click (placing or taking a
+// call), because browsers ignore or bury a permission prompt that comes from
+// nowhere.
+function askNotifyPermission() {
+  try {
+    if (!nativeCallsAvailable() && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {})
+    }
+  } catch { /* not available */ }
+}
 
 export default function CallCenter() {
   const { user } = useAuth()
@@ -56,11 +112,17 @@ export default function CallCenter() {
   // ANYONE can switch it off (or back on); the switch is the call's, not one
   // person's, and everyone is told who flipped it.
   const [transcribing, setTranscribing] = useState(false)
+  // What the server has actually filed, everyone's lines, as they land. This
+  // is the live transcript on screen and also the proof it is working: a line
+  // shows only once it is in the transcript the summary will be written from.
+  const [captions, setCaptions] = useState<Caption[]>([])
+  const [captionsOpen, setCaptionsOpen] = useState(true)
   // Surfaced live, because the alternative is what happened: speech capture
   // dies quietly and you only learn at the end of the call that there is
   // nothing to make tasks from.
-  const [heardCount, setHeardCount] = useState(0)
   const [speechDead, setSpeechDead] = useState<string | null>(null)
+  // Set when this device had to drop to a less accurate way of hearing itself.
+  const [sttNote, setSttNote] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
@@ -81,14 +143,18 @@ export default function CallCenter() {
 
   // Transcription plumbing. The call's switch (on unless someone turned it
   // off), whether the media is flowing yet, and my own half of the
-  // conversation, recognised on this device and posted up as it is spoken.
+  // conversation, heard on this device and sent up as it is spoken.
   // Everyone in the call runs one of these; the server puts the halves back
   // together in time order.
   const transcribeRef = useRef(true)
   const liveRef = useRef(false)
   const micOnRef = useRef(true)
   const convIdRef = useRef<string | null>(null)
+  const sttRef = useRef<SttMode>('browser')
+  const ringMsRef = useRef(DEFAULT_RING_MS)
   const speechRef = useRef<LiveSpeech | null>(null)
+  const streamRef = useRef<StreamHandle | null>(null)
+  const streamTriesRef = useRef(0)
   // A browser that cannot recognise speech (Firefox, an iPhone app's web view)
   // records its own microphone instead, in short pieces sent to the server to
   // transcribe — each piece a whole file, which is what a speech service needs.
@@ -106,10 +172,32 @@ export default function CallCenter() {
   // must read as of NOW, not as of the render that created them.
   const peersRef = useRef<Record<string, Peer>>({})
   const kindRef = useRef<CallKind>('audio')
+  const phaseRef = useRef<'idle' | 'ringing' | 'connecting' | 'live'>('idle')
+  const incomingRef = useRef<Incoming | null>(null)
+  // Rings this device has already dealt with (answered, declined, timed out,
+  // told to stop). A late socket message or a slow "what is ringing?" answer
+  // must never put one of them back on screen.
+  const handledRef = useRef<Set<string>>(new Set())
+  // While a start/answer/rejoin request is in flight, and for a moment after,
+  // the server may not yet list me in the call. The "am I really still in
+  // it?" check must not tear down a call that is still being joined.
+  const joiningRef = useRef(false)
+  const joinedAtRef = useRef(0)
 
   useEffect(() => { callIdRef.current = callId }, [callId])
   useEffect(() => { peersRef.current = peers }, [peers])
   useEffect(() => { kindRef.current = kind }, [kind])
+  useEffect(() => { phaseRef.current = phase }, [phase])
+  useEffect(() => { incomingRef.current = incoming }, [incoming])
+
+  // What the server says about the call it just started, answered or rejoined.
+  const applyCallInfo = (info: any) => {
+    transcribeRef.current = info?.transcribe !== 0
+    setTranscribing(transcribeRef.current)
+    sttRef.current = info?.stt === 'stream' || info?.stt === 'upload' ? info.stt : 'browser'
+    ringMsRef.current = Number(info?.ring_ms) || DEFAULT_RING_MS
+    joinedAtRef.current = Date.now()
+  }
 
   // ---- teardown -----------------------------------------------------------
   const cleanup = useCallback(() => {
@@ -127,32 +215,46 @@ export default function CallCenter() {
     micOnRef.current = true
     try { speechRef.current?.stop() } catch {}
     speechRef.current = null
+    const h = streamRef.current
+    streamRef.current = null
+    if (h) { h.closing = true; h.pcm?.stop(); try { h.ws.close() } catch {} }
+    streamTriesRef.current = 0
     if (pieceTimerRef.current) { clearTimeout(pieceTimerRef.current); pieceTimerRef.current = null }
     try { if (pieceRecRef.current?.state !== 'inactive') pieceRecRef.current?.stop() } catch {}
     pieceRecRef.current = null
-    setTranscribing(false); setHeardCount(0); setSpeechDead(null)
+    callIdRef.current = null
+    phaseRef.current = 'idle'
+    joiningRef.current = false
+    setTranscribing(false); setCaptions([]); setSpeechDead(null); setSttNote(null)
     setPeers({}); setPhase('idle'); setCallId(null); setSharing(false)
     setMicOn(true); setCamOn(true); setElapsed(0); setMinimized(false); setMaximized(false)
+    // A call answered on a locked phone was let over the lock screen; the
+    // next time the app opens it should be locked like anything else.
+    nativeCallDone()
   }, [])
 
   // Leave. Nothing to file from here any more: the server turns the call into
   // its summary and tasks once the last person is off it. The camera and
-  // microphone stop at once; what this side still owes the transcript — on a
-  // browser that records instead of listening, the last piece of audio — goes
-  // up after that, and only then is the server told this person has left, so
-  // the piece is in before the call is written up.
+  // microphone stop and the call screen goes at once; what this side still
+  // owes the transcript — the sentence the speech service is finishing, or on
+  // a browser that records instead, the last piece of audio — goes up after
+  // that, and only then is the server told this person has left, so it is in
+  // before the call is written up.
   const hangUp = async (silent = false) => {
     const id = callIdRef.current
-    await stopMyTranscript()
+    const finishing = stopMyTranscript()
+    cleanup()
+    await finishing
     const owed = pieceUploadsRef.current
     pieceUploadsRef.current = []
-    cleanup()
     if (owed.length) await Promise.race([Promise.allSettled(owed), new Promise((r) => setTimeout(r, 20000))])
     if (id && !silent) { try { await api.post(`/chat/call/${id}/end`) } catch {} }
     // Leaving was deliberate, so do not walk back in — but a call started
     // after this one should still be rejoinable.
     rejoinedRef.current = false
   }
+  const hangUpRef = useRef(hangUp)
+  hangUpRef.current = hangUp
 
   // Release the mic and camera if the tab goes away mid-call — otherwise the
   // device stays held and the OS keeps showing the "in use" indicator.
@@ -169,12 +271,75 @@ export default function CallCenter() {
 
   // ---- transcription: my half of the call ---------------------------------
   // Runs on EVERY participant while the call's switch is on, from the moment
-  // the media is flowing. Speech recognised here goes up line by line; a
-  // browser that cannot recognise speech records instead (see the piece
-  // recorder below).
+  // the media is flowing. Which way this device hears itself is the server's
+  // call (sttRef, see callSttMode in routes/chat.js): the speech service when
+  // the server has one, the browser's own recogniser when it does not.
   const startMyTranscript = () => {
     if (!transcribeRef.current || !liveRef.current || !callIdRef.current || !micOnRef.current) return
-    if (speechRef.current || pieceRecRef.current) return
+    if (speechRef.current || pieceRecRef.current || streamRef.current) return
+    const mode = sttRef.current
+    if (mode === 'stream') { startStream(); return }
+    if (mode === 'upload') { startPieces(); return }
+    startBrowserSpeech()
+  }
+
+  // The accurate way: this call's own microphone track, streamed to the server
+  // and on to Sarvam, which files each sentence into the transcript and shows
+  // it to everyone as a caption. No second microphone is opened (see
+  // startPcmFromTrack), so muting the call mutes this too.
+  const startStream = () => {
+    const id = callIdRef.current
+    const track = localRef.current?.getAudioTracks()[0]
+    const token = getToken()
+    if (!id || !track || !token) return
+    const ws = new WebSocket(wsUrl(`/api/chat/call/live?token=${encodeURIComponent(token)}&callId=${encodeURIComponent(id)}`))
+    const h: StreamHandle = { ws, pcm: null, ready: false, closing: false, error: null }
+    streamRef.current = h
+    // Audio flows from the moment the socket opens; the server holds it until
+    // Sarvam is ready, so the first words are not lost to the handshake.
+    ws.onopen = () => {
+      if (h.closing || streamRef.current !== h) return
+      try { h.pcm = startPcmFromTrack(track, (b64) => { if (ws.readyState === WebSocket.OPEN) ws.send(b64) }) }
+      catch { h.error = 'this browser could not read the microphone'; try { ws.close() } catch {} }
+    }
+    ws.onmessage = (ev) => {
+      let m: any
+      try { m = JSON.parse(ev.data) } catch { return }
+      if (m.ready || m.resumed) { h.ready = true; streamTriesRef.current = 0; setSpeechDead(null) }
+      else if (m.error && !h.ready) h.error = String(m.error)
+    }
+    ws.onclose = () => {
+      h.pcm?.stop(); h.pcm = null
+      if (h.closing || streamRef.current !== h) return // stopped on purpose
+      streamRef.current = null
+      if (!transcribeRef.current || callIdRef.current !== id || !micOnRef.current) return
+      // A blip (network change, a server restart) on a stream that WAS working:
+      // reconnect, backing off. One that never worked is not going to.
+      if (h.ready && streamTriesRef.current < 5) {
+        const n = ++streamTriesRef.current
+        setTimeout(() => { if (callIdRef.current === id) startMyTranscript() }, Math.min(8000, 500 * 2 ** n))
+        return
+      }
+      fallBack(h.error || 'the speech service could not be reached')
+    }
+  }
+
+  // Down one step: the speech service in 25-second recordings (same accuracy,
+  // later captions), then the browser's own recogniser (less accurate for
+  // Telugu and Hindi, but something). Said on screen, so a worse transcript is
+  // never a silent surprise.
+  const fallBack = (why: string) => {
+    if (sttRef.current === 'stream' && typeof MediaRecorder !== 'undefined') {
+      sttRef.current = 'upload'
+      setSttNote(`Live captions are delayed: ${why}. Your words are being sent in short recordings instead.`)
+    } else {
+      sttRef.current = 'browser'
+      setSttNote(`Using this browser's own speech recogniser (${why}) — less accurate for Telugu and Hindi.`)
+    }
+    startMyTranscript()
+  }
+
+  const startBrowserSpeech = () => {
     if (!speechSupported()) { startPieces(); return }
     const callId = callIdRef.current
     setSpeechDead(null)
@@ -182,7 +347,6 @@ export default function CallCenter() {
       (text) => {
         const id = callIdRef.current
         if (!id || id !== callId || !transcribeRef.current) return
-        setHeardCount((n) => n + 1)
         api.post(`/chat/call/${id}/segment`, { text }).catch(() => {})
       },
       undefined,
@@ -239,7 +403,6 @@ export default function CallCenter() {
       const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
       const res = await fetch(`${API_BASE}/api/chat/call/${id}/audio`, { method: 'POST', headers, body: form })
       const data = await res.json().catch(() => ({}))
-      if (res.ok && data.captured) setHeardCount((n) => n + 1)
       if (!res.ok && data.code === 'NO_PROVIDER') {
         // Nowhere to send it: stop recording rather than keep uploading audio
         // nothing can read. The others' halves still make the summary.
@@ -259,10 +422,31 @@ export default function CallCenter() {
     try { rec.stop() } catch { return Promise.resolve() }
     return Promise.race([stopped, new Promise<void>((r) => setTimeout(r, 1500))])
   }
-  const stopMyTranscript = () => {
+  // The stream is let go of at once (so nothing else touches it), but closed
+  // only after the speech service has had a moment to hand back the sentence
+  // in progress. A second of silence is what tells it that sentence is over;
+  // closing straight away is how the last thing said on a call — usually the
+  // "so Ravi, you'll send it Friday" that matters most — went missing.
+  const flushStream = (): Promise<void> => {
+    const h = streamRef.current
+    streamRef.current = null
+    if (!h) return Promise.resolve()
+    h.closing = true
+    h.pcm?.stop(); h.pcm = null
+    const ws = h.ws
+    if (ws.readyState !== WebSocket.OPEN) { try { ws.close() } catch {}; return Promise.resolve() }
+    for (let i = 0; i < 5; i++) { try { ws.send(silentFrame(250)) } catch {} }
+    return new Promise((resolve) => {
+      let done = false
+      const finish = () => { if (done) return; done = true; try { ws.close() } catch {}; resolve() }
+      ws.onmessage = (ev) => { try { if (JSON.parse(ev.data).transcript) setTimeout(finish, 300) } catch {} }
+      setTimeout(finish, 2500)
+    })
+  }
+  const stopMyTranscript = (): Promise<void> => {
     try { speechRef.current?.stop() } catch {}
     speechRef.current = null
-    return stopPieces()
+    return Promise.all([stopPieces(), flushStream()]).then(() => {})
   }
 
   // The call's switch — anyone on the call may flip it, and everyone is told.
@@ -368,14 +552,59 @@ export default function CallCenter() {
     if (el && stream && el.srcObject !== stream) el.srcObject = stream
   })
 
+  // ---- the ring -----------------------------------------------------------
+  const dismissRing = useCallback((ringId: string) => {
+    handledRef.current.add(ringId)
+    stopNativeRing(ringId)
+    if (incomingRef.current?.callId === ringId) incomingRef.current = null
+    setIncoming((cur) => (cur && cur.callId === ringId ? null : cur))
+  }, [])
+
+  const showRing = useCallback((msg: any) => {
+    if (!msg?.callId || handledRef.current.has(msg.callId)) return
+    if (incomingRef.current?.callId === msg.callId) return
+    if (callIdRef.current) {
+      if (callIdRef.current === msg.callId) return
+      // Already on a call: turn it down rather than ring over a live one — and
+      // say so, so the call is not silently lost.
+      handledRef.current.add(msg.callId)
+      api.post(`/chat/call/${msg.callId}/decline`).catch(() => {})
+      toast.info(`${msg.from?.name || 'Someone'} tried to call you while you were on this call`, 6000)
+      return
+    }
+    const inc = toIncoming(msg)
+    if (inc.expiresAt <= Date.now()) return
+    incomingRef.current = inc
+    setIncoming(inc)
+  }, [])
+
+  // What is ringing for me, per the server. A ring shown before this question
+  // was asked and missing from the answer is over; anything listed that is
+  // not on screen yet goes up (opened from a push, a laptop woken from sleep).
+  const syncRinging = useCallback(async (): Promise<any[] | null> => {
+    const asked = Date.now()
+    let items: any[] = []
+    try { items = ((await api.get('/chat/calls/ringing')) as any).items || [] } catch { return null }
+    const cur = incomingRef.current
+    if (cur && cur.shownAt < asked && !items.some((i) => i.callId === cur.callId)) dismissRing(cur.callId)
+    if (!callIdRef.current && !incomingRef.current) {
+      const next = items.find((i) => !handledRef.current.has(i.callId))
+      if (next) showRing(next)
+    }
+    return items
+  }, [dismissRing, showRing])
+
   // ---- start / answer -----------------------------------------------------
   const begin = useCallback(async (conversationId: string, k: CallKind, label: string) => {
-    if (callIdRef.current) { toast.error('You are already on a call'); return }
-    setKind(k); setTitle(label); setPhase('ringing')
+    if (callIdRef.current || joiningRef.current) { toast.error('You are already on a call'); return }
+    askNotifyPermission()
+    joiningRef.current = true
+    setKind(k); setTitle(label); setPhase('ringing'); phaseRef.current = 'ringing'
     try {
       await grabMedia(k)
     } catch {
-      setPhase('idle')
+      joiningRef.current = false
+      setPhase('idle'); phaseRef.current = 'idle'
       toast.error(k === 'video' ? 'No camera or microphone available' : 'No microphone available')
       return
     }
@@ -383,46 +612,73 @@ export default function CallCenter() {
       const call: any = await api.post(`/chat/conversations/${conversationId}/call`, { kind: k })
       setCallId(call.id); callIdRef.current = call.id
       convIdRef.current = conversationId
-      transcribeRef.current = call.transcribe !== 0; setTranscribing(transcribeRef.current)
+      applyCallInfo(call)
       // Joining a call already in progress: offer to everyone in it right away.
-      if (call.joined && call.peers?.length) { setPhase('connecting'); await offerTo(call.peers, peersNameRef.current) }
+      if (call.joined && call.peers?.length) { setPhase('connecting'); phaseRef.current = 'connecting'; await offerTo(call.peers, peersNameRef.current) }
     } catch (e: any) {
       cleanup()
       toast.error('Could not start the call: ' + e.message)
+    } finally {
+      joiningRef.current = false
     }
   }, [grabMedia, offerTo, cleanup])
 
-  const answer = useCallback(async () => {
-    const inc = incoming
-    if (!inc) return
-    setIncoming(null)
+  const answerCall = useCallback(async (inc: Incoming) => {
+    if (callIdRef.current || joiningRef.current) return
+    dismissRing(inc.callId)
+    askNotifyPermission()
+    joiningRef.current = true
     peersNameRef.current[inc.fromId] = inc.fromName
-    setKind(inc.kind); setTitle(inc.title); setPhase('connecting')
+    setKind(inc.kind); kindRef.current = inc.kind; setTitle(inc.title)
+    setPhase('connecting'); phaseRef.current = 'connecting'
     setCallId(inc.callId); callIdRef.current = inc.callId
     convIdRef.current = inc.conversationId
     try {
       await grabMedia(inc.kind)
     } catch {
       cleanup()
-      toast.error('No microphone available')
+      toast.error(inc.kind === 'video' ? 'No camera or microphone available' : 'No microphone available')
       try { await api.post(`/chat/call/${inc.callId}/decline`) } catch {}
       return
     }
     try {
       const res: any = await api.post(`/chat/call/${inc.callId}/answer`)
-      transcribeRef.current = res.transcribe !== 0; setTranscribing(transcribeRef.current)
+      applyCallInfo(res)
       await offerTo(res.peers || [], peersNameRef.current)
     } catch (e: any) {
       cleanup()
-      toast.error('Could not join: ' + e.message)
+      toast.error(/ended/i.test(e.message || '') ? 'That call has already ended' : 'Could not join: ' + e.message)
+    } finally {
+      joiningRef.current = false
     }
-  }, [incoming, grabMedia, offerTo, cleanup])
+  }, [dismissRing, grabMedia, offerTo, cleanup])
+
+  const answer = useCallback(() => { const inc = incomingRef.current; if (inc) answerCall(inc) }, [answerCall])
 
   const decline = useCallback(async () => {
-    const inc = incoming
-    setIncoming(null)
-    if (inc) { try { await api.post(`/chat/call/${inc.callId}/decline`) } catch {} }
-  }, [incoming])
+    const inc = incomingRef.current
+    if (!inc) return
+    dismissRing(inc.callId)
+    askNotifyPermission()
+    try { await api.post(`/chat/call/${inc.callId}/decline`) } catch {}
+  }, [dismissRing])
+
+  // Answer pressed on the phone's own ringing screen. The app was opened (or
+  // brought forward) by it; the call itself is looked up fresh, because by now
+  // it may have stopped ringing.
+  const answerById = useCallback(async (ringId: string) => {
+    if (!ringId || callIdRef.current === ringId) return
+    const cur = incomingRef.current
+    if (cur?.callId === ringId) { answerCall(cur); return }
+    const items = await syncRinging()
+    const hit = (items || []).find((i) => i.callId === ringId)
+    if (hit) answerCall(toIncoming(hit))
+    else toast.info('That call has already ended')
+  }, [answerCall, syncRinging])
+  const answerByIdRef = useRef(answerById)
+  answerByIdRef.current = answerById
+  const syncRingingRef = useRef(syncRinging)
+  syncRingingRef.current = syncRinging
 
   // ---- the socket ---------------------------------------------------------
   useEffect(() => {
@@ -440,17 +696,13 @@ export default function CallCenter() {
         let msg: any
         try { msg = JSON.parse(ev.data) } catch { return }
 
-        if (msg.type === 'call-ring') {
-          // Already busy: turn it down rather than letting a second call ring
-          // over a live one.
-          if (callIdRef.current) { try { await api.post(`/chat/call/${msg.callId}/decline`) } catch {}; return }
-          setIncoming({
-            callId: msg.callId, conversationId: msg.conversationId, kind: msg.kind,
-            fromName: msg.from?.name || 'Teammate', fromId: msg.from?.id,
-            title: msg.conversationType === 'group' ? msg.conversationName : (msg.from?.name || 'Call'),
-          })
-          return
-        }
+        // Every (re)connect: whatever happened while the socket was down — a
+        // ring that started, a ring that stopped, a call that ended — is only
+        // knowable by asking.
+        if (msg.type === 'ready') { syncRingingRef.current(); syncCallsRef.current(); return }
+
+        if (msg.type === 'call-ring') { showRing(msg); return }
+        if (msg.type === 'call-ring-stop') { dismissRing(msg.callId); return }
 
         if (msg.type === 'call-signal' && msg.callId === callIdRef.current) {
           const from = msg.from
@@ -504,7 +756,10 @@ export default function CallCenter() {
           return
         }
 
-        if (msg.type === 'call-joined' && msg.callId === callIdRef.current) {
+        if (msg.type === 'call-joined') {
+          // Me, from another device, picking up the call ringing here.
+          if (msg.userId === user.id && msg.callId !== callIdRef.current) { dismissRing(msg.callId); return }
+          if (msg.callId !== callIdRef.current) return
           // Someone picked up, or came back. Nothing is torn down here on
           // purpose: replacing the connection is driven by the session id on
           // their next offer, which cannot race with the offer the way this
@@ -532,9 +787,9 @@ export default function CallCenter() {
         }
         if (msg.type === 'call-recording' && msg.callId === callIdRef.current) {
           // Someone flipped the call's transcription. Everyone follows it —
-          // MY side included, because the Web Speech API hears this device's
-          // microphone and nothing else, so the far end of a call can only
-          // ever be captured by the far end.
+          // MY side included, because each device can only ever hear its own
+          // microphone, so the far end of a call can only be captured by the
+          // far end.
           transcribeRef.current = !!msg.on
           setTranscribing(!!msg.on)
           if (msg.on) startMyTranscript(); else void stopMyTranscript()
@@ -545,14 +800,23 @@ export default function CallCenter() {
           }
           return
         }
+        if (msg.type === 'call-caption' && msg.callId === callIdRef.current) {
+          setCaptions((c) => (c.some((x) => x.id === msg.id) ? c : [...c, { id: msg.id, userId: msg.userId, name: msg.name, text: msg.text, at: msg.at }].slice(-300)))
+          return
+        }
         if (msg.type === 'call-summary') {
           // The call I was on has been written up and its tasks handed out.
           const n = msg.assigned || 0, left = msg.pending || 0
           toast.success(`Call summary is in the chat${n ? ` — ${n} task${n === 1 ? '' : 's'} assigned` : ''}${left ? `, ${left} without an owner yet` : ''}`, 8000)
           return
         }
-        if (msg.type === 'call-ended' && msg.callId === callIdRef.current) { cleanup(); return }
-        if (msg.type === 'call-ended' || msg.type === 'call-ring') return
+        if (msg.type === 'call-ended') {
+          if (incomingRef.current?.callId === msg.callId) dismissRing(msg.callId)
+          // The others hung up. My last sentence still goes in: the server keeps
+          // taking lines for a short while after a call ends.
+          if (msg.callId === callIdRef.current) { void stopMyTranscript(); cleanup() }
+          return
+        }
         // Not ours (chat messages etc.) — the Chats page has its own socket.
       }
       ws.onclose = () => { if (!closed) retry = setTimeout(connect, 2500) }
@@ -560,27 +824,46 @@ export default function CallCenter() {
     }
     connect()
     return () => { closed = true; if (retry) clearTimeout(retry); try { wsRef.current?.close() } catch {} }
-  }, [user, getPc, drainIce, signal, cleanup])
+  }, [user, getPc, drainIce, signal, cleanup, showRing, dismissRing])
 
   // Re-enter a call that is still running. Deliberately silent and automatic:
   // no "Resume?" prompt. A dropped call is not a decision someone made, it is an
   // accident of a closed tab, a dead battery or a walk out of signal — and the
   // people still on the call are waiting. Leaving explicitly (hang up) records
   // left_at, so a call you MEANT to leave is never rejoined.
+  //
+  // The reverse too: a call this device still thinks it is in, which the
+  // server says is over (its "call-ended" was sent while the socket was down),
+  // is left — otherwise this device sits in a dead call, and being "busy" turns
+  // down every real call that comes in.
   const rejoinedRef = useRef(false)
+  const syncCallsRef = useRef<() => void>(() => {})
   useEffect(() => {
     if (!user) return
     let cancelled = false
-    const tryRejoin = async () => {
-      if (cancelled || rejoinedRef.current || callIdRef.current) return
+    const syncCalls = async () => {
+      if (cancelled) return
+      const mine = callIdRef.current
+      if (!mine && (rejoinedRef.current || joiningRef.current)) return
       let live: any = null
       try { live = (await api.get('/chat/calls/active')).call } catch { return }
-      if (!live || cancelled || callIdRef.current) return
+      if (cancelled) return
+      if (mine) {
+        const settled = !joiningRef.current && Date.now() - joinedAtRef.current > 8000
+        if (callIdRef.current === mine && settled && (!live || live.id !== mine)) {
+          void stopMyTranscript()
+          cleanup()
+          toast.info('The call has ended')
+        }
+        return
+      }
+      if (!live || callIdRef.current || joiningRef.current) return
       rejoinedRef.current = true
+      joiningRef.current = true
       const k: CallKind = live.kind === 'video' ? 'video' : 'audio'
       setKind(k); kindRef.current = k
       setTitle(live.title || 'Call')
-      setPhase('connecting')
+      setPhase('connecting'); phaseRef.current = 'connecting'
       setCallId(live.id); callIdRef.current = live.id
       convIdRef.current = live.conversation_id
       try {
@@ -592,19 +875,48 @@ export default function CallCenter() {
       }
       try {
         const res: any = await api.post(`/chat/call/${live.id}/answer`)
-        transcribeRef.current = (res.transcribe ?? live.transcribe) !== 0; setTranscribing(transcribeRef.current)
+        applyCallInfo({ ...live, ...res, transcribe: res.transcribe ?? live.transcribe })
         toldRef.current = live.id // already told when it began
         await offerTo(res.peers || live.peers || [], peersNameRef.current)
         toast.info('Reconnected to your call')
-      } catch { cleanup() }
+      } catch { cleanup() } finally { joiningRef.current = false }
     }
+    syncCallsRef.current = () => { syncCalls() }
     // On open, and again when the tab comes back — a phone that slept may have
     // missed the socket entirely.
-    const t = setTimeout(tryRejoin, 900)
-    const onVis = () => { if (document.visibilityState === 'visible') tryRejoin() }
+    const t = setTimeout(syncCalls, 900)
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return
+      syncCalls()
+      syncRingingRef.current()
+    }
     document.addEventListener('visibilitychange', onVis)
     return () => { cancelled = true; clearTimeout(t); document.removeEventListener('visibilitychange', onVis) }
   }, [user?.id, grabMedia, offerTo, cleanup])
+
+  // The phone's own call screen: tell it where the API is (for its Decline
+  // button), then take an Answer pressed there — the one that opened the app,
+  // or one pressed while it was already running.
+  useEffect(() => {
+    if (!user || !nativeCallsAvailable()) return
+    configureNativeCalls(API_BASE || location.origin)
+    takeNativeAction().then((a) => { if (a?.action === 'answer' && a.call_id) answerByIdRef.current(a.call_id) })
+    // Android 14 lets an app take over the lock screen for a call only if the
+    // person allows it (Settings → full-screen notifications). Without it a
+    // call still rings, as a banner, but a phone in a pocket shows nothing. Asked
+    // once, here, rather than in the middle of a ring.
+    nativeFullScreenStatus().then(async ({ allowed }) => {
+      if (allowed) return
+      try { if (localStorage.getItem('votask_fullscreen_asked')) return; localStorage.setItem('votask_fullscreen_asked', '1') } catch { return }
+      const yes = await confirmDialog({
+        title: 'Show calls on the full screen?',
+        message: 'So an incoming VoTask call covers the screen and rings like a phone call, even when your phone is locked. Turn on "Allow full-screen notifications" for VoTask on the next screen.',
+        confirmText: 'Open settings', cancelText: 'Not now',
+      })
+      if (yes) openNativeFullScreenSettings()
+    })
+    return onNativeCallAction((a) => { if (a?.action === 'answer' && a.call_id) answerByIdRef.current(a.call_id) })
+  }, [user?.id])
 
   // The bus: Chats (or anything else) asking us to ring someone.
   useEffect(() => subscribeCalls((req) => { begin(req.conversationId, req.kind, req.title) }), [begin])
@@ -630,30 +942,56 @@ export default function CallCenter() {
     return () => clearInterval(iv)
   }, [phase])
 
-  // A ring you can hear. WebAudio rather than an asset so there is no file to
-  // ship and nothing to 404; two short beeps a second apart, looped.
+  // The caller's side of a ring: the "tring tring", and giving up when nobody
+  // picks up — as a phone does, instead of sitting on "Ringing…" for ever. The
+  // hang-up files the call as unanswered, which is also what stops the other
+  // end's phone ringing.
+  useEffect(() => {
+    if (phase !== 'ringing' || !callId) return
+    const stop = startRingback()
+    const t = setTimeout(() => {
+      if (callIdRef.current === callId && phaseRef.current === 'ringing') {
+        toast.info('No answer')
+        hangUpRef.current()
+      }
+    }, ringMsRef.current)
+    return () => { stop(); clearTimeout(t) }
+  }, [phase, callId])
+
+  // The callee's side: a ring you can hear (and feel, on a phone), the tab's
+  // title flashing, a system notification when the tab is behind another
+  // window, and the phone's own ringing screen when the app is in the
+  // background. All of it stops the moment the ring does, and the ring stops
+  // by itself when its time is up.
   useEffect(() => {
     if (!incoming) return
-    let ctx: AudioContext | null = null
-    let stop = false
-    try {
-      ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-      const beep = () => {
-        if (stop || !ctx) return
-        const o = ctx.createOscillator(); const g = ctx.createGain()
-        o.frequency.value = 660; o.type = 'sine'
-        g.gain.setValueAtTime(0.0001, ctx.currentTime)
-        g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + 0.05)
-        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5)
-        o.connect(g); g.connect(ctx.destination)
-        o.start(); o.stop(ctx.currentTime + 0.55)
-      }
-      beep()
-      const iv = setInterval(beep, 1400)
-      return () => { stop = true; clearInterval(iv); try { ctx?.close() } catch {} }
-    } catch { /* autoplay blocked — the visual ringer still shows */ }
-    return () => { stop = true; try { ctx?.close() } catch {} }
-  }, [incoming])
+    const inc = incoming
+    const stopTone = startRingtone()
+    const lapse = setTimeout(() => dismissRing(inc.callId), Math.max(0, inc.expiresAt - Date.now()))
+    const base = document.title
+    let flip = false
+    const flash = setInterval(() => { flip = !flip; document.title = flip ? `📞 ${inc.fromName} is calling…` : base }, 1000)
+    let note: Notification | null = null
+    const away = () => {
+      if (document.visibilityState !== 'hidden') return
+      if (nativeCallsAvailable()) { ringNatively(inc.ring); return }
+      if (note || !('Notification' in window) || Notification.permission !== 'granted') return
+      try {
+        note = new Notification(inc.title === inc.fromName ? `${inc.fromName} is calling you` : `${inc.fromName} is calling ${inc.title}`, {
+          body: `VoTask ${inc.kind} call — click to answer`, tag: `call_${inc.callId}`, requireInteraction: true, icon: '/favicon.png',
+        })
+        note.onclick = () => { window.focus(); note?.close() }
+      } catch { /* the browser refused; the tab title still flashes */ }
+    }
+    away()
+    document.addEventListener('visibilitychange', away)
+    return () => {
+      stopTone(); clearTimeout(lapse); clearInterval(flash)
+      document.removeEventListener('visibilitychange', away)
+      document.title = base
+      try { note?.close() } catch {}
+    }
+  }, [incoming, dismissRing])
 
   // ---- in-call controls ---------------------------------------------------
   // Turn the camera on during an audio call — WhatsApp's "switch to video".
@@ -685,10 +1023,10 @@ export default function CallCenter() {
     if (id) api.post(`/chat/call/${id}/kind`, { kind: 'video' }).catch(() => {})
   }
 
-  // Muting also pauses MY transcription. Speech recognition opens the
-  // microphone by itself, apart from the call's track, so a muted aside would
-  // otherwise still be written down — and, the call being summarised into
-  // tasks, could end up assigned to someone.
+  // Muting also pauses MY transcription. A muted aside must not be written
+  // down — the call being summarised into tasks, it could end up assigned to
+  // someone — and the browser's recogniser opens the microphone by itself,
+  // apart from the call's track, so stopping it is the only way to be sure.
   const toggleMic = () => {
     const t = localRef.current?.getAudioTracks()[0]
     if (!t) return
@@ -740,22 +1078,30 @@ export default function CallCenter() {
   const remote = Object.values(peers)
 
   if (!user) return null
+  const heard = captions.filter((c) => c.userId === user.id).length
+  const ringFrom = incoming && incoming.title !== incoming.fromName ? incoming.fromName : ''
 
   return (
     <>
       {incoming && (
-        <div className="call-ringer">
+        <div className="call-ringer" role="alertdialog" aria-label={`Incoming ${incoming.kind} call from ${incoming.fromName}`}>
           <div className="call-ring-card">
-            <Avatar name={incoming.fromName} size={64} />
+            <div className="call-ring-face"><Avatar name={incoming.title} size={88} /></div>
             <div className="call-ring-who">{incoming.title}</div>
             <div className="call-ring-sub">
-              Incoming {incoming.kind} call{incoming.title !== incoming.fromName ? ` from ${incoming.fromName}` : ''}
+              <Ic name={incoming.kind === 'video' ? 'video' : 'phone'} size={13} /> VoTask {incoming.kind} call{ringFrom ? ` · ${ringFrom}` : ''}
             </div>
             <div className="call-ring-actions">
-              <button className="call-btn decline" onClick={decline} aria-label="Decline"><Ic name="callEnd" size={22} /></button>
-              <button className="call-btn accept" onClick={answer} aria-label="Answer">
-                <Ic name={incoming.kind === 'video' ? 'video' : 'phone'} size={22} />
-              </button>
+              <div className="call-ring-act">
+                <button className="call-btn decline" onClick={decline} aria-label="Decline"><Ic name="callEnd" size={26} /></button>
+                <span>Decline</span>
+              </div>
+              <div className="call-ring-act">
+                <button className="call-btn accept" onClick={answer} aria-label="Answer" autoFocus>
+                  <Ic name={incoming.kind === 'video' ? 'video' : 'phone'} size={26} />
+                </button>
+                <span>Answer</span>
+              </div>
             </div>
           </div>
         </div>
@@ -773,9 +1119,9 @@ export default function CallCenter() {
                   <span className={'rec-badge' + (speechDead ? ' muted-speech' : '')}
                     title={speechDead
                       ? `Transcribing, but not on this device: ${speechDead}`
-                      : `Transcribed for tasks — ${heardCount} line${heardCount === 1 ? '' : 's'} from you so far`}>
+                      : sttNote || `Transcribed for tasks — ${heard} line${heard === 1 ? '' : 's'} from you so far`}>
                     <span className="rec-dot" />Transcribing
-                    {speechDead ? ' · not you' : heardCount > 0 ? ` · ${heardCount}` : ''}
+                    {speechDead ? ' · not you' : heard > 0 ? ` · ${heard}` : ''}
                   </span>
                 )}
               </div>
@@ -819,6 +1165,10 @@ export default function CallCenter() {
             </div>
           )}
 
+          {!minimized && transcribing && phase === 'live' && captionsOpen && (
+            <LiveTranscript captions={captions} meId={user.id} note={speechDead ? `Your side is not being heard: ${speechDead}` : sttNote} />
+          )}
+
           <div className="call-controls">
             <button className={'call-btn' + (micOn ? '' : ' off')} onClick={toggleMic} title={micOn ? 'Mute' : 'Unmute'} aria-label={micOn ? 'Mute' : 'Unmute'}>
               <Ic name={micOn ? 'mic' : 'micOff'} size={19} />
@@ -834,6 +1184,13 @@ export default function CallCenter() {
             )}
             <button className={'call-btn' + (sharing ? ' active' : '')} onClick={toggleShare} title={sharing ? 'Stop sharing' : 'Share screen'} aria-label="Share screen">
               <Ic name="screen" size={19} />
+            </button>
+            {/* The live transcript is everyone's words as the server filed
+                them; hiding it only hides it here. */}
+            <button className={'call-btn' + (captionsOpen && transcribing ? ' active' : '')} onClick={() => setCaptionsOpen((o) => !o)}
+              disabled={!transcribing} aria-pressed={captionsOpen}
+              title={captionsOpen ? 'Hide the live transcript' : 'Show the live transcript'} aria-label={captionsOpen ? 'Hide the live transcript' : 'Show the live transcript'}>
+              <Ic name="captions" size={19} />
             </button>
             {/* The call's transcription switch. On by default; anyone on the
                 call may switch it off, and everyone is told who did. What was
@@ -855,6 +1212,36 @@ export default function CallCenter() {
         </div>
       )}
     </>
+  )
+}
+
+// The call's transcript as it is being written, newest at the bottom. It
+// follows the conversation unless you have scrolled up to read something.
+function LiveTranscript({ captions, meId, note }: { captions: Caption[]; meId: string; note: string | null }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const pinned = useRef(true)
+  useEffect(() => {
+    const el = ref.current
+    if (el && pinned.current) el.scrollTop = el.scrollHeight
+  }, [captions.length])
+  return (
+    <div className="call-captions" aria-live="polite">
+      <div className="call-captions-head">
+        <span>Live transcript</span>
+        {captions.length > 0 && <span className="call-captions-n">{captions.length} line{captions.length === 1 ? '' : 's'}</span>}
+      </div>
+      {note && <div className="call-captions-note">{note}</div>}
+      <div className="call-captions-body" ref={ref}
+        onScroll={(e) => { const el = e.currentTarget; pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24 }}>
+        {captions.length === 0
+          ? <div className="call-captions-empty">Listening… what everyone says appears here.</div>
+          : captions.slice(-80).map((c) => (
+            <p key={c.id} className={'call-caption' + (c.userId === meId ? ' me' : '')}>
+              <b>{c.userId === meId ? 'You' : c.name}</b>{c.text}
+            </p>
+          ))}
+      </div>
+    </div>
   )
 }
 
