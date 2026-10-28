@@ -228,12 +228,15 @@ export function LinkPreview({ messageId, version = '' }: { messageId: string; ve
 
 // ---------- the summary a call leaves behind ----------
 // Who walked away with what, right in the thread. Everyone can open the full
-// summary (in the chat's info panel); a manager with tasks still waiting goes
-// straight to reviewing them, since assigning is theirs.
+// summary (in the chat's info panel). Nothing found on a call is assigned by
+// itself, so while tasks wait the card says so: whoever may review them —
+// anyone who was on the call, and managers (`can_review`) — gets the review as
+// its main button, right here where the call happened; anyone else is told the
+// tasks are waiting rather than left wondering why nobody has them.
 export function CallSummaryCard({ meeting, isManager, meId, onOpenMeeting, onOpenTask }: {
   meeting: MeetingCard; isManager: boolean; meId: string; onOpenMeeting: (review: boolean) => void; onOpenTask: (taskId: string) => void
 }) {
-  const review = isManager && meeting.tasks > 0
+  const review = (meeting.can_review ?? isManager) && meeting.tasks > 0
   const [open, setOpen] = useState(false)
   const assigned = meeting.assigned || []
   return (
@@ -259,11 +262,18 @@ export function CallSummaryCard({ meeting, isManager, meId, onOpenMeeting, onOpe
           ))}
         </div>
       )}
+      {meeting.tasks > 0 && (review ? (
+        <button type="button" className="mc-review" onClick={() => onOpenMeeting(true)}>
+          <span className="mc-review-main">Review &amp; assign {meeting.tasks} task{meeting.tasks === 1 ? '' : 's'}</span>
+          <span className="mc-review-sub">Suggested by AI · nothing assigned yet</span>
+        </button>
+      ) : (
+        <div className="mc-waiting">{meeting.tasks} suggested task{meeting.tasks === 1 ? '' : 's'} waiting to be reviewed and assigned by someone who was on the call</div>
+      ))}
       <div className="meeting-card-meta">
-        {meeting.tasks > 0 && <span className="mc-chip warn">{meeting.tasks} without an owner</span>}
         {meeting.decisions > 0 && <span className="mc-chip">{meeting.decisions} decision{meeting.decisions === 1 ? '' : 's'}</span>}
         {meeting.risks > 0 && <span className="mc-chip warn">{meeting.risks} risk{meeting.risks === 1 ? '' : 's'}</span>}
-        <button type="button" className="mc-open" onClick={() => onOpenMeeting(review)}>{review ? 'Review' : 'Full summary'} →</button>
+        <button type="button" className="mc-open" onClick={() => onOpenMeeting(false)}>Full summary →</button>
       </div>
     </div>
   )

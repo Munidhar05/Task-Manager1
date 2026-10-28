@@ -64,6 +64,10 @@ export interface Me { id: string; name: string; role: string }
 // Reviewing and assigning a meeting's tasks is manager/admin on the server
 // (requireRole); hiding the controls for everyone else is courtesy, not security.
 export const canReview = (me: Me) => me.role === 'manager' || me.role === 'admin'
+// May I review THIS meeting's tasks? A manager may review any; anyone else the
+// meetings they were in — a call they joined (server: canReviewMeeting, sent
+// as `can_review`). An older server sends nothing, and then only managers.
+export const mayReview = (me: Me, m?: { can_review?: boolean } | null) => m?.can_review ?? canReview(me)
 
 export interface Workload { open: number; overdue: number }
 
@@ -103,7 +107,8 @@ export interface MediaCounts { images: number; videos: number; audio: number; fi
 export interface InfoCounts extends MediaCounts {
   calls: number
   summaries: number
-  // Suggested tasks from this conversation's meetings still awaiting review.
+  // Suggested tasks from this conversation's meetings still awaiting review
+  // by this reader (the server counts only meetings they may review).
   pending_review: number
 }
 
@@ -199,6 +204,8 @@ export interface MeetingRow {
   tasks: TaskCounts
   participants: PersonLite[]
   uploaded_by: { id: string; name: string } | null
+  // Whether this reader may review its tasks (see mayReview).
+  can_review?: boolean
 }
 
 export interface MeetingsPayload {
@@ -247,6 +254,7 @@ export interface MeetingDetailPayload {
   }[]
   call: { id: string; kind: 'audio' | 'video'; status: CallStatus; started_at: string; ended_at: string | null; duration_sec: number } | null
   transcript?: string | null
+  can_review?: boolean
 }
 
 // ---------------------------------------------------------------- endpoints

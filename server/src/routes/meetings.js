@@ -430,10 +430,41 @@ function getSuggestion(sid, orgId) {
     WHERE s.id=? AND m.org_id=?`).get(sid, orgId)
 }
 
+// Who may review a meeting's suggested tasks and assign them: a manager, any
+// meeting; anyone else, only a meeting they were in — the call they joined, the
+// recording they filed (the same people who may read its transcript). A call
+// no longer assigns its own tasks, and the people on it are the ones who know
+// whether the AI heard it right; asking a manager who was not there to settle
+// every call between two employees left those tasks waiting on nobody. It gives
+// no new power: anyone may already assign a task to anyone, from Tasks or from
+// a chat.
+function canReviewMeeting(user, m) {
+  if (!user || !m || m.org_id !== user.org_id) return false
+  if (user.role === 'manager' || user.role === 'admin' || m.uploaded_by === user.id) return true
+  return !!m.call_id && !!db.prepare('SELECT 1 FROM chat_call_participants WHERE call_id=? AND user_id=? AND joined_at IS NOT NULL').get(m.call_id, user.id)
+}
+const meetingOf = (s) => (s ? db.prepare('SELECT * FROM meetings WHERE id=?').get(s.meeting_id) : null)
+
+// Told whenever a review changes which of a meeting's tasks are still pending
+// (assigned, rejected, merged, restored). routes/chat.js listens, to keep the
+// card a finished call put up in step with the review wherever it happened.
+// A listener rather than an import, since chat.js already imports this file.
+const reviewListeners = new Set()
+export const onReviewChanged = (fn) => { reviewListeners.add(fn) }
+const reviewChanged = (meetingId) => {
+  for (const fn of reviewListeners) { try { fn(meetingId) } catch (e) { console.error('[meetings] review listener failed:', e.message) } }
+}
+// The gate on every review action, in place of a manager-only role check.
+function reviewable(req, res, s) {
+  if (!s) { res.status(404).json({ error: 'Not found' }); return false }
+  if (!canReviewMeeting(req.user, meetingOf(s))) { res.status(403).json({ error: 'Only someone who was in this meeting, or a manager, can review its tasks' }); return false }
+  return true
+}
+
 // EDIT a suggestion before assigning (assignee, title, priority, due, etc.).
-r.patch('/suggestions/:sid', requireRole('manager', 'admin'), (req, res) => {
+r.patch('/suggestions/:sid', (req, res) => {
   const s = getSuggestion(req.params.sid, req.user.org_id)
-  if (!s) return res.status(404).json({ error: 'Not found' })
+  if (!reviewable(req, res, s)) return
   const b = req.body || {}
   const sets = [], args = []
   for (const f of ['title', 'description', 'priority', 'due_date', 'due_date_raw', 'assignee_reasoning']) {
@@ -456,37 +487,43 @@ r.patch('/suggestions/:sid', requireRole('manager', 'admin'), (req, res) => {
 })
 
 // REJECT a suggestion (won't be assigned).
-r.post('/suggestions/:sid/reject', requireRole('manager', 'admin'), (req, res) => {
+r.post('/suggestions/:sid/reject', (req, res) => {
   const s = getSuggestion(req.params.sid, req.user.org_id)
-  if (!s) return res.status(404).json({ error: 'Not found' })
+  if (!reviewable(req, res, s)) return
   db.prepare("UPDATE suggested_tasks SET status='rejected', updated_at=? WHERE id=?").run(now(), s.id)
+  reviewChanged(s.meeting_id)
   res.json({ ok: true })
 })
 
 // RESTORE a previously rejected (or merged) suggestion back to the pending queue,
-// so a manager can edit it and assign it after all. Returns the refreshed row.
-r.post('/suggestions/:sid/restore', requireRole('manager', 'admin'), (req, res) => {
+// so the reviewer can edit it and assign it after all. Returns the refreshed row.
+r.post('/suggestions/:sid/restore', (req, res) => {
   const s = getSuggestion(req.params.sid, req.user.org_id)
-  if (!s) return res.status(404).json({ error: 'Not found' })
+  if (!reviewable(req, res, s)) return
   db.prepare("UPDATE suggested_tasks SET status='pending', merged_into=NULL, updated_at=? WHERE id=?").run(now(), s.id)
+  reviewChanged(s.meeting_id)
   res.json(db.prepare('SELECT * FROM suggested_tasks WHERE id=?').get(s.id))
 })
 
 // MERGE a duplicate suggestion into another (the duplicate is dropped).
-r.post('/suggestions/:sid/merge', requireRole('manager', 'admin'), (req, res) => {
+r.post('/suggestions/:sid/merge', (req, res) => {
   const s = getSuggestion(req.params.sid, req.user.org_id)
   const target = getSuggestion(req.body?.into, req.user.org_id)
-  if (!s || !target) return res.status(404).json({ error: 'Not found' })
+  if (!target) return res.status(404).json({ error: 'Not found' })
+  // Both ends: merging into another meeting's task would edit that meeting.
+  if (!reviewable(req, res, s) || !reviewable(req, res, target)) return
   if (s.id === target.id) return res.status(400).json({ error: 'cannot merge into itself' })
   db.prepare("UPDATE suggested_tasks SET status='merged', merged_into=?, updated_at=? WHERE id=?").run(target.id, now(), s.id)
+  reviewChanged(s.meeting_id)
   res.json({ ok: true })
 })
 
 // ASSIGN — final step. Create real tasks from the chosen (or all pending)
 // suggestions, notify the assignees, and mark the suggestions approved.
-r.post('/:id/assign', requireRole('manager', 'admin'), (req, res) => {
+r.post('/:id/assign', (req, res) => {
   const m = db.prepare('SELECT * FROM meetings WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!m) return res.status(404).json({ error: 'Not found' })
+  if (!canReviewMeeting(req.user, m)) return res.status(403).json({ error: 'Only someone who was in this meeting, or a manager, can assign its tasks' })
   const ids = Array.isArray(req.body?.ids) ? req.body.ids : null
   let rows = db.prepare("SELECT * FROM suggested_tasks WHERE meeting_id=? AND status='pending'").all(m.id)
   if (ids) rows = rows.filter((s) => ids.includes(s.id))
@@ -500,8 +537,9 @@ r.post('/:id/assign', requireRole('manager', 'admin'), (req, res) => {
   })
   tx()
   audit(req.user.org_id, req.user.id, 'meeting.assign', 'meeting', m.id, `assigned=${assigned}, skipped=${skipped}`)
+  reviewChanged(m.id)
   res.json({ assigned, skipped })
 })
 
 export default r
-export { persistMeeting, attendeesFor, createTaskFromSuggestion }
+export { persistMeeting, attendeesFor, createTaskFromSuggestion, canReviewMeeting }

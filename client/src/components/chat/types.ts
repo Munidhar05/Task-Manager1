@@ -25,9 +25,10 @@ export interface ChatFile { name: string; type?: string; size?: number }
 // A finished call leaves a line in the thread instead of a chat bubble.
 export interface CallInfo { id: string; kind: 'audio' | 'video'; status: string; started_by: string; duration_sec: number; joined: number }
 // The audit a transcribed call leaves behind, shown where the call happened —
-// with the tasks it already handed out.
+// with how many of its tasks wait for review (`tasks`), and those a manager
+// has since assigned from it.
 export interface AssignedFromCall { title: string; task_id: string | null; assignee_id: string | null; assignee_name: string | null }
-export interface MeetingCard { id: string; title: string; summary: string; engine?: string; tasks: number; decisions: number; risks: number; blockers: number; assigned?: AssignedFromCall[] }
+export interface MeetingCard { id: string; title: string; summary: string; engine?: string; tasks: number; decisions: number; risks: number; blockers: number; assigned?: AssignedFromCall[]; can_review?: boolean }
 export interface PollOption { text: string; voters: string[] }
 export interface Poll { multi: boolean; options: PollOption[] }
 export interface TaskRef {

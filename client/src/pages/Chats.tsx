@@ -10,6 +10,7 @@ import { useDialog } from '../lib/useDialog'
 import { clipboardFiles, droppedFiles, dragHasFiles, canReadClipboardImages, readClipboardImages } from '../lib/pasteFiles'
 import { stashTaskDraft } from '../lib/taskDraft'
 import { startCall } from '../lib/call'
+import { useCallAnalyses, inProgress } from '../lib/callAnalysis'
 import EmojiPicker, { rememberEmoji } from '../components/EmojiPicker'
 import VoicePlayer from '../components/VoicePlayer'
 import { audioFilename } from '../lib/audioFile'
@@ -485,8 +486,9 @@ export default function Chats() {
   // Older pages of a long chat, fetched on scrolling to the top.
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
-  // A call in this chat is being turned into its summary and tasks right now.
-  const [summarisingCall, setSummarisingCall] = useState<Record<string, boolean>>({})
+  // Calls that just ended being written up (lib/callAnalysis, fed by
+  // CallCenter's socket) — for the line in their chat's thread.
+  const analyses = useCallAnalyses()
   // Who is typing (or recording a voice note) in each chat, for the list rows.
   const [typingIn, setTypingIn] = useState<Record<string, { name: string; mode: string }>>({})
   const [typingMode, setTypingMode] = useState<'typing' | 'recording'>('typing')
@@ -765,6 +767,11 @@ export default function Chats() {
   useEffect(() => {
     const c = params.get('c')
     const msg = params.get('msg')
+    // ?review=<meeting>: "Review & assign" on the card a finished call puts up
+    // (CallAnalysisCard) — the chat, with that call's summary open on its
+    // review, exactly as the summary card's own button in the thread does.
+    const review = params.get('review')
+    const reviewView: InfoView | null = review ? { view: 'summary', meetingId: review, review: true } : null
     if (!c || !user) return
     if (c === activeIdRef.current) {
       // Already open (a notification for the chat on screen). The thread will
@@ -774,11 +781,15 @@ export default function Chats() {
       navigate(loc.pathname, { state: { chat: c }, replace: true })
       setActiveId(c)
       if (msg) { setInSearch(''); setInSearchOpen(false); setLandOn(msg) } // a search filter could be hiding it
+      if (reviewView) openInfo(reviewView)
       return
     }
     setParams(new URLSearchParams(), { replace: true })
     linkedRef.current = c
     deepMsgRef.current = msg
+    // Opened on top of the chat once the chat has its history entry, as a
+    // list avatar's info is (see the history effects).
+    if (reviewView) pendingInfoRef.current = reviewView
     setActiveId(c)
   }, [params, user?.id])
 
@@ -1055,8 +1066,6 @@ export default function Chats() {
             : c)))
         } else if (d.type === 'poll') {
           if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, poll: d.poll } : m)))
-        } else if (d.type === 'call-processing') {
-          setSummarisingCall((s) => ({ ...s, [d.conversationId]: !!d.on }))
         } else if (d.type === 'reaction') {
           if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, reactions: d.reactions } : m)))
         } else if (d.type === 'delete') {
@@ -2954,9 +2963,10 @@ export default function Chats() {
               )
             })}
             {/* The call that just ended is being turned into its summary and
-                tasks; the card replaces this line when it lands. */}
-            {active && summarisingCall[active.id] && (
-              <div className="sys-line ai-working"><span><SparkGlyph size={13} /> Summarising the call and assigning its tasks…</span></div>
+                suggested tasks; the summary card replaces this line when it
+                lands. Said for everyone in the chat, on the call or not. */}
+            {active && analyses.some((x) => x.conversationId === active.id && inProgress(x)) && (
+              <div className="sys-line ai-working"><span><SparkGlyph size={13} /> Analysing the call — its summary and suggested tasks will appear here…</span></div>
             )}
             {typingName && !inSearch && <div className="bubble ai typing-bubble"><span className="typing-dots"><i /><i /><i /></span></div>}
           </div>

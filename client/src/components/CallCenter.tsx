@@ -6,6 +6,8 @@ import { toast } from '../lib/toast'
 import { confirmDialog } from '../lib/confirm'
 import { audioFilename } from '../lib/audioFile'
 import { subscribeCalls, CallKind } from '../lib/call'
+import { putAnalysis, replaceAnalyses, clearAnalyses, dropProvisional } from '../lib/callAnalysis'
+import CallAnalysisCard from './CallAnalysisCard'
 import { startLiveSpeech, isSupported as speechSupported, LiveSpeech } from '../lib/liveSpeech'
 import { startPcmFromTrack, silentFrame, PcmStream } from '../lib/pcmStream'
 import { startRingtone, startRingback } from '../lib/ringtone'
@@ -107,8 +109,8 @@ export default function CallCenter() {
   const [minimized, setMinimized] = useState(false)
   const [maximized, setMaximized] = useState(false)
   // Every call is transcribed, so that when it ends the server can turn it
-  // into a summary in the chat and hand out the tasks agreed on it — no
-  // button to remember to press. Everyone on the call sees that it is on, and
+  // into a summary in the chat and the tasks agreed on it, ready for a manager
+  // to review and assign — no button to remember to press. Everyone on the call sees that it is on, and
   // ANYONE can switch it off (or back on); the switch is the call's, not one
   // person's, and everyone is told who flipped it.
   const [transcribing, setTranscribing] = useState(false)
@@ -242,6 +244,27 @@ export default function CallCenter() {
   // before the call is written up.
   const hangUp = async (silent = false) => {
     const id = callIdRef.current
+    // The analysis card goes up the moment the call window goes, not when the
+    // server hears of the hang-up: that waits for this side's last sentence
+    // (seconds, or longer on a browser that records), and for that long the
+    // screen said nothing. Only when this hang-up ends the call — a call with
+    // one other person, or the last one out — and only while transcription is
+    // on. The server's own 'call-analysis' replaces it; if none comes (a group
+    // call that went on, nothing captured), it is taken down again.
+    if (id && !silent && phaseRef.current === 'live' && transcribeRef.current && convIdRef.current && user) {
+      const remote = Object.values(peersRef.current)
+      const oneToOne = remote.length === 1 && remote[0].name === title
+      if (oneToOne || remote.length === 0) {
+        const ts = new Date().toISOString()
+        putAnalysis({
+          callId: id, conversationId: convIdRef.current, kind: kindRef.current,
+          conversationType: oneToOne ? 'direct' : 'group', conversationName: title,
+          joined: [{ id: user.id, name: user.name }, ...remote.map((p) => ({ id: p.id, name: p.name }))],
+          endedAt: ts, stage: 'waiting', at: '', provisional: true,
+        })
+        setTimeout(() => dropProvisional(id), 30000)
+      }
+    }
     const finishing = stopMyTranscript()
     cleanup()
     await finishing
@@ -699,7 +722,12 @@ export default function CallCenter() {
         // Every (re)connect: whatever happened while the socket was down — a
         // ring that started, a ring that stopped, a call that ended — is only
         // knowable by asking.
-        if (msg.type === 'ready') { syncRingingRef.current(); syncCallsRef.current(); return }
+        if (msg.type === 'ready') {
+          syncRingingRef.current(); syncCallsRef.current()
+          // ...and a call's write-up that moved on while this device was away.
+          api.get('/chat/calls/analysis').then((d: any) => replaceAnalyses(d.items || [])).catch(() => {})
+          return
+        }
 
         if (msg.type === 'call-ring') { showRing(msg); return }
         if (msg.type === 'call-ring-stop') { dismissRing(msg.callId); return }
@@ -804,10 +832,9 @@ export default function CallCenter() {
           setCaptions((c) => (c.some((x) => x.id === msg.id) ? c : [...c, { id: msg.id, userId: msg.userId, name: msg.name, text: msg.text, at: msg.at }].slice(-300)))
           return
         }
-        if (msg.type === 'call-summary') {
-          // The call I was on has been written up and its tasks handed out.
-          const n = msg.assigned || 0, left = msg.pending || 0
-          toast.success(`Call summary is in the chat${n ? ` — ${n} task${n === 1 ? '' : 's'} assigned` : ''}${left ? `, ${left} without an owner yet` : ''}`, 8000)
+        if (msg.type === 'call-analysis') {
+          // A finished call being written up, step by step (CallAnalysisCard).
+          putAnalysis(msg)
           return
         }
         if (msg.type === 'call-ended') {
@@ -823,7 +850,8 @@ export default function CallCenter() {
       ws.onerror = () => { try { ws.close() } catch {} }
     }
     connect()
-    return () => { closed = true; if (retry) clearTimeout(retry); try { wsRef.current?.close() } catch {} }
+    // Signed out, or someone else signed in: their calls are not this person's.
+    return () => { closed = true; if (retry) clearTimeout(retry); try { wsRef.current?.close() } catch {}; clearAnalyses() }
   }, [user, getPc, drainIce, signal, cleanup, showRing, dismissRing])
 
   // Re-enter a call that is still running. Deliberately silent and automatic:
@@ -931,7 +959,7 @@ export default function CallCenter() {
     startMyTranscript()
     if (toldRef.current !== callIdRef.current) {
       toldRef.current = callIdRef.current
-      toast.info('This call is transcribed, so its summary and tasks land in the chat when it ends. Anyone on the call can switch that off.', 8000)
+      toast.info('This call is transcribed. When it ends, its summary and suggested tasks land in the chat for you to review and assign — nothing is assigned by itself. Anyone on the call can switch transcription off.', 8000)
     }
   }, [phase])
 
@@ -1211,6 +1239,10 @@ export default function CallCenter() {
           </div>
         </div>
       )}
+
+      {/* A call just ended: its write-up, where the call window was. Not
+          while another call rings or runs — that has the space. */}
+      {phase === 'idle' && !incoming && <CallAnalysisCard me={user} />}
     </>
   )
 }

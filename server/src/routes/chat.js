@@ -11,7 +11,7 @@ import { pushToUser, getOnlineUsers, onUserOnline } from '../ws/chatHub.js'
 import { indexChatMessage, removeEmbedding } from '../ai/ragIndex.js'
 import { transcribeAudio } from '../ai/transcribe.js'
 import { analyzeMeetingTranscript } from '../ai/extractor.js'
-import { persistMeeting, attendeesFor, createTaskFromSuggestion } from './meetings.js'
+import { persistMeeting, attendeesFor, canReviewMeeting, onReviewChanged } from './meetings.js'
 import { parseDueDate } from '../ai/dates.js'
 import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
@@ -369,7 +369,7 @@ function shapeMessage(row, viewerId, ctx = {}) {
     pinned_at: row.pinned_at || null,
     transcript: row.transcript || null,
     call: row.call_id ? callSummary(row.call_id) : null,
-    meeting: row.meeting_id ? meetingCard(row.meeting_id) : null,
+    meeting: row.meeting_id ? meetingCard(row.meeting_id, viewerId) : null,
     system: row.kind === 'system' ? systemText(meta, viewerId) : null,
     poll: row.kind === 'poll' ? pollOf(row.id) : null,
     task: row.kind === 'task' ? taskCard(row.task_id) : null,
@@ -381,11 +381,14 @@ function shapeMessage(row, viewerId, ctx = {}) {
 }
 
 // The summary card a finished, transcribed call leaves in the thread — with
-// the tasks it has already handed out, by name, so everyone who was on the
-// call can see who walked away with what without opening anything.
-function meetingCard(meetingId) {
-  const m = db.prepare('SELECT id, title, summary_json, engine FROM meetings WHERE id=?').get(meetingId)
+// how many of its tasks still wait for review, and those already assigned
+// from it, by name, so everyone who was on the call can see who walked away
+// with what without opening anything. `can_review`: whether THIS reader may
+// review them (canReviewMeeting), which decides what the card offers them.
+function meetingCard(meetingId, viewerId) {
+  const m = db.prepare('SELECT id, org_id, title, summary_json, engine, uploaded_by, call_id FROM meetings WHERE id=?').get(meetingId)
   if (!m) return null
+  const viewer = viewerId ? db.prepare('SELECT id, role, org_id FROM users WHERE id=?').get(viewerId) : null
   let exec = ''
   let counts = { decisions: 0, risks: 0, blockers: 0 }
   try {
@@ -404,7 +407,7 @@ function meetingCard(meetingId) {
     SELECT s.title, s.created_task_id AS task_id, s.suggested_assignee_id AS assignee_id, u.name AS assignee_name
     FROM suggested_tasks s LEFT JOIN users u ON u.id=s.suggested_assignee_id
     WHERE s.meeting_id=? AND s.status='approved' ORDER BY s.created_at`).all(meetingId)
-  return { id: m.id, title: m.title, summary: exec, engine: m.engine, tasks, assigned, ...counts }
+  return { id: m.id, title: m.title, summary: exec, engine: m.engine, tasks, assigned, ...counts, can_review: canReviewMeeting(viewer, m) }
 }
 
 // The ledger line a finished call leaves in the thread.
@@ -1670,8 +1673,9 @@ r.post('/call/:id/end', (req, res) => {
     pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
     const sum = callSummary(call.id)
     const lineId = postCallLine(conv, sum)
-    // Everyone is off the call: what was said becomes its summary and tasks.
-    if (status === 'ended') scheduleFinalize(call.id)
+    // Everyone is off the call: what was said becomes its summary and the
+    // tasks a manager will review.
+    if (status === 'ended') analyseWhenDone(call.id, 6000)
     if (status === 'missed') {
       for (const uid of participantsOf(conv.id)) {
         if (uid === call.started_by) continue
@@ -1809,15 +1813,86 @@ function callTranscript(callId) {
   return { transcript: lines.join('\n'), lines: lines.length }
 }
 
+// ---------- where a finished call's analysis has got to ----------
+// A call is written up after everyone has left: a short wait for the last
+// lines, then the extractor, which can take most of a minute on a long call.
+// Nothing used to say so. The call window closed, and the people on it could
+// not tell whether anything was happening, or where the result would turn up
+// — the one "Summarising…" line was inside the chat, which they were rarely
+// looking at. So every step is announced to the conversation ('call-analysis')
+// and kept here for a device that reloads or reconnects meanwhile
+// (GET /calls/analysis). In memory, like the timers that drive it: a restart
+// loses both together, and a call left half-done is retried by hand
+// (POST /call/:id/analyse).
+//
+// waiting   — the call is over; the last sentences are still on their way
+// analysing — the transcript is with the extractor
+// ready     — summary posted in the chat; its tasks wait for review
+// reviewed  — nothing is left to review (all assigned, rejected or merged)
+// empty     — nothing anyone said was captured, so there is nothing to analyse
+// failed    — the extractor threw; the transcript is kept for a retry
+const analyses = new Map()
+const ANALYSIS_KEEP_MS = 30 * 60000
+
+function setAnalysis(callId, stage, result = {}) {
+  const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(callId)
+  if (!call) return
+  const conv = db.prepare('SELECT type, name FROM chat_conversations WHERE id=?').get(call.conversation_id)
+  // Who was on it, so each device can tell whether the call was its own (the
+  // card) or only something that happened in a chat it is in (the thread line).
+  const joined = db.prepare(`SELECT u.id, u.name FROM chat_call_participants p JOIN users u ON u.id=p.user_id
+    WHERE p.call_id=? AND p.joined_at IS NOT NULL ORDER BY u.name`).all(callId)
+  const a = {
+    callId, orgId: call.org_id, conversationId: call.conversation_id,
+    conversationType: conv?.type || 'direct', conversationName: conv?.name || '',
+    kind: call.kind === 'video' ? 'video' : 'audio', joined,
+    endedAt: call.ended_at || now(), stage, ...result, at: now(),
+  }
+  analyses.set(callId, a)
+  const cutoff = Date.now() - ANALYSIS_KEEP_MS
+  for (const [k, v] of analyses) if (new Date(v.at).getTime() < cutoff) analyses.delete(k)
+  pushToConversation(call.conversation_id, { type: 'call-analysis', ...publicAnalysis(a) })
+}
+const publicAnalysis = ({ orgId, ...a }) => a
+
+// A review moved on — from the card's button, the chat, the Meetings page or
+// another device. The card's count follows it ("1 still to review"), and once
+// nothing is left it stops asking, everywhere: a phone still saying "2 tasks,
+// nothing assigned yet" about tasks assigned an hour ago on the laptop is how
+// work gets assigned twice. Only a card still asking: a task restored after
+// the review was finished does not bring one back.
+onReviewChanged((meetingId) => {
+  for (const a of analyses.values()) {
+    if (a.meetingId !== meetingId || a.stage !== 'ready') continue
+    const count = (where) => db.prepare(`SELECT COUNT(*) n FROM suggested_tasks WHERE meeting_id=? AND ${where}`).get(meetingId).n
+    const found = count("status='pending'")
+    setAnalysis(a.callId, found ? 'ready' : 'reviewed', {
+      meetingId, messageId: a.messageId, title: a.title, found,
+      owned: count("status='pending' AND suggested_assignee_id IS NOT NULL"), assigned: count("status='approved'"),
+    })
+  }
+})
+
+// The calls in my chats that are being, or have just been, written up.
+r.get('/calls/analysis', (req, res) => {
+  const me = req.user
+  const items = [...analyses.values()]
+    .filter((a) => a.orgId === me.org_id && member(a.conversationId, me.id))
+    .map(publicAnalysis)
+  res.json({ items })
+})
+
 // Run a call's transcript through the SAME meeting pipeline an uploaded
 // recording uses — extraction, summary, suggestions — and leave the summary
-// card where the call happened. With autoAssign (every call, once it ends)
-// each task whose owner was named goes straight to them, exactly as a manager
-// pressing "Assign" on the review screen would; a task nobody could be matched
-// to stays a suggestion for someone to settle. No audio leaves the browser and
-// no speech key is needed for the usual case, because the speech-to-text
-// already happened on each participant's device while they were talking.
-async function summariseCall(call, actorId, { autoAssign }) {
+// card where the call happened. Nothing is assigned here. Every task found
+// waits as a suggestion until someone who was on the call (or a manager) has
+// looked at it on the review screen:
+// the extractor is right most of the time, not every time, and a wrong owner
+// or a misheard due date handed straight to someone's task list did more harm
+// than the minute a review costs. No audio leaves the browser and no speech
+// key is needed for the usual case, because the speech-to-text already
+// happened on each participant's device while they were talking.
+async function summariseCall(call, actorId) {
   const { transcript, lines } = callTranscript(call.id)
   if (!lines) return null
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
@@ -1846,10 +1921,10 @@ async function summariseCall(call, actorId, { autoAssign }) {
 
   // On a call between two people, an ask can only be for the other one. "Also,
   // check the delivery schedule" from Priya, on a call with Ravi alone, is
-  // Ravi's; the extractor leaves it unowned because no name was said, and it
-  // then sat waiting for a manager to assign what both of them already knew.
-  // Only when the asker is known and was on the call — a line nobody can be
-  // tied to stays for review.
+  // Ravi's; the extractor leaves it unowned because no name was said, and the
+  // reviewer then had to fill in what both of them already knew. Only a
+  // suggestion — the review screen shows it pre-filled and it can be changed —
+  // and only when the asker is known and was on the call.
   if (conv?.type === 'direct' && joined.length === 2) {
     // The model's own reasoning ("no assignee was named") is replaced, not
     // kept: left in place it would argue against the owner shown beside it.
@@ -1863,21 +1938,15 @@ async function summariseCall(call, actorId, { autoAssign }) {
     }
   }
 
-  let assigned = 0
-  if (autoAssign) {
-    const owned = db.prepare("SELECT * FROM suggested_tasks WHERE meeting_id=? AND status='pending' AND suggested_assignee_id IS NOT NULL").all(mid)
-    db.transaction(() => {
-      for (const s of owned) { createTaskFromSuggestion(s, { orgId: call.org_id, actorId, notifyAssignee: true }); assigned++ }
-    })()
-    if (assigned) audit(call.org_id, actorId, 'meeting.assign', 'meeting', mid, `assigned=${assigned}, automatically at the end of a call`)
-  }
   const pending = db.prepare("SELECT COUNT(*) n FROM suggested_tasks WHERE meeting_id=? AND status='pending'").get(mid).n
+  const owned = db.prepare("SELECT COUNT(*) n FROM suggested_tasks WHERE meeting_id=? AND status='pending' AND suggested_assignee_id IS NOT NULL").get(mid).n
   db.prepare('UPDATE chat_calls SET meeting_id=? WHERE id=?').run(mid, call.id)
 
   // Leave the audit where the conversation happened. A summary that lives only
   // in the Meetings list is a summary nobody on the call ever sees again.
+  let lid = null
   if (conv) {
-    const lid = id('msg')
+    lid = id('msg')
     db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, meeting_id, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)')
       .run(lid, call.org_id, conv.id, actorId, '', `Summary of ${title}`, mid, now())
     touchConvo(conv.id)
@@ -1886,8 +1955,46 @@ async function summariseCall(call, actorId, { autoAssign }) {
       pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(lrow, uid, {}) })
     }
   }
-  for (const uid of joined) pushToUser(uid, { type: 'call-summary', callId: call.id, conversationId: call.conversation_id, meetingId: mid, assigned, pending })
-  return { mid, suggestionCount, assigned, pending, engine: analysis.engine, lines }
+
+  // Ask for the review — of everyone who was on the call, since any of them
+  // may do it (canReviewMeeting). The card on screen does it for whoever is
+  // still in the app; this reaches someone who put the phone away after
+  // hanging up, and the bell keeps it until they get to it. It opens the
+  // summary in the chat, whose card has the Review & assign button.
+  if (pending > 0) {
+    const what = `${pending} task${pending === 1 ? '' : 's'}`
+    for (const uid of joined) {
+      const others = attendees.filter((a) => joined.includes(a.id) && a.id !== uid).map((a) => a.name)
+      const where = conv?.type === 'group' ? ` in ${conv.name || 'a group'}` : others.length ? ` with ${others.join(', ')}` : ''
+      notify(call.org_id, uid, 'call_review', `Your ${callKind} call${where} is analysed — review and assign its ${what}`, null,
+        conv ? { conversationId: conv.id, messageId: lid } : null)
+    }
+  }
+  return { mid, title, suggestionCount, pending, owned, engine: analysis.engine, lines, messageId: lid }
+}
+
+// One analysis from start to finish, with its stages announced. The call is
+// already claimed (claimCall) by whoever runs this.
+async function analyseCall(call, actorId) {
+  setAnalysis(call.id, 'analysing')
+  // Older app builds know only this on/off pair, for their "Summarising…" line.
+  pushToConversation(call.conversation_id, { type: 'call-processing', conversationId: call.conversation_id, callId: call.id, on: true })
+  try {
+    const out = await summariseCall(call, actorId)
+    if (!out) {
+      db.prepare('UPDATE chat_calls SET processed_at=NULL WHERE id=?').run(call.id)
+      setAnalysis(call.id, 'empty')
+      return null
+    }
+    setAnalysis(call.id, 'ready', { meetingId: out.mid, messageId: out.messageId, title: out.title, found: out.pending, owned: out.owned })
+    return out
+  } catch (e) {
+    db.prepare('UPDATE chat_calls SET processed_at=NULL WHERE id=?').run(call.id) // let a retry claim it
+    setAnalysis(call.id, 'failed')
+    throw e
+  } finally {
+    pushToConversation(call.conversation_id, { type: 'call-processing', conversationId: call.conversation_id, callId: call.id, on: false })
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -1899,6 +2006,16 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // be being transcribed.
 function scheduleFinalize(callId, delayMs = 6000, tries = 0) {
   setTimeout(() => { finalizeCall(callId, tries).catch((e) => console.error('[chat] call summary failed:', e.message)) }, delayMs)
+}
+// The call has just ended. Say at once that it is being analysed — the wait
+// above is silent otherwise — unless there is plainly nothing to analyse:
+// transcription was switched off and nothing was captured before that.
+function analyseWhenDone(callId, delayMs) {
+  const call = db.prepare('SELECT transcribe FROM chat_calls WHERE id=?').get(callId)
+  if (call && (call.transcribe || db.prepare('SELECT 1 FROM chat_call_segments WHERE call_id=? LIMIT 1').get(callId))) {
+    setAnalysis(callId, 'waiting')
+  }
+  scheduleFinalize(callId, delayMs)
 }
 // Claimed in one statement, so the end-of-call path and the manual button
 // (older apps) can never both summarise the same call. A claim with no
@@ -1914,25 +2031,43 @@ async function finalizeCall(callId, tries = 0) {
   for (let i = 0; i < 120 && (pendingAudio.get(callId) || 0) > 0; i++) await sleep(1000)
   if (!db.prepare('SELECT 1 FROM chat_call_segments WHERE call_id=? LIMIT 1').get(callId)) {
     // A last recording piece can still be on its way; look once more.
-    if (tries < 2) scheduleFinalize(callId, 15000, tries + 1)
+    if (tries < 2) { scheduleFinalize(callId, 15000, tries + 1); return }
+    // Nobody's words ever reached the transcript. Say so, rather than leaving
+    // "Analysing…" on screen with nothing behind it.
+    if (analyses.get(callId)?.stage === 'waiting') setAnalysis(callId, 'empty')
     return
   }
   if (!claimCall(callId)) return
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(callId)
-  pushToConversation(call.conversation_id, { type: 'call-processing', conversationId: call.conversation_id, callId, on: true })
   try {
-    await summariseCall(call, call.started_by, { autoAssign: true })
+    await analyseCall(call, call.started_by)
   } catch (e) {
     console.error('[chat] call summary failed:', e.message)
-    db.prepare('UPDATE chat_calls SET processed_at=NULL WHERE id=?').run(callId) // let the manual route retry
-  } finally {
-    pushToConversation(call.conversation_id, { type: 'call-processing', conversationId: call.conversation_id, callId, on: false })
   }
 }
 
+// Try again after a failed analysis — from the card that said it failed.
+// Anyone who was on the call may ask: it only redoes what happens by itself
+// at the end of every call, and nothing is assigned by it. Answers at once;
+// the stages arrive as 'call-analysis' like the first time.
+r.post('/call/:id/analyse', (req, res) => {
+  const me = req.user
+  const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
+  if (!call || !member(call.conversation_id, me.id)) return res.status(404).json({ error: 'Call not found' })
+  if (!db.prepare('SELECT 1 FROM chat_call_participants WHERE call_id=? AND user_id=? AND joined_at IS NOT NULL').get(call.id, me.id)) {
+    return res.status(403).json({ error: 'Only someone who was on the call can ask for it to be analysed' })
+  }
+  if (call.meeting_id) return res.json({ ok: true, meetingId: call.meeting_id, existing: true })
+  if (call.status === 'ringing' || call.status === 'active') return res.status(409).json({ error: 'The call is still going on' })
+  if (!db.prepare('SELECT 1 FROM chat_call_segments WHERE call_id=? LIMIT 1').get(call.id)) return res.status(422).json({ error: 'Nothing was captured from this call', code: 'NO_SPEECH' })
+  if (!claimCall(call.id)) return res.status(409).json({ error: 'This call is already being analysed' })
+  res.status(202).json({ ok: true })
+  analyseCall(call, call.started_by).catch((e) => console.error('[chat] call re-analysis failed:', e.message))
+})
+
 // The manual way in, kept for copies of the app from before calls were
 // summarised by themselves (their Record button calls this on hang-up). It
-// stops at suggestions for the review screen, as it always did.
+// stops at suggestions for the review screen, as everything now does.
 r.post('/call/:id/to-tasks', requireRole('manager', 'admin'), async (req, res) => {
   const me = req.user
   const call = db.prepare('SELECT * FROM chat_calls WHERE id=?').get(req.params.id)
@@ -1944,10 +2079,10 @@ r.post('/call/:id/to-tasks', requireRole('manager', 'admin'), async (req, res) =
   if (!db.prepare('SELECT 1 FROM chat_call_segments WHERE call_id=? LIMIT 1').get(call.id)) return res.status(422).json({ error: 'Nothing was captured from this call', code: 'NO_SPEECH' })
   if (!claimCall(call.id)) return res.status(409).json({ error: 'This call is already being summarised' })
   try {
-    const out = await summariseCall(call, me.id, { autoAssign: false })
+    const out = await analyseCall(call, me.id)
+    if (!out) return res.status(422).json({ error: 'Nothing was captured from this call', code: 'NO_SPEECH' })
     res.status(201).json({ id: out.mid, suggestion_count: out.suggestionCount, engine: out.engine, lines: out.lines })
   } catch (err) {
-    db.prepare('UPDATE chat_calls SET processed_at=NULL WHERE id=?').run(call.id)
     console.error('[chat] call-to-tasks failed:', err.message)
     res.status(502).json({ error: err.message })
   }
@@ -2582,9 +2717,14 @@ r.get('/conversations/:id/info', (req, res) => {
   const calls = db.prepare('SELECT COUNT(*) AS n FROM chat_calls WHERE conversation_id=? AND org_id=?').get(conv.id, me.org_id).n
   const lastCall = db.prepare('SELECT started_at FROM chat_calls WHERE conversation_id=? AND org_id=? ORDER BY julianday(started_at) DESC LIMIT 1').get(conv.id, me.org_id)
   const summaries = db.prepare("SELECT COUNT(*) AS n FROM meetings WHERE conversation_id=? AND org_id=? AND status<>'recording'").get(conv.id, me.org_id).n
+  // Waiting for review by THIS reader: every meeting for a manager, the ones
+  // they were in for anyone else (canReviewMeeting, as one query).
+  const manager = me.role === 'manager' || me.role === 'admin' ? 1 : 0
   const pending = db.prepare(`
     SELECT COUNT(*) AS n FROM suggested_tasks s JOIN meetings m ON m.id=s.meeting_id
-    WHERE m.conversation_id=? AND m.org_id=? AND m.status<>'recording' AND s.status='pending'`).get(conv.id, me.org_id).n
+    WHERE m.conversation_id=? AND m.org_id=? AND m.status<>'recording' AND s.status='pending'
+      AND (? = 1 OR m.uploaded_by=? OR EXISTS (SELECT 1 FROM chat_call_participants p
+        WHERE p.call_id=m.call_id AND p.user_id=? AND p.joined_at IS NOT NULL))`).get(conv.id, me.org_id, manager, me.id, me.id).n
   const creator = conv.created_by ? db.prepare('SELECT id, name FROM users WHERE id=? AND org_id=?').get(conv.created_by, me.org_id) : null
 
   // A direct chat is about the other person: their card, and the groups you
@@ -2706,6 +2846,7 @@ r.get('/conversations/:id/meetings', (req, res) => {
         tasks: tasks.get(m.id),
         participants: attendees.get(m.id).sort((a, b) => naturalCompare(a.name, b.name)),
         uploaded_by: m.uploaded_by && m.uploaded_by_name ? { id: m.uploaded_by, name: m.uploaded_by_name } : null,
+        can_review: canReviewMeeting(me, { ...m, org_id: me.org_id }),
       }
     }),
     calls_truncated: callRows.length > CALL_LIST_CAP,
@@ -2715,7 +2856,8 @@ r.get('/conversations/:id/meetings', (req, res) => {
 // One meeting, shaped like GET /api/meetings/:id so the review screen
 // (MeetingDetail's ReviewAssignModal) takes it as it is — but only a meeting
 // filed from THIS conversation. Every member may read the summary; reviewing
-// stays manager-only on the /meetings routes it calls.
+// it is for the people who were in it and managers (canReviewMeeting), checked
+// again by the /meetings routes the review calls.
 //
 // The transcript goes to the people who were IN it — everyone who joined the
 // call, whoever posted the recording — and to managers. Without it a thin
@@ -2752,8 +2894,7 @@ r.get('/conversations/:id/meetings/:mid', (req, res) => {
     WHERE t.meeting_id=? AND t.org_id=? AND COALESCE(t.visible_to_manager, 1)=1
     ORDER BY t.created_at`).all(m.id, me.org_id)
   const k = m.call_id ? db.prepare('SELECT * FROM chat_calls WHERE id=? AND org_id=?').get(m.call_id, me.org_id) : null
-  const wasOnIt = me.role === 'manager' || me.role === 'admin' || m.uploaded_by === me.id
-    || (!!k && !!db.prepare('SELECT 1 FROM chat_call_participants WHERE call_id=? AND user_id=? AND joined_at IS NOT NULL').get(k.id, me.id))
+  const wasOnIt = canReviewMeeting(me, m)
   let languages = []
   try { languages = JSON.parse(m.detected_languages || '[]') } catch {}
 
@@ -2769,6 +2910,7 @@ r.get('/conversations/:id/meetings/:mid', (req, res) => {
     suggestions,
     tasks,
     transcript: wasOnIt ? (_transcript || '') : null,
+    can_review: wasOnIt,
     call: k ? {
       id: k.id, kind: k.kind === 'video' ? 'video' : 'audio', status: k.status,
       started_at: normTs(k.started_at), ended_at: normTs(k.ended_at), duration_sec: talkSeconds(k),
@@ -3151,7 +3293,7 @@ export function runChatDue() {
         const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(call.conversation_id)
         pushToConversation(call.conversation_id, { type: 'call-ended', callId: call.id })
         if (conv) postCallLine(conv, callSummary(call.id))
-        if (status === 'ended') scheduleFinalize(call.id, 500)
+        if (status === 'ended') analyseWhenDone(call.id, 500)
       }
     }
   } catch (e) { console.error('[chat] call reaper failed:', e.message) }
