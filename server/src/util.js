@@ -84,6 +84,7 @@ const PUSH_TITLES = {
   chat_mention: 'You were mentioned',
   chat_call: 'Missed call',
   chat_reminder: 'Reminder',
+  call_review: 'Call ready for review',
 }
 
 // A short, human name for the client behind a request — "Android app",

@@ -95,8 +95,12 @@ come from per-participant positions, not per-message rows: `last_delivered_at` a
 receipt), and `chat_receipt_marks` records each move so Message info can say *when*. Go
 through `markRead` / `markDelivered` / `pushReceipts`, never a bare `UPDATE`. And every
 answered call is summarised server-side when the last person leaves (`finalizeCall` →
-`summariseCall`, claimed once via `chat_calls.processed_at`), which assigns the tasks whose
-owner was named; each person's own speech is heard on their device and filed as
+`summariseCall`, claimed once via `chat_calls.processed_at`). It never assigns anything:
+every task found waits as a suggestion until someone reviews it — anyone who was on the call,
+or a manager (`canReviewMeeting` in `routes/meetings.js` gates every review route) — and each stage (`waiting` →
+`analysing` → `ready` / `empty` / `failed`) is pushed as `call-analysis` and kept in memory for
+`GET /calls/analysis`, which is what the client's analysis card (`CallAnalysisCard`,
+`lib/callAnalysis.ts`) shows. Each person's own speech is heard on their device and filed as
 `chat_call_segments` through `addCallSegment`, the one path that also shows it live as a
 caption — streamed to Sarvam over `/api/chat/call/live` when the server has a key
 (`callSttMode`), the browser's recogniser otherwise. A ring is a lifecycle, not one socket

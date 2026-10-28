@@ -872,7 +872,7 @@ function MeetingsSection({ info, me, push }: { info: ChatInfo; me: Me; push: (v:
   const { calls, summaries, pending_review: pending } = info.counts
   // Waiting tasks are a to-do only for someone who can review them; everyone
   // else sees the summaries without an alert they cannot act on.
-  const toReview = canReview(me) ? pending || 0 : 0
+  const toReview = pending || 0
   return (
     <div className="ci-section">
       <div className="ci-section-title">Meetings</div>

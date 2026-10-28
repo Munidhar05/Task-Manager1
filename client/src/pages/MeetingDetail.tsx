@@ -7,6 +7,7 @@ import { useAuth } from '../auth'
 import { confirmDialog } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
 import { ReviewEdit, loadReviewDraft, saveReviewDraft, clearReviewDraft, draftAge } from '../lib/reviewDraft'
+import { hideForMeeting } from '../lib/callAnalysis'
 
 // A textarea that grows to fit its content — so a long task wraps and is fully
 // readable instead of scrolling word-by-word inside a one-line input.
@@ -340,6 +341,8 @@ export function ReviewAssignModal({ meeting, pending, onClose, onChanged }: { me
   type Row = Suggestion & { _status: RowStatus; _error: string; _showMerge: boolean; _mergeInto: string }
   const { user } = useAuth()
   const uid = user?.id || 'anon'
+  // A call's "Review & assign" card has nothing left to ask once this is open.
+  useEffect(() => { hideForMeeting(meeting.id) }, [meeting.id])
 
   // Pre-fill each due date from priority (matching the server default) when the
   // AI didn't capture a deadline, so the manager sees the date before assigning.

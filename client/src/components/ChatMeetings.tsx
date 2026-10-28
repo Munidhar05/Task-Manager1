@@ -17,7 +17,7 @@ import { toast } from '../lib/toast'
 import { resolveConfirm } from '../lib/confirm'
 import { listReviewDrafts, loadReviewDraft } from '../lib/reviewDraft'
 import {
-  chatInfoApi, canReview, fmtDay, fmtClock, fmtDuration, groupRuns,
+  chatInfoApi, mayReview, fmtDay, fmtClock, fmtDuration, groupRuns,
   CallRow, Me, MeetingDetailPayload, MeetingRow, PersonLite, TaskCounts,
 } from '../lib/chatInfo'
 import { SUMMARY_SECTIONS, normalisePoints, SummaryPoint, sourceLabel, Assigner, ReviewAssignModal } from '../pages/MeetingDetail'
@@ -358,7 +358,7 @@ function CallItem({ call: c, me, meetings, onOpen }: {
     )
   }
 
-  const toReview = canReview(me) ? meetings.get(ids[0])?.tasks?.pending || 0 : 0
+  const toReview = mayReview(me, meetings.get(ids[0])) ? meetings.get(ids[0])?.tasks?.pending || 0 : 0
   // Spoken instead of the row's text, which reads as a run of dots and a bare
   // number.
   const label = [
@@ -404,13 +404,9 @@ export function SummariesView(props: {
 function SummaryCards({ convId, me, onOpenSummary }: React.ComponentProps<typeof SummariesView>) {
   const { data, error, loading, reload } = useRemote(convId, () => chatInfoApi.meetings(convId))
   useOnChange(convId, reload)
-  const reviewer = canReview(me)
-  // Reviews this manager left half-done on this device (the review screen saves
-  // as they type). Read again on every load, since finishing one clears it.
-  const unfinished = useMemo(
-    () => new Set(reviewer ? listReviewDrafts(me.id).map((d) => d.meetingId) : []),
-    [reviewer, me.id, data],
-  )
+  // Reviews left half-done on this device (the review screen saves as they
+  // type). Read again on every load, since finishing one clears it.
+  const unfinished = useMemo(() => new Set(listReviewDrafts(me.id).map((d) => d.meetingId)), [me.id, data])
 
   if (!data) return error && !loading ? <Failed what="the summaries" error={error} onRetry={reload} /> : <Loading />
   const meetings = data.meetings || []
@@ -421,16 +417,16 @@ function SummaryCards({ convId, me, onOpenSummary }: React.ComponentProps<typeof
       </Empty>
     )
   }
-  const waiting = meetings.reduce((n, m) => n + (m.tasks?.pending || 0), 0)
+  const waiting = meetings.reduce((n, m) => n + (mayReview(me, m) ? m.tasks?.pending || 0 : 0), 0)
   return (
     <div className="ci-mt">
       <div className="ci-mt-lead">
         <span>{plural(meetings.length, 'summary', 'summaries')}</span>
-        {reviewer && waiting > 0 && <span className="ci-mt-alert">{plural(waiting, 'task')} waiting for review</span>}
+        {waiting > 0 && <span className="ci-mt-alert">{plural(waiting, 'task')} waiting for review</span>}
       </div>
       <div className="ci-mt-cards">
         {meetings.map((m) => (
-          <SummaryCard key={m.id} m={m} me={me} reviewer={reviewer} unfinished={unfinished.has(m.id)} onOpen={onOpenSummary} />
+          <SummaryCard key={m.id} m={m} me={me} reviewer={mayReview(me, m)} unfinished={unfinished.has(m.id)} onOpen={onOpenSummary} />
         ))}
       </div>
     </div>
@@ -449,8 +445,8 @@ function SummaryCard({ m, me, reviewer, unfinished, onOpen }: {
   const when = [dayOf(m.created_at), clockOf(m.created_at)].filter(Boolean).join(' · ')
   const chips = COUNT_CHIPS.filter((c) => (m.counts?.[c.key] || 0) > 0)
   const ids = { title: `ci-mt-t-${m.id}`, desc: `ci-mt-d-${m.id}` }
-  // Two buttons that cannot nest: the card itself opens the summary, and a
-  // manager's Review & Assign sits outside it, lifted above the card's click
+  // Two buttons that cannot nest: the card itself opens the summary, and the
+  // reviewer's Review & Assign sits outside it, lifted above the card's click
   // area in CSS (.ci-mt-card-btn::after). Inside the button every line is a
   // <span> (phrasing content only); each class sets its own block layout.
   return (
@@ -490,9 +486,9 @@ function SummaryCard({ m, me, reviewer, unfinished, onOpen }: {
   )
 }
 
-// Where a meeting's tasks stand. A manager is asked to act ("2 to review");
-// anyone else is told what is happening ("2 awaiting review"), since the server
-// will not let them review.
+// Where a meeting's tasks stand. Someone who may review them is asked to act
+// ("2 to review"); anyone else is told what is happening ("2 awaiting
+// review"), since the server will not let them review.
 function TaskLine({ t, reviewer }: { t: TaskCounts; reviewer: boolean }) {
   return (
     <span className="ci-mt-tasks">
@@ -542,7 +538,7 @@ export function SummaryView(props: {
 
 function Summary({ convId, meetingId, me, autoReview, onChanged }: React.ComponentProps<typeof SummaryView>) {
   const { data: m, error, loading, reload } = useRemote(`${convId}/${meetingId}`, () => chatInfoApi.meeting(convId, meetingId))
-  const reviewer = canReview(me)
+  const reviewer = mayReview(me, m)
   const [reviewing, setReviewing] = useState(false)
   const pending = useMemo(() => (m?.suggestions || []).filter((s) => s.status === 'pending'), [m])
   const gone = isGone(error)
@@ -683,7 +679,7 @@ function Summary({ convId, meetingId, me, autoReview, onChanged }: React.Compone
         )}
         {!reviewer && pending.length > 0 && (
           <div className="ci-mt-hero-wait">
-            {plural(pending.length, 'task')} from this {label.toLowerCase()} {pending.length === 1 ? 'is' : 'are'} waiting for a manager to review.
+            {plural(pending.length, 'task')} from this {label.toLowerCase()} {pending.length === 1 ? 'is' : 'are'} waiting to be reviewed by someone who was on it, or a manager.
           </div>
         )}
       </section>
@@ -706,7 +702,15 @@ function Summary({ convId, meetingId, me, autoReview, onChanged }: React.Compone
       </section>
 
       <section className="ci-section">
-        <div className="ci-section-title">Tasks from this meeting ({suggestions.length})</div>
+        <div className="ci-section-title ci-mt-tasks-head">
+          <span>Tasks from this meeting ({suggestions.length})</span>
+          {/* Here as well as at the top: a long summary pushes the top button
+              out of sight, and a row of "Awaiting review" with nothing to press
+              beside it left people not knowing what to do next. */}
+          {reviewer && pending.length > 0 && (
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setReviewing(true)}>Review &amp; assign</button>
+          )}
+        </div>
         {suggestions.length === 0
           ? <div className="ci-mt-none">No tasks were found in this {label.toLowerCase()}.</div>
           : suggestions.map((sg) => (

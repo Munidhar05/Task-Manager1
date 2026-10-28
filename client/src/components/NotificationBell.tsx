@@ -27,6 +27,7 @@ const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone:
   chat_mention: { name: 'at', tone: 'primary' },
   chat_call: { name: 'phone', tone: 'warning' },
   chat_reminder: { name: 'clock', tone: 'info' },
+  call_review: { name: 'ai', tone: 'primary' },
 }
 function NotifIcon({ type }: { type: string }) {
   const cfg = NOTIF_ICON[type]

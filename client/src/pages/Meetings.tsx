@@ -10,6 +10,7 @@ import { useAuth } from '../auth'
 import { LANG_LABEL, EmptyState, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 import { listReviewDrafts } from '../lib/reviewDraft'
+import { useCallAnalyses, inProgress as analysing, callLabel } from '../lib/callAnalysis'
 import { MeetingDraft, loadMeetingDraft, saveMeetingDraft, clearMeetingDraft, draftLineCount, draftDuration, draftAgo } from '../lib/meetingDraft'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
@@ -87,6 +88,19 @@ export default function Meetings() {
   }
   useEffect(() => { load() }, [])
   const isManager = user?.role !== 'employee'
+
+  // A call that just ended becomes a meeting here once it is analysed — which
+  // takes up to a minute, during which it is on no list at all. Say it is on
+  // its way, and fetch the list again the moment one lands.
+  const calls = useCallAnalyses()
+  const callsWorking = calls.filter(analysing)
+  const landed = calls.filter((a) => a.stage === 'ready').map((a) => a.callId).join(',')
+  const landedRef = useRef(landed)
+  useEffect(() => {
+    if (landed === landedRef.current) return
+    landedRef.current = landed
+    load()
+  }, [landed])
 
   // "Unreviewed" is the whole reason this page gets opened after a meeting: the
   // AI's tasks sit as suggestions until a person approves them, and a long
@@ -206,6 +220,19 @@ export default function Meetings() {
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button className="btn btn-primary" onClick={() => setShowLive(true)}>Resume meeting</button>
             <button className="btn" onClick={discardDraft}>Discard</button>
+          </div>
+        </div>
+      )}
+      {callsWorking.length > 0 && (
+        <div className="md-pending md-analysing section" role="status">
+          <div className="md-pending-main">
+            <div className="md-pending-title">
+              <span className="ca-spin" aria-hidden="true" /> Analysing {callsWorking.length === 1 ? 'a call' : `${callsWorking.length} calls`}
+            </div>
+            <div className="md-pending-sub">
+              {callsWorking.map((a) => callLabel(a, user?.id || '')).join('; ').replace(/^./, (c) => c.toUpperCase())}.
+              {' '}{callsWorking.length === 1 ? 'It' : 'They'} will be listed here in a moment, with {callsWorking.length === 1 ? 'its' : 'their'} tasks waiting for review — nothing is assigned until then.
+            </div>
           </div>
         </div>
       )}

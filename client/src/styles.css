@@ -2051,6 +2051,57 @@ tbody tr:hover { background: var(--n-50); }
   background: var(--surface); border: 1px solid var(--border); border-radius: 13px; box-shadow: var(--shadow-lg);
 }
 
+/* A call's write-up once it has ended (CallAnalysisCard): in the call window's
+   place, so the eye that was on the call finds it, and above the voice dock,
+   which sits in the same corner and would otherwise cover the buttons. Phones
+   put it at the top instead (see the phone layer). */
+.ca-card {
+  position: fixed; right: 20px; bottom: 20px; z-index: 1400; width: 360px; max-width: calc(100vw - 32px);
+  display: flex; flex-direction: column; gap: 10px; padding: 14px 14px 12px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow-lg); animation: ca-in .24s cubic-bezier(.16,.84,.44,1);
+}
+@keyframes ca-in { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+/* Over a chat's composer it would swallow Send; lifted as the dock is. */
+@media (min-width: 721px) { body.chat-thread-open .ca-card { bottom: 98px; } }
+/* Unlike the call stage it is not live, so it never sits over a dialog, a
+   drawer, the media viewer or the voice panel — whose own buttons (the review's
+   "Assign all remaining") are in that same corner. It comes back when they go. */
+body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel) .ca-card { display: none; }
+.ca-head { display: flex; align-items: center; gap: 10px; }
+.ca-title { min-width: 0; font-size: 14px; font-weight: 700; line-height: 1.3; }
+.ca-spin {
+  width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%;
+  border: 2.5px solid color-mix(in srgb, var(--primary) 22%, transparent); border-top-color: var(--primary);
+  animation: ca-spin .9s linear infinite;
+}
+@keyframes ca-spin { to { transform: rotate(360deg); } }
+.ca-ic { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: var(--bg); color: var(--muted); }
+.ca-ic.ok { background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
+.ca-ic.warn { background: rgba(239,68,68,.12); color: #dc2626; }
+/* Four segments, filled as each step finishes; the current one pulses. */
+.ca-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.ca-steps li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 4px auto; column-gap: 4px; row-gap: 6px;
+  font-size: 10.5px; line-height: 1.25; color: var(--muted);
+}
+.ca-steps li::before { content: ''; grid-column: 1 / -1; border-radius: 2px; background: var(--border); }
+.ca-steps li.done::before { background: var(--primary); }
+.ca-steps li.now::before { background: var(--primary); animation: sys-pulse 1.4s ease-in-out infinite; }
+.ca-steps li.now { color: var(--text); font-weight: 700; }
+.ca-dot { width: 12px; height: 12px; margin-top: 1px; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid var(--border); }
+.ca-steps li.done .ca-dot { background: var(--primary); border-color: var(--primary); color: #fff; }
+.ca-steps li.now .ca-dot { border-color: var(--primary); }
+.ca-body { font-size: 12.5px; line-height: 1.45; }
+.ca-elapsed { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.ca-where { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+.ca-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .ca-card { animation: none; }
+  .ca-spin { animation-duration: 2.4s; }
+  .ca-steps li.now::before { animation: none; }
+}
+
 /* The line a finished call leaves in the thread — centred, not a bubble from
    either side, because it is a record of what happened rather than something
    anyone said. */
@@ -2962,6 +3013,11 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .md-pending-main { min-width: 0; display: grid; gap: 3px; }
 .md-pending-title { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; color: var(--warning-ink); }
 .md-pending-sub { font-size: 12.5px; color: var(--warning-ink); opacity: .85; }
+/* A call being analysed: on its way, not something waiting on the reader —
+   so the brand tint, not the warning one. */
+.md-analysing { border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); background: color-mix(in srgb, var(--primary) 7%, var(--surface)); }
+.md-analysing .md-pending-title, .md-analysing .md-pending-sub { color: var(--text); }
+.md-analysing .ca-spin { width: 16px; height: 16px; border-width: 2px; }
 /* "is my meeting safe?" answered on the screen that is recording it. */
 .md-save { font-size: 11.5px; font-weight: 600; color: var(--success-ink); opacity: .9; }
 .md-save-bad { color: var(--danger-ink); opacity: 1; }
@@ -3137,6 +3193,11 @@ body:has(.rv-center) .va-dock { display: none; }
   .call-stage { left: 10px; right: 10px; width: auto; max-width: none; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
   body.chat-thread-open .call-stage { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
   .call-stage.mini { width: auto; }
+  /* The analysis card drops in from the top on a phone. The bottom band is
+     already the tab bar, the new-task button, toasts and the composer; up
+     here it covers only reading matter, under the page's (or chat's) header. */
+  .ca-card { left: 10px; right: 10px; width: auto; max-width: none; bottom: auto; top: calc(66px + env(safe-area-inset-top, 0px)); }
+  body.chat-thread-open .ca-card { top: calc(62px + env(safe-area-inset-top, 0px)); }
   .call-grid { min-height: 120px; }
   .call-captions-body { max-height: 96px; }
 
@@ -4376,6 +4437,19 @@ button.meeting-card-sum.open { display: block; -webkit-line-clamp: unset; }
 .mc-task-who { flex-shrink: 0; font-weight: 700; color: var(--muted); }
 .mc-task-who.me { color: var(--primary); }
 button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--primary); cursor: pointer; }
+/* Tasks found on a call wait for a manager. For one, the review is the card's
+   main action; for everyone else, a line saying where the tasks are. */
+.mc-review {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; margin-top: 9px; padding: 8px 11px;
+  border: 0; border-radius: 9px; background: var(--primary); color: #fff; font: inherit; text-align: left; cursor: pointer;
+}
+.mc-review:hover { filter: brightness(1.06); }
+.mc-review-main { font-size: 13px; font-weight: 700; }
+.mc-review-sub { font-size: 11px; opacity: .88; }
+.mc-waiting {
+  margin-top: 9px; padding: 7px 10px; border-radius: 9px; font-size: 12px; font-weight: 600;
+  background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--text);
+}
 
 /* Group: only admins may write — the box gives way to a line saying so. */
 .composer.readonly-bar { text-align: center; color: var(--muted); font-size: 13px; padding: 14px 12px; border-top: 1px solid var(--border); background: var(--bg); }
@@ -4540,6 +4614,7 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ci-section + .ci-section { margin-top: 8px; }
 .ci-section-title { display: flex; align-items: center; gap: 8px; padding: 12px 16px 6px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .ci-section-title > :last-child:not(:first-child) { margin-left: auto; }
+.ci-mt-tasks-head .btn { text-transform: none; letter-spacing: normal; }
 
 /* One tappable line: icon tile, title + subline, trailing count or chevron. */
 .ci-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 9px 16px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
