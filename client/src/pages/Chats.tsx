@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom'
 import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
@@ -28,6 +28,7 @@ import TaskAssignSheet, { Draft } from '../components/chat/TaskAssignSheet'
 import { TaskCard, PollCard, PollVotesSheet, LocationCard, ContactCard, LinkPreview, CallSummaryCard } from '../components/chat/MessageCards'
 import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPicker, CallsSheet, DescriptionEditor } from '../components/chat/ChatDialogs'
 import MediaViewer from '../components/chat/MediaViewer'
+import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
 import type { InfoView, Me } from '../lib/chatInfo'
 
@@ -41,6 +42,9 @@ const LONG_PRESS_MS = 420
 // Room the floating reactions need inside the thread: the 52px tray, its 6px
 // gap, and the 3px the selected row's tint reaches past the message.
 const TRAY_ROOM = 62
+// Room the mouse screen's quick-reaction row needs under a message's hover
+// buttons (36px tall, and a little air) before it opens above them instead.
+const REACT_ROOM = 48
 // What inside a bubble keeps its own taps (TAP_SKIP) and its own presses
 // (PRESS_SKIP). Links, images, the voice player and buttons open or play on a
 // tap, but a long-press on any of them still selects the message, as in
@@ -52,6 +56,28 @@ const TAP_SKIP = 'a, button, .vp, ' + PRESS_SKIP
 const SEL_MENU = '__selection__'
 // One action a message offers — shared by the desktop menu and the phone bar.
 interface MsgAction { key: string; label: string; icon?: React.ComponentProps<typeof Ic>['name']; glyph?: 'copy' | 'pencil'; bar?: boolean; on?: boolean; danger?: boolean; run: () => void }
+// The mouse screen's ⋯ menu (deskMenu): what it leaves to the hover buttons
+// beside it, the groups it shows the rest in, and an icon for every row —
+// msgActions only carries icons for the phone bar's few.
+const ON_HOVER_TOOLS = new Set(['reply', 'edit', 'task'])
+const DESK_MENU_GROUPS = [
+  ['private', 'forward', 'copy', 'link', 'share', 'download'],
+  ['star', 'pin', 'remind', 'unread'],
+  ['fork', 'select', 'info'],
+  ['delete'],
+]
+const DESK_MENU_ICONS: Record<string, React.ReactNode> = {
+  private: <Ic name="user" size={16} />,
+  link: <Ic name="link" size={16} />,
+  share: <Ic name="upload" size={16} />,
+  download: <Ic name="download" size={16} />,
+  pin: <Ic name="pin" size={16} />,
+  remind: <Ic name="clock" size={16} />,
+  unread: <Ic name="chat" size={16} />,
+  fork: <Ic name="merge" size={16} />,
+  select: <SelectGlyph size={16} />,
+  info: <InfoGlyph size={16} />,
+}
 // A file waiting above the composer for Send; `url` is a preview for pictures.
 interface StagedFile { id: string; file: File; url: string | null }
 // How many files can wait for one Send.
@@ -355,7 +381,14 @@ export default function Chats() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [menuId, setMenuId] = useState<string | null>(null)
+  // The ⋯ a mouse-screen menu hangs from (ActionMenu is fixed to the window,
+  // so it needs the button itself, not just which message it belongs to).
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
+  // Stable, so the menu's scroll and resize listeners are not re-attached on
+  // every render of this page.
+  const closeMsgMenu = useCallback(() => setMenuId(null), [])
   const [reactFor, setReactFor] = useState<string | null>(null)
+  const [reactUp, setReactUp] = useState(false)
   const [typingName, setTypingName] = useState<string | null>(null)
   const [showNew, setShowNew] = useState(false)
   // Starts open when the entry being shown is an info entry (a reload with the
@@ -513,6 +546,7 @@ export default function Chats() {
   const [lastSeen, setLastSeen] = useState<Record<string, string>>({})
   const [threadLastRead, setThreadLastRead] = useState<string | null>(null)
   const [convoMenu, setConvoMenu] = useState<string | null>(null)
+  const closeConvoMenu = useCallback(() => setConvoMenu(null), [])
   const logRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const mediaRef = useRef<HTMLInputElement>(null)
@@ -1921,7 +1955,8 @@ export default function Chats() {
 
   // Every action a message offers, in one list, so the desktop's hover menu and
   // the phone's action bar cannot drift apart. `bar` marks the ones the phone
-  // bar shows as icons; its ⋮ lists the rest. The order is the menu's.
+  // bar shows as icons; its ⋮ lists the rest, in this order. The desktop's ⋯
+  // regroups the same list (deskMenu).
   //
   // Edit is on the bar, not under ⋮: it was in the menu, fourteenth of fifteen,
   // and "there is no edit option" was the result. Copy gives up its place when
@@ -1954,6 +1989,26 @@ export default function Chats() {
   }
   const actionIcon = (a: MsgAction, size = 20) =>
     a.glyph === 'copy' ? <CopyGlyph size={size} /> : a.glyph === 'pencil' ? <PencilGlyph size={size} /> : <Ic name={a.icon!} size={size} />
+  // The same actions as the ⋯ menu of a mouse screen. The phone's ⋮ keeps
+  // msgActions' order as it is; this is a reading of it for a pointer menu:
+  // - React, Reply, Edit and Assign as task are the buttons beside the ⋯ on
+  //   hover, so they are not repeated under it. With them it was a column of
+  //   fourteen plain rows or more, the first three a copy of what the mouse
+  //   had just passed.
+  // - The rest go in groups with a rule between them (pass it on / keep track /
+  //   the rest / Delete), each with its icon, so a long list can be scanned.
+  //   An action with no group here (a new one) lands just above Delete.
+  const deskMenu = (m: Msg): ActionItem[][] => {
+    const acts = msgActions(m).filter((a) => !ON_HOVER_TOOLS.has(a.key))
+    const groups = DESK_MENU_GROUPS.map((keys) => keys.flatMap((k) => acts.filter((a) => a.key === k)))
+    const placed = new Set(DESK_MENU_GROUPS.flat())
+    const rest = acts.filter((a) => !placed.has(a.key))
+    if (rest.length) groups.splice(groups.length - 1, 0, rest)
+    return groups.filter((g) => g.length).map((g) => g.map((a) => ({
+      key: a.key, label: a.label, on: a.on, danger: a.danger, run: a.run,
+      icon: DESK_MENU_ICONS[a.key] || (a.icon || a.glyph ? actionIcon(a, 16) : null),
+    })))
+  }
   // ↑ in an empty box edits your last message, as on WhatsApp Web.
   const lastEditable = () => [...messages].reverse().find((m) => m.sender_id === user!.id && isEditable(m))
 
@@ -2335,6 +2390,24 @@ export default function Chats() {
   useEffect(() => { if (search.trim().length < 2) setHits(null) }, [search])
 
   const hasUnread = (c: Conversation) => c.unread > 0 || !!c.marked_unread
+  // A list row's ⋯ on a mouse screen (ActionMenu): the same rows as the touch
+  // menu below in the list, in the same order, with icons and the two
+  // destructive ones set apart at the bottom.
+  const convoMenuGroups = (c: Conversation): ActionItem[][] => [
+    [
+      { key: 'archive', label: c.archived ? 'Unarchive chat' : 'Archive chat', icon: <ArchiveGlyph size={16} />, run: () => archive(c, !c.archived) },
+      { key: 'pin', label: c.pinned ? 'Unpin chat' : 'Pin chat', icon: <Ic name="pin" size={16} />, on: c.pinned, run: () => setPref(c, 'pinned') },
+      { key: 'mute', label: c.muted ? 'Unmute notifications' : 'Mute notifications', icon: <Ic name={c.muted ? 'bell' : 'muteBell'} size={16} />, run: () => { if (c.muted) muteConversation(c, 0); else setMuteFor(c) } },
+      { key: 'mark', label: hasUnread(c) ? 'Mark as read' : 'Mark as unread', icon: <Ic name="chat" size={16} />, run: () => markChat(c, !hasUnread(c)) },
+      { key: 'export', label: 'Export chat', icon: <ExportGlyph size={16} />, run: () => exportChat(c) },
+    ],
+    [
+      { key: 'clear', label: 'Clear chat', icon: <Ic name="block" size={16} />, danger: true, run: () => clearChat(c) },
+      c.type === 'direct'
+        ? { key: 'delete', label: 'Delete chat', icon: <Ic name="trash" size={16} />, danger: true, run: () => deleteChat(c) }
+        : { key: 'exit', label: 'Exit group', icon: <Ic name="logout" size={16} />, danger: true, run: () => exitGroup(c) },
+    ],
+  ]
   // The open chat stays under "Unread" while it is open, though opening it
   // just read it — otherwise it would vanish from under your finger.
   const inTab = (c: Conversation, tab: ListTab) => tab === 'all' || (tab === 'unread' ? hasUnread(c) || c.id === activeId : c.type === tab)
@@ -2503,8 +2576,15 @@ export default function Chats() {
                     ? <span className={'chat-unread-badge' + (c.muted ? ' dim' : '')}>{c.unread > 9 ? '9+' : c.unread}</span>
                     : c.marked_unread && <span className={'chat-unread-dot' + (c.muted ? ' dim' : '')} aria-label="Marked unread" />}
                   <div className="convo-menu-wrap">
-                    <button className="convo-menu-btn" title="Options" aria-label={`Options for ${c.name}`} onClick={(e) => { e.stopPropagation(); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
-                    {convoMenu === c.id && (
+                    <button className="convo-menu-btn" title="Options" aria-label={`Options for ${c.name}`} aria-haspopup="menu" aria-expanded={convoMenu === c.id}
+                      onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
+                    {/* Mouse screens: the same menu as a message's, for the
+                        same reason — the list scrolls, and a menu inside it was
+                        cut to a sliver on the last rows of a laptop's list. */}
+                    {convoMenu === c.id && !touchUI && (
+                      <ActionMenu anchor={menuAnchor} alignEnd groups={convoMenuGroups(c)} label={`Options for ${c.name}`} onClose={closeConvoMenu} />
+                    )}
+                    {convoMenu === c.id && touchUI && (
                       <div className="msg-menu mine" onClick={(e) => e.stopPropagation()}>
                         <button onClick={() => archive(c, !c.archived)}>{c.archived ? 'Unarchive chat' : 'Archive chat'}</button>
                         <button onClick={() => setPref(c, 'pinned')}>{c.pinned ? 'Unpin chat' : 'Pin chat'}</button>
@@ -2912,22 +2992,27 @@ export default function Chats() {
                         the ⋯ menu before, and nobody found it there. */}
                     {!touchUI && !isTemp && !m.deleted && !multi && (
                       <div className={'msg-tools' + (menuId === m.id || reactFor === m.id || emojiFor === m.id ? ' open' : '')}>
-                        <button className="msg-tool-btn" title="React" aria-label="React" aria-expanded={reactFor === m.id} onClick={(e) => { e.stopPropagation(); setReactFor(reactFor === m.id ? null : m.id); setMenuId(null) }}><Ic name="smile" size={16} /></button>
+                        <button className="msg-tool-btn" title="React" aria-label="React" aria-expanded={reactFor === m.id} onClick={(e) => {
+                          e.stopPropagation()
+                          // Below the line unless that is under the composer: the
+                          // thread clips it, and the newest message is the one
+                          // most often reacted to.
+                          const log = logRef.current?.getBoundingClientRect()
+                          setReactUp(!!log && log.bottom - e.currentTarget.getBoundingClientRect().bottom < REACT_ROOM)
+                          setReactFor(reactFor === m.id ? null : m.id); setMenuId(null)
+                        }}><Ic name="smile" size={16} /></button>
                         <button className="msg-tool-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); startReply(m) }}><Ic name="reply" size={16} /></button>
                         {mine && isEditable(m) && <button className="msg-tool-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); startEdit(m) }}><PencilGlyph size={16} /></button>}
                         {m.kind !== 'task' && <button className="msg-tool-btn task-tool" title="Assign as task" aria-label="Assign as task" onClick={(e) => { e.stopPropagation(); toTask({ messageId: m.id }, m) }}><Ic name="taskAdd" size={16} /></button>}
                         <div className="msg-menu-wrap">
-                          <button className="msg-tool-btn" title="More" aria-label="More actions" aria-expanded={menuId === m.id} onClick={(e) => { e.stopPropagation(); setMenuId(menuId === m.id ? null : m.id); setReactFor(null) }}>⋯</button>
+                          <button className="msg-tool-btn" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuId === m.id}
+                            onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuId(menuId === m.id ? null : m.id); setReactFor(null) }}>⋯</button>
                           {menuId === m.id && (
-                            <div className={'msg-menu' + (mine ? ' mine' : '')} onClick={(e) => e.stopPropagation()}>
-                              {msgActions(m).map((a) => (
-                                <button key={a.key} className={a.danger ? 'danger' : undefined} onClick={() => { setMenuId(null); a.run() }}>{a.label}</button>
-                              ))}
-                            </div>
+                            <ActionMenu anchor={menuAnchor} alignEnd={mine} groups={deskMenu(m)} label="Message actions" onClose={closeMsgMenu} />
                           )}
                         </div>
                         {reactFor === m.id && (
-                          <div className="react-picker" onClick={(e) => e.stopPropagation()}>
+                          <div className={'react-picker' + (reactUp ? ' up' : '')} onClick={(e) => e.stopPropagation()}>
                             {EMOJIS.map((emo) => <button key={emo} onClick={() => react(m, emo)}>{emo}</button>)}
                             <button className="react-more" title="More emoji" aria-label="More emoji" onClick={() => { setReactFor(null); setEmojiFor(m.id) }}>＋</button>
                           </div>
