@@ -12,6 +12,7 @@ import { parseSpokenTask, hasLLM } from '../ai/voiceTask.js'
 import { interpretVoiceSearch } from '../ai/voiceSearch.js'
 import { resolveCategory, normalizeCategory } from '../categories.js'
 import { recordUsage } from '../ai/usage.js'
+import { MB, bigFileUpload, sendStoredFile } from '../fileStore.js'
 
 // The configured speech-to-text provider, for usage attribution.
 const STT_PROVIDER = (process.env.TRANSCRIPTION_PROVIDER || 'sarvam').toLowerCase()
@@ -20,7 +21,7 @@ import { transcribeAudio } from '../ai/transcribe.js'
 
 const r = Router()
 
-// --- Task attachments (reference images / PDFs / videos) ---------------------
+// --- Task attachments (any file, up to 500 MB) -------------------------------
 // Files live on disk in data/task_uploads; the DB row carries the metadata. We
 // follow the chat-file model: an authenticated streaming route (below) serves
 // them, so nothing under data/ is ever exposed via static middleware.
@@ -45,21 +46,21 @@ export function purgeDeletedTask(row) {
   } catch { /* a malformed payload must not block the purge */ }
   db.prepare('DELETE FROM deleted_tasks WHERE id=?').run(row.id)
 }
-const ATTACH_MAX = Number(process.env.TASK_ATTACH_MAX_MB || 50) * 1024 * 1024
-// Only reference material makes sense here: images, PDFs, and videos.
-const ATTACH_OK = (mime) => /^(image\/|video\/)/.test(mime) || mime === 'application/pdf'
-const attachUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, ATTACH_DIR),
-    filename: (req, file, cb) => cb(null, id('att') + path.extname(file.originalname || '').slice(0, 12)),
-  }),
-  limits: { fileSize: ATTACH_MAX },
-  fileFilter: (req, file, cb) => cb(null, ATTACH_OK(file.mimetype || '')),
+// Any kind of file, up to 500 MB. It used to be images, PDFs and videos under
+// 50 MB, which turned away the spreadsheets and the phone-camera videos people
+// actually hand work over with. A file streams straight to disk, so the size
+// costs disk and never memory; fileStore.js removes half-sent files and refuses
+// one the disk has no room for, on the same budget as chat files.
+const ATTACH_MAX = Number(process.env.TASK_ATTACH_MAX_MB || 500) * MB
+const taskFiles = bigFileUpload({
+  dir: ATTACH_DIR, prefix: 'att', max: ATTACH_MAX, tooBig: `File too large (max ${ATTACH_MAX / MB} MB)`,
 })
 
 // SERVE / DOWNLOAD an attachment. Declared BEFORE authRequired so <img>/<video>
 // tags (which can't send an Authorization header) can authenticate via ?token=.
 // Enforces that the viewer is in the SAME org as the task the file belongs to.
+// sendStoredFile answers Range requests (a 500 MB video seeks instead of
+// downloading whole) and sandboxes HTML/SVG, which any-file-type now lets in.
 r.get('/attachments/:attId/file', (req, res) => {
   const user = (req.headers.authorization || '').startsWith('Bearer ')
     ? verifyToken(req.headers.authorization.slice(7))
@@ -72,14 +73,21 @@ r.get('/attachments/:attId/file', (req, res) => {
   if (taskOrg && taskOrg !== user.org_id) return res.status(403).json({ error: 'Out of organization' })
   const abs = path.join(ATTACH_DIR, a.stored_name)
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
-  if (a.file_type) res.type(a.file_type)
-  const dl = req.query.download === '1' ? 'attachment' : 'inline'
-  res.setHeader('Content-Disposition', `${dl}; filename="${encodeURIComponent(a.filename || 'file')}"`)
-  res.setHeader('Cache-Control', 'private, max-age=300')
-  fs.createReadStream(abs).pipe(res)
+  sendStoredFile(req, res, abs, { name: a.filename, type: a.file_type, maxAge: 300 })
 })
 
 r.use(authRequired)
+
+// Asked before a big attachment is sent: would it be let in right now? The
+// upload route checks the same thing, but a browser reads no answer until it
+// has sent the whole body, so a refusal there arrives as "connection lost".
+// Declared ahead of GET /:id, which would otherwise take "upload-room" for a
+// task id.
+r.get('/upload-room', (req, res) => {
+  const no = taskFiles.refusal(Number(req.query.size) || 0)
+  if (no) return res.status(no[0]).json({ error: no[1] })
+  res.json({ ok: true })
+})
 
 // Voice dictation for the "Speak" button records ONE short audio clip (≤ ~30s)
 // per task, so a 10 MB cap is plenty and keeps abuse small.
@@ -986,16 +994,11 @@ r.delete('/:id/comments/:cid', (req, res) => {
   res.json({ ok: true })
 })
 
-// ATTACHMENTS — upload a reference image / PDF / video onto a task. One file per
-// request (the client loops for multiple). Anyone in the task's org may attach.
-const runAttachUpload = (req, res, next) => attachUpload.single('file')(req, res, (err) => {
-  if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400)
-    .json({ error: err.code === 'LIMIT_FILE_SIZE' ? `File too large (max ${Math.round(ATTACH_MAX / 1024 / 1024)} MB)` : 'Upload failed' })
-  next()
-})
-r.post('/:id/attachments', runAttachUpload, (req, res) => {
+// ATTACHMENTS — upload any file onto a task. One file per request (the client
+// loops for multiple). Anyone in the task's org may attach.
+r.post('/:id/attachments', taskFiles.receive, (req, res) => {
   const cleanup = () => { if (req.file) try { fs.unlinkSync(req.file.path) } catch {} }
-  if (!req.file) return res.status(400).json({ error: 'Only images, PDFs, and videos are allowed' })
+  if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
   const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!t) { cleanup(); return res.status(404).json({ error: 'Not found' }) }
   const aid = id('att')

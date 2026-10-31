@@ -15,6 +15,7 @@ import { toast } from '../lib/toast'
 import { takeTaskDraft, TaskDraft } from '../lib/taskDraft'
 import { useEscape } from '../lib/useEscape'
 import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
+import { attachable, attachToTask } from '../lib/taskAttach'
 import { useSurface } from '../voice/uiRegistry'
 import { typeInto, pickValue, flashPress, highlight, pause, settle, findVaEl, waitForVaEl } from '../voice/uiController'
 
@@ -1142,18 +1143,18 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
   const setPriority = (priority: string) =>
     setForm((f: any) => ({ ...f, priority, due_date: dueManual ? f.due_date : dueDateForPriority(priority) }))
   const [busy, setBusy] = useState(false)
-  // Reference files staged in the form; uploaded to the task right AFTER it's
-  // created (the task has no id until then). Images/PDFs/videos up to 50 MB.
-  const ATTACH_MAX = 50 * 1024 * 1024
+  // Files staged in the form; uploaded to the task right AFTER it's created
+  // (the task has no id until then). Any type, up to 500 MB each.
   const [files, setFiles] = useState<File[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
+  // Which staged file is going up and how far, for the Create button — a big
+  // video takes minutes, and a bare spinner for that long reads as stuck.
+  const [sending, setSending] = useState<{ n: number; of: number; pct: number } | null>(null)
   // Returns how many were taken, so a paste can say what it added.
   const addFiles = (list: FileList | File[] | null) => {
     if (!list) return 0
-    const picked = Array.from(list)
-    const ok = picked.filter((f) => (/^(image|video)\//.test(f.type) || f.type === 'application/pdf') && f.size <= ATTACH_MAX)
-    const rejected = picked.length - ok.length
-    if (rejected) toast.error(`${rejected} file(s) skipped — only images, PDFs and videos under 50 MB are allowed.`)
+    const { ok, skipped } = attachable(list)
+    if (skipped) toast.error(skipped)
     setFiles((prev) => [...prev, ...ok])
     if (fileInput.current) fileInput.current.value = ''
     return ok.length
@@ -1165,13 +1166,15 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
     try {
       const created = await api.post('/tasks', { ...form, personal: asPersonal })
       // Upload staged attachments to the freshly-created task (best-effort per file).
-      for (const f of files) {
-        try { await api.upload(`/tasks/${created.id}/attachments`, f) }
-        catch { toast.error(`Couldn't attach ${f.name}`) }
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]
+        setSending({ n: i + 1, of: files.length, pct: 0 })
+        try { await attachToTask(created.id, f, (pct) => setSending((s) => (s ? { ...s, pct } : s))) }
+        catch (e: any) { toast.error(`Couldn't attach ${f.name}: ${e?.message || 'upload failed'}`) }
       }
       onCreated()
       return created
-    } finally { setBusy(false) }
+    } finally { setBusy(false); setSending(null) }
   }
 
   // ---- Agent surface -------------------------------------------------------
@@ -1484,8 +1487,8 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
             <CategorySelect value={form.category || ''} onChange={(c) => setForm((f: any) => ({ ...f, category: c }))} blankLabel="Auto-detect" />
           </div>
           <div>
-            <label>Attachments <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· reference images, PDFs or videos</span></label>
-            <input ref={fileInput} type="file" multiple accept="image/*,application/pdf,video/*" style={{ display: 'none' }} onChange={(e) => addFiles(e.target.files)} />
+            <label>Attachments <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· any file, up to 500 MB each</span></label>
+            <input ref={fileInput} type="file" multiple style={{ display: 'none' }} onChange={(e) => addFiles(e.target.files)} />
             <button type="button" className="btn btn-sm row" style={{ gap: 6 }} onClick={() => fileInput.current?.click()} title="Or paste a screenshot anywhere in this form with Ctrl+V"><Ic name="attach" size={14} /> Attach files</button>
             {files.length > 0 && (
               <div className="attach-stage">
@@ -1502,7 +1505,9 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={onClose}>Cancel</button>
-            <button data-va="tasks.new.submit" className="btn btn-primary" onClick={save} disabled={busy || !form.title}>{busy ? <span className="spinner" /> : 'Create task'}</button>
+            <button data-va="tasks.new.submit" className="btn btn-primary" onClick={save} disabled={busy || !form.title}>
+              {sending ? `Attaching${sending.of > 1 ? ` ${sending.n} of ${sending.of}` : ''}… ${sending.pct}%` : busy ? <span className="spinner" /> : 'Create task'}
+            </button>
           </div>
           {showNewUser && (
             // display:contents, so the wrapper adds no row to the form's grid. It
