@@ -2,7 +2,6 @@ import { Router } from 'express'
 import multer from 'multer'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
 import { authRequired, requireRole, verifyToken, signScoped, verifyScoped } from '../auth.js'
@@ -16,6 +15,7 @@ import { parseDueDate } from '../ai/dates.js'
 import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
 import { sendCallPush } from '../push.js'
+import { MB, bigFileUpload, streamingStorage, sendStoredFile } from '../fileStore.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
 // real-time delivery, replies (also privately, from a group), reactions, stars,
@@ -28,78 +28,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'data', 'chat_uploads')
 fs.mkdirSync(UPLOAD_DIR, { recursive: true })
 
-const MB = 1024 * 1024
 // A file sent in a chat can be up to 1 GB. It streams straight to disk, so the
-// size costs disk and never memory.
+// size costs disk and never memory. fileStore.js holds the machinery — the
+// storage engine that removes half-sent files, and the up-front size and
+// free-disk check that GET /upload-room asks before a big file is sent — shared
+// with task attachments, which land on the same disk.
 const CHAT_FILE_MAX = 1024 * MB
-// That disk also holds the SQLite database. A file that fills it does not just
-// fail to send — every later write in the app fails with it — so a file is only
-// let in if this much is still free once it lands.
-const DISK_HEADROOM = 200 * MB
-// Bytes promised to uploads still streaming in, so two big files that each fit
-// on their own cannot both be let into room only one of them has.
-let reserved = 0
-
-// multer's own diskStorage pipes the part into the file and stops there: a
-// sender who drops out mid-file leaves the write stream open and the half-file
-// on disk for good. At 1 GB over a phone connection that is the common case,
-// not the rare one, so this does the same job and closes and removes the scrap
-// when the request goes away unfinished.
-const storage = {
-  _handleFile(req, file, cb) {
-    const filename = id('cf') + path.extname(file.originalname || '').slice(0, 12)
-    const abs = path.join(UPLOAD_DIR, filename)
-    const out = fs.createWriteStream(abs)
-    const abandon = () => { if (!req.complete) out.destroy(new Error('Upload abandoned')) }
-    req.once('close', abandon)
-    pipeline(file.stream, out, (err) => {
-      req.off('close', abandon)
-      if (err) { fs.unlink(abs, () => {}); return cb(err) }
-      cb(null, { destination: UPLOAD_DIR, filename, path: abs, size: out.bytesWritten })
-    })
-  },
-  _removeFile(req, file, cb) { fs.unlink(file.path, () => cb(null)) },
-}
-// +1 because busboy counts reaching the limit as going over it, and a file of
-// exactly 1 GB is one the app says it takes.
-const upload = multer({ storage, limits: { fileSize: CHAT_FILE_MAX + 1 } })
+const chatFiles = bigFileUpload({ dir: UPLOAD_DIR, prefix: 'cf', max: CHAT_FILE_MAX, tooBig: 'File too large (max 1 GB)' })
+const receiveChatFile = chatFiles.receive
 // A group photo and a piece of call audio keep the old ceiling: one is only
 // ever a picture, the other is read whole into memory to be transcribed.
-const smallUpload = multer({ storage, limits: { fileSize: 15 * MB } })
-
-const freeBytes = () => {
-  try { const s = fs.statfsSync(UPLOAD_DIR); return s.bavail * s.bsize } catch { return Infinity }
-}
-
-const TOO_BIG = 'File too large (max 1 GB)'
-const NO_ROOM = 'The server is out of storage space for a file this size'
-// [status, message] if this many bytes cannot come in right now, else null.
-// The MB of slack is the multipart wrapping around the file itself.
-const refusalFor = (len) => (len > CHAT_FILE_MAX + MB ? [413, TOO_BIG]
-  : len && freeBytes() - reserved - len < DISK_HEADROOM ? [507, NO_ROOM] : null)
-
-// The 1 GB route's way in. Content-Length is the whole form, so a file that is
-// over the limit, or that the disk has no room for, is turned away before a
-// byte of it is written, and the connection closed so the rest is not sent
-// for nothing. The sender's browser will not read that answer mid-upload — it
-// sees a dropped connection — which is why the app asks GET /upload-room
-// first. multer's own errors come back as a status, not the global 500.
-function receiveChatFile(req, res, next) {
-  const len = Number(req.headers['content-length']) || 0
-  const refuse = (status, error) => { if (!res.headersSent) res.status(status).set('Connection', 'close').json({ error }) }
-  const no = refusalFor(len)
-  if (no) return refuse(...no)
-  reserved += len
-  let gone = false
-  res.once('close', () => { reserved -= len; if (!res.writableFinished) gone = true })
-  upload.single('file')(req, res, (err) => {
-    if (!err) return next()
-    if (gone) return // the sender left; storage has already removed the half-file
-    if (err.code === 'LIMIT_FILE_SIZE') return refuse(413, TOO_BIG)
-    if (err.code === 'ENOSPC') return refuse(507, NO_ROOM)
-    next(err)
-  })
-}
+const smallUpload = multer({ storage: streamingStorage(UPLOAD_DIR, 'cf'), limits: { fileSize: 15 * MB } })
 
 // Transcription reads the whole recording into memory, and the providers cap
 // what they take anyway (Whisper: 25 MB) — the same ceiling as a meeting
@@ -576,19 +515,9 @@ function chatMeetingTitle(conv, label, others, meId) {
 }
 
 // ---------- file download (token in header OR ?token= so <img>/<a> work) ----------
-// Sent with res.sendFile rather than piped, because a media player needs more
-// than a byte stream: Range requests (206) are how a <video> seeks — and iOS
-// WebKit will not play a video at all from a server that ignores them —
-// Content-Length lets a player show how far along it is, and ETag /
-// Last-Modified let an image grid revalidate instead of downloading again.
-// Cached privately and only for an hour: the URL carries the viewer's token.
-//
-// An attachment is served from the app's own origin, so an HTML or SVG file
-// opened inline would run its scripts with the viewer's session. Those get a
-// sandbox CSP, which renders them script-less in an opaque origin; images,
-// video, audio and PDFs never match and are untouched by it.
-const ACTIVE_TYPE = /^(text\/html|application\/xhtml\+xml|image\/svg\+xml|text\/xml|application\/xml|text\/javascript|application\/(x-)?javascript)\b/i
-const ACTIVE_EXT = /\.(html?|xht|xhtml|svgz?|xml|xsl|js|mjs)$/i
+// sendStoredFile (fileStore.js) answers Range requests so videos seek, and
+// sandboxes HTML/SVG so an attachment can never run script with the viewer's
+// session. Cached privately and only for an hour: the URL carries the token.
 r.get('/file/:messageId', (req, res) => {
   const user = (req.headers.authorization || '').startsWith('Bearer ')
     ? verifyToken(req.headers.authorization.slice(7))
@@ -599,35 +528,7 @@ r.get('/file/:messageId', (req, res) => {
   if (!member(m.conversation_id, user.id)) return res.status(403).json({ error: 'Forbidden' })
   const abs = path.join(UPLOAD_DIR, m.file_stored)
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
-  // The declared type wins (send never overrides a Content-Type that is
-  // already set), except the generic octet-stream: then send names the type
-  // from the stored extension — the same fallback mediaKind classifies by — so
-  // a photo picked as "a file" still displays and a clip still plays.
-  if (m.file_type && !/^application\/octet-stream\b/i.test(m.file_type)) res.type(m.file_type)
-  const dl = req.query.download === '1' ? 'attachment' : 'inline'
-  res.setHeader('Content-Disposition', `${dl}; filename="${encodeURIComponent(m.file_name || 'file')}"`)
-  res.setHeader('Cache-Control', 'private, max-age=3600')
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.setHeader('Referrer-Policy', 'no-referrer')
-  if (ACTIVE_TYPE.test(m.file_type || '') || ACTIVE_EXT.test(m.file_stored)) {
-    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
-  }
-  // Dotfiles allowed because the path is ours, not the requester's; the cache
-  // header is the one set above, not send's public default.
-  res.sendFile(abs, { cacheControl: false, dotfiles: 'allow' }, (err) => {
-    // Nothing to fix once the headers are out, or when the viewer went away
-    // mid-transfer — which a seeking <video> does all the time.
-    if (!err || res.headersSent || err.code === 'ECONNABORTED') return
-    // send had already set the file's headers when it hit the error, and none
-    // of them describe what goes out instead.
-    for (const h of ['Content-Type', 'Content-Disposition', 'ETag', 'Last-Modified', 'Accept-Ranges', 'Content-Security-Policy']) res.removeHeader(h)
-    res.setHeader('Cache-Control', 'no-store')
-    // A range past the end of the file, or a failed If-Match: answer with the
-    // status send chose (it has already set Content-Range for a 416).
-    const status = err.status || err.statusCode
-    if (status === 416 || status === 412) return res.status(status).end()
-    res.status(404).json({ error: 'File missing' })
-  })
+  sendStoredFile(req, res, abs, { name: m.file_name, type: m.file_type, maxAge: 3600 })
 })
 
 // Group photo (token via header or ?token= for <img>).
@@ -1126,7 +1027,7 @@ r.post('/conversations/:id/messages', (req, res) => {
 // sent the whole body, so its refusal arrives as "connection lost" — this is
 // how a sender hears "no room" in a moment instead.
 r.get('/upload-room', (req, res) => {
-  const no = refusalFor(Number(req.query.size) || 0)
+  const no = chatFiles.refusal(Number(req.query.size) || 0)
   if (no) return res.status(no[0]).json({ error: no[1] })
   res.json({ ok: true })
 })

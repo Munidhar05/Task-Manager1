@@ -33,12 +33,36 @@ async function request(path: string, opts: RequestInit = {}) {
   return data
 }
 
-async function uploadFile(path: string, file: File, field = 'file') {
+// `onProgress` switches to XHR, which fetch cannot replace here: fetch reports
+// no upload progress, and a file of hundreds of MB takes minutes on a phone —
+// a spinner that never moves for that long reads as stuck.
+async function uploadFile(path: string, file: File, field = 'file', onProgress?: (pct: number) => void) {
   const form = new FormData()
   form.append(field, file)
   const headers: Record<string, string> = {}
   const token = getToken()
   if (token) headers.authorization = `Bearer ${token}`
+  if (onProgress) {
+    return new Promise<any>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_BASE}/api${path}`)
+      if (token) xhr.setRequestHeader('authorization', `Bearer ${token}`)
+      let shown = -1
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return
+        const pct = Math.floor((e.loaded / e.total) * 100)
+        if (pct !== shown) { shown = pct; onProgress(pct) }
+      }
+      xhr.onload = () => {
+        let data: any = null
+        try { data = JSON.parse(xhr.responseText) } catch {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+        else reject(new Error(data?.error || `Upload failed (${xhr.status})`))
+      }
+      xhr.onerror = () => reject(new Error('the connection was lost'))
+      xhr.send(form)
+    })
+  }
   const res = await fetch(`${API_BASE}/api${path}`, { method: 'POST', headers, body: form, cache: 'no-store' })
   const text = await res.text()
   const data = text ? JSON.parse(text) : null

@@ -7,6 +7,7 @@ import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
 import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
+import { attachable, attachToTask, fileExt } from '../lib/taskAttach'
 import { useSurface } from '../voice/uiRegistry'
 import { typeInto, pickValue, flashPress, settle, findVaEl } from '../voice/uiController'
 
@@ -159,23 +160,41 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   const setAssignee = (assignee_id: string) => mutate(() => api.patch(`/tasks/${taskId}`, { assignee_id: assignee_id || null }))
   const setPriority = (priority: string) => mutate(() => api.patch(`/tasks/${taskId}`, { priority }))
   const setCategory = (category: string) => mutate(() => api.patch(`/tasks/${taskId}`, { category: category || null }))
-  // Attach more reference files to an existing task (uploaded immediately).
+  // Attach more files to an existing task (uploaded immediately). Any type, up
+  // to 500 MB each. The upload has its own state rather than `busy`: a big video
+  // takes minutes, and the rest of the drawer should not lock for all of them.
   const attachInput = useRef<HTMLInputElement>(null)
-  const ATTACH_MAX = 50 * 1024 * 1024
+  const [upload, setUpload] = useState<{ taskId: string; name: string; pct: number; n: number; of: number } | null>(null)
+  // The task on screen now. The modal drawer is reused when another task opens,
+  // so a file that lands after that must not put its old task back on screen.
+  const taskIdRef = useRef(taskId)
+  taskIdRef.current = taskId
   // `announce`: a paste or a drop has nothing else on screen to show it worked.
   const uploadFiles = async (list: FileList | File[] | null, announce = false) => {
-    if (!list) return
-    const all = Array.from(list)
-    const picked = all.filter((f) => (/^(image|video)\//.test(f.type) || f.type === 'application/pdf') && f.size <= ATTACH_MAX)
-    if (picked.length < all.length) toast.error('Some files were skipped — only images, PDFs and videos under 50 MB are allowed.')
+    if (!list || upload) return
+    const { ok: picked, skipped } = attachable(list)
+    if (attachInput.current) attachInput.current.value = ''
+    if (skipped) toast.error(skipped)
     if (!picked.length) return
-    setBusy(true)
+    const tid = taskId
     const done: string[] = []
-    try { for (const f of picked) { try { await api.upload(`/tasks/${taskId}/attachments`, f); done.push(f.name) } catch { toast.error(`Couldn't attach ${f.name}`) } } await load(); onChange?.() }
-    finally { setBusy(false); if (attachInput.current) attachInput.current.value = '' }
+    try {
+      for (let i = 0; i < picked.length; i++) {
+        const f = picked[i]
+        setUpload({ taskId: tid, name: f.name, pct: 0, n: i + 1, of: picked.length })
+        try {
+          const t = await attachToTask(tid, f, (pct) => setUpload((u) => (u ? { ...u, pct } : u)))
+          done.push(f.name)
+          // Each file shows up as it lands, not after the whole batch.
+          if (t?.id && t.id === taskIdRef.current) setTask(t)
+        } catch (e: any) { toast.error(`Couldn't attach ${f.name}: ${e?.message || 'upload failed'}`) }
+      }
+    } finally { setUpload(null) }
+    if (done.length && tid === taskIdRef.current) loadEdits()
+    if (done.length) onChange?.()
     if (announce && done.length) toast.success(done.length === 1 ? `Attached "${done[0]}" to this task` : `Attached ${done.length} files to this task`)
   }
-  takeFilesRef.current = (files) => { if (!busy) uploadFiles(files, true) }
+  takeFilesRef.current = (files) => { if (!busy && !upload) uploadFiles(files, true) }
   // Deleting an attachment is irreversible — confirm it like the task delete.
   const removeAttachment = async (a: Attachment) => {
     if (!(await confirmDialog({ title: 'Remove attachment', message: `Remove "${a.filename}"? This cannot be undone.`, confirmText: 'Remove', danger: true }))) return
@@ -640,9 +659,18 @@ This cannot be undone — comments are not kept in the recycle bin.`,
           <div style={{ marginBottom: 14 }}>
             <div className="spread" style={{ alignItems: 'center' }}>
               <label style={{ margin: 0 }}>Attachments ({task.attachments?.length || 0})</label>
-              <input ref={attachInput} type="file" multiple accept="image/*,application/pdf,video/*" style={{ display: 'none' }} onChange={(e) => uploadFiles(e.target.files)} />
-              <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy} onClick={() => attachInput.current?.click()} title="Attach images, PDFs or videos — or paste a screenshot here with Ctrl+V"><Ic name="attach" size={13} /> Attach</button>
+              <input ref={attachInput} type="file" multiple style={{ display: 'none' }} onChange={(e) => uploadFiles(e.target.files)} />
+              <button className="btn btn-sm row" style={{ gap: 6 }} disabled={busy || !!upload} onClick={() => attachInput.current?.click()} title="Attach any file up to 500 MB — or paste a screenshot here with Ctrl+V"><Ic name="attach" size={13} /> Attach</button>
             </div>
+            {upload && upload.taskId === taskId && (
+              <div className="attach-progress" role="status" aria-live="polite">
+                <div className="attach-progress-line">
+                  <span className="attach-progress-name">Uploading {upload.of > 1 ? `${upload.n} of ${upload.of}: ` : ''}{upload.name}</span>
+                  <span className="attach-progress-pct">{upload.pct}%</span>
+                </div>
+                <div className="bar-track"><div className="bar-fill" style={{ width: upload.pct + '%', background: 'var(--primary)' }} /></div>
+              </div>
+            )}
             {task.attachments && task.attachments.length > 0 && (
               <div className="attach-grid" style={{ marginTop: 8 }}>
                 {task.attachments.map((a: Attachment) => {
@@ -658,7 +686,11 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       ) : isVid ? (
                         <video className="attach-thumb" src={taskAttachmentUrl(a.id)} controls preload="metadata" />
                       ) : (
-                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb attach-thumb-file"><Ic name="doc" size={26} /></a>
+                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb attach-thumb-file">
+                          <Ic name="doc" size={26} />
+                          {/* XLSX, ZIP, DOCX… — without it every non-picture file is the same icon. */}
+                          {fileExt(a.filename) && <span className="attach-ext">{fileExt(a.filename)}</span>}
+                        </a>
                       )}
                       <div className="attach-meta">
                         <a href={taskAttachmentUrl(a.id, true)} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
