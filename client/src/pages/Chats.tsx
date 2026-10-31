@@ -61,14 +61,13 @@ interface MsgAction { key: string; label: string; icon?: React.ComponentProps<ty
 // msgActions only carries icons for the phone bar's few.
 const ON_HOVER_TOOLS = new Set(['reply', 'edit', 'task'])
 const DESK_MENU_GROUPS = [
-  ['private', 'forward', 'copy', 'link', 'share', 'download'],
+  ['private', 'forward', 'copy', 'share', 'download'],
   ['star', 'pin', 'remind', 'unread'],
   ['fork', 'select', 'info'],
   ['delete'],
 ]
 const DESK_MENU_ICONS: Record<string, React.ReactNode> = {
   private: <Ic name="user" size={16} />,
-  link: <Ic name="link" size={16} />,
   share: <Ic name="upload" size={16} />,
   download: <Ic name="download" size={16} />,
   pin: <Ic name="pin" size={16} />,
@@ -1931,15 +1930,6 @@ export default function Chats() {
     } catch (e: any) { toast.error('Could not mark unread: ' + e.message) }
   }
 
-  // A link that reopens this exact message. ?msg= is picked up on load and
-  // scrolled to, so a link pasted into a task or an email lands on the message
-  // rather than at the bottom of the thread.
-  const copyLink = async (m: Msg) => {
-    setMenuId(null)
-    const url = `${location.origin}/chats?c=${m.conversation_id}&msg=${m.id}`
-    try { await navigator.clipboard.writeText(url); toast.success('Link copied') } catch { window.prompt('Copy:', url) }
-  }
-
   // Straight into the box with the caret at the end: choosing Edit means typing
   // next. Whatever was half-typed is set aside and comes back afterwards.
   const startEdit = (m: Msg) => {
@@ -1972,6 +1962,8 @@ export default function Chats() {
       !record && m.kind !== 'task' && { key: 'task', label: readOnly ? 'Make a task' : 'Assign as task', icon: 'taskAdd', bar: true, run: () => toTask({ messageId: m.id }, m) },
       { key: 'star', label: m.starred ? 'Unstar' : 'Star', icon: 'star', bar: true, on: m.starred, run: () => toggleStar(m) },
       isForwardable(m) && { key: 'forward', label: 'Forward', icon: 'forward', bar: true, run: () => setForwardMsgs([m]) },
+      // The only copy. A "Copy link" (to this message) used to follow it and
+      // read as the same action twice, so it was taken out on request.
       !record && { key: 'copy', label: 'Copy', glyph: 'copy', bar: !editable, run: () => copy(m) },
       mine && !record && { key: 'info', label: 'Message info', run: () => setInfoFor(m) },
       fromGroupPeer && { key: 'private', label: 'Reply privately', run: () => replyPrivately(m) },
@@ -1980,7 +1972,6 @@ export default function Chats() {
       !record && { key: 'remind', label: 'Remind me', run: () => setRemindFor(m) },
       isManager && !record && { key: 'fork', label: 'Fork to new chat', run: () => setForkFrom(m) },
       { key: 'unread', label: 'Mark unread', run: () => markUnread(m) },
-      { key: 'link', label: 'Copy link', run: () => copyLink(m) },
       !!m.file && { key: 'download', label: 'Download', run: () => download(m) },
       !record && { key: 'share', label: 'Share', run: () => share(m) },
       { key: 'delete', label: 'Delete', icon: 'trash', bar: true, danger: true, run: () => del(m) },
